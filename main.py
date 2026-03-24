@@ -48,6 +48,7 @@ class Main:
     def run(self):
 
         carla_map = self.world.get_map()
+        number_reset = 0
 
         vehicle = None
         other_vehicles = []
@@ -105,7 +106,7 @@ class Main:
                     target_wp = route[target_idx]
 
                 control = gps.get_control(target_wp)
-                # vehicle.apply_control(control)  # TODO UPDATE WITH DEEP REINFORCEMENT MODEL CONTROL
+                # vehicle.apply_control(control)
                 input_ai = {"gps": gps.control_to_only_direction(control)}
                 output_to_compute_error = {
                     "gps": gps.control_to_only_direction(control),
@@ -122,8 +123,10 @@ class Main:
                     if (
                         time.time() - start_time
                         > MAX_TIME_TO_RESET_DURING_TRAINING_IN_SECONDE
+                        + (number_reset * 2)
                     ):
                         print("Resetting road...")
+                        number_reset += 1
                         start_point = random.choice(spawn_points)
                         vehicle = self.world.spawn_actor(vehicle_bp, start_point)
                         route, gps = self.gps_navigation(
