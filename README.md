@@ -11,3 +11,10 @@ uv install -r requirements.txt
 ```bash
 uv run main.py
 ```
+
+
+#### linter : 
+
+```bash
+uv run -m black .
+```
