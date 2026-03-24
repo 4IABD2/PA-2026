@@ -3,9 +3,9 @@ import random
 import time
 
 from const import *
-from src.deep_reinforcement_model import DeepReinforcementModel
-from src.gps import GPS
-from src.matplot_visualizer import MatplotVisualizer
+from src.model.deep_reinforcement_model import DeepReinforcementModel
+from src.gps.gps import GPS
+from src.tools.matplot_visualizer import MatplotVisualizer
 
 
 class Main:
@@ -123,8 +123,8 @@ class Main:
                 if TRAINING:
                     ai_vehicle.train(output_to_compute_error)
                     if (
-                        time.time() - start_time
-                        > MAX_TIME_TO_RESET_DURING_TRAINING_IN_SECONDE
+                            time.time() - start_time
+                            > MAX_TIME_TO_RESET_DURING_TRAINING_IN_SECONDE
                     ):
                         print("Resetting road...")
                         start_point = random.choice(spawn_points)

@@ -2,7 +2,7 @@ import carla
 import heapq
 import math
 
-from src.matplot_visualizer import MatplotVisualizer
+from src.tools.matplot_visualizer import MatplotVisualizer
 
 
 class GPS:
