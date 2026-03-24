@@ -120,8 +120,8 @@ class Main:
                 if TRAINING:
                     ai_vehicle.train(output_to_compute_error)
                     if (
-                            time.time() - start_time
-                            > MAX_TIME_TO_RESET_DURING_TRAINING_IN_SECONDE
+                        time.time() - start_time
+                        > MAX_TIME_TO_RESET_DURING_TRAINING_IN_SECONDE
                     ):
                         print("Resetting road...")
                         start_point = random.choice(spawn_points)

@@ -41,10 +41,9 @@ class DeepReinforcementModel:
             print(f"Corrected output: {corrected_output}")
 
         if self.last_prediction is not None:
-            self.replay_buffer.append({
-                "input": output_to_compute_error["gps"],
-                "target": corrected_output
-            })
+            self.replay_buffer.append(
+                {"input": output_to_compute_error["gps"], "target": corrected_output}
+            )
 
             if len(self.replay_buffer) > self.buffer_size:
                 self.replay_buffer.pop(0)
@@ -86,17 +85,20 @@ class DeepReinforcementModel:
 
     @staticmethod
     def _build_model(filename="deep_reinforcement_model_.weights.h5"):
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(1,)),
-            tf.keras.layers.Dense(128, activation="relu"),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(64, activation="relu"),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(32, activation="relu"),
-            tf.keras.layers.Dense(4, activation="sigmoid"),
-        ])
-        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-                      loss="mse")
+        model = tf.keras.Sequential(
+            [
+                tf.keras.layers.Input(shape=(1,)),
+                tf.keras.layers.Dense(128, activation="relu"),
+                tf.keras.layers.Dropout(0.2),
+                tf.keras.layers.Dense(64, activation="relu"),
+                tf.keras.layers.Dropout(0.2),
+                tf.keras.layers.Dense(32, activation="relu"),
+                tf.keras.layers.Dense(4, activation="sigmoid"),
+            ]
+        )
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), loss="mse"
+        )
         if os.path.exists(filename) and USE_LAST_WEIGHT:
             model.load_weights(filename)
         return model
