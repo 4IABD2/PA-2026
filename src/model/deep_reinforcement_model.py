@@ -1,104 +1,102 @@
 import os
+import random
 
 import carla
 import tensorflow as tf
+import numpy as np
 
-from const import USE_LAST_WEIGHT
+from const import USE_LAST_WEIGHT, PRINT_DEBUG_OUTPUT_MODEL
 
 
 class DeepReinforcementModel:
 
-    def __init__(self):
+    def __init__(self, epsilon=0.1, epsilon_decay=0.995, min_epsilon=0.01):
         self.model = self._build_model()
         self.last_prediction = None
         self.save_to_nb_epoch = 0
         self.max_save_by_epoch = 10
+        self.epsilon = epsilon  # exploration rate
+        self.epsilon_decay = epsilon_decay
+        self.min_epsilon = min_epsilon
+        self.replay_buffer = []
+        self.buffer_size = 1000
 
-    def predict(self, input_ai):
+    def predict(self, input_ai, training=False):
         direction = input_ai["gps"]
-        direction = tf.convert_to_tensor([[direction]], dtype=tf.float32)
-        output = self.model(direction)
-        action = tf.argmax(
-            output[0]
-        ).numpy()  # 5 actions: straight, left, right, brake, reverse
-        self.last_prediction = action
-        return self._forward_to_control(action)
+
+        if training and random.random() < self.epsilon:
+            output = np.random.rand(4)
+        else:
+            direction_tensor = tf.convert_to_tensor([[direction]], dtype=tf.float32)
+            output = self.model(direction_tensor).numpy()[0]
+
+        if PRINT_DEBUG_OUTPUT_MODEL:
+            print(f"Prediction: {output}")
+        self.last_prediction = output
+        return self._forward_to_control(output)
 
     def train(self, output_to_compute_error):
         corrected_output = self._find_correct_output(output_to_compute_error)
+        if PRINT_DEBUG_OUTPUT_MODEL:
+            print(f"Corrected output: {corrected_output}")
+
         if self.last_prediction is not None:
-            target = tf.convert_to_tensor([corrected_output], dtype=tf.float32)
-            with tf.GradientTape() as tape:
-                direction = tf.convert_to_tensor(
-                    [[output_to_compute_error["gps"]]], dtype=tf.float32
-                )
-                output = self.model(direction)
-                loss = tf.keras.losses.MeanSquaredError()(target, output[0])
-            gradients = tape.gradient(loss, self.model.trainable_variables)
-            self.model.optimizer.apply_gradients(
-                zip(gradients, self.model.trainable_variables)
-            )
+            self.replay_buffer.append({
+                "input": output_to_compute_error["gps"],
+                "target": corrected_output
+            })
+
+            if len(self.replay_buffer) > self.buffer_size:
+                self.replay_buffer.pop(0)
+
+            if len(self.replay_buffer) >= 32:
+                self._train_on_batch()
+
         self.save_to_nb_epoch += 1
         if self.save_to_nb_epoch >= self.max_save_by_epoch:
             self._save_weights(self.model)
             self.save_to_nb_epoch = 0
+            self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
+
+    def _train_on_batch(self, batch_size=32):
+        batch = random.sample(self.replay_buffer, batch_size)
+        inputs = tf.convert_to_tensor([b["input"] for b in batch], dtype=tf.float32)
+        targets = tf.convert_to_tensor([b["target"] for b in batch], dtype=tf.float32)
+        self.model.fit(inputs, targets, epochs=1, verbose=0)
 
     @staticmethod
     def _forward_to_control(output_ai):
-        if output_ai == 1:  # turn left
-            control = carla.VehicleControl()
-            control.steer = -1.0
-            control.throttle = 0.5
-            return control
-        elif output_ai == 2:  # turn right
-            control = carla.VehicleControl()
-            control.steer = 1.0
-            control.throttle = 0.5
-            return control
-        elif output_ai == 0:  # go straight
-            control = carla.VehicleControl()
-            control.steer = 0.0
-            control.throttle = 0.5
-            return control
-        elif output_ai == 3:  # brake
-            control = carla.VehicleControl()
-            control.steer = 0.0
-            control.throttle = 0.0
-            control.brake = 1.0
-            return control
-        elif output_ai == 4:  # reverse
-            control = carla.VehicleControl()
-            control.steer = 0.0
-            control.throttle = 0.5
-            control.reverse = True
-            return control
-        return carla.VehicleControl()  # default to no control
+        control = carla.VehicleControl()
+        control.steer = float(np.clip(output_ai[0], -1.0, 1.0))
+        control.throttle = float(np.clip(output_ai[1], 0.0, 1.0))
+        control.brake = round(np.clip(output_ai[2], 0.0, 1.0))
+        control.reverse = True if round(output_ai[3]) == 1 else False
+        return control
 
     @staticmethod
     def _find_correct_output(output_to_compute_error):
-        if output_to_compute_error["is_blocked"]:
-            return 4  # reverse
-        if output_to_compute_error["gps"] == 0:
-            return 0  # go straight
-        elif output_to_compute_error["gps"] == -1:
-            return 1  # turn left
-        elif output_to_compute_error["gps"] == 1:
-            return 2  # turn right
+        control = output_to_compute_error["control"]
+        is_blocked = output_to_compute_error["is_blocked"]
+        if is_blocked:
+            return [0.0, 0.0, 1.0, 0.0]
+        elif control.reverse:
+            return [0.0, 0.0, 0.0, 1.0]
         else:
-            return 0  # default to straight
+            return [control.steer, control.throttle, control.brake, 0.0]
 
     @staticmethod
     def _build_model(filename="deep_reinforcement_model_.weights.h5"):
-        model = tf.keras.Sequential(
-            [
-                tf.keras.layers.Input(shape=(1,)),
-                tf.keras.layers.Dense(16, activation="relu"),
-                tf.keras.layers.Dense(
-                    5, activation="softmax"
-                ),  # 5 actions: straight, left, right, brake, reverse
-            ]
-        )
-        model.compile(optimizer="adam", loss="sparse_categorical_crossentropy")
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(1,)),
+            tf.keras.layers.Dense(128, activation="relu"),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(64, activation="relu"),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(32, activation="relu"),
+            tf.keras.layers.Dense(4, activation="sigmoid"),
+        ])
+        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+                      loss="mse")
         if os.path.exists(filename) and USE_LAST_WEIGHT:
             model.load_weights(filename)
         return model

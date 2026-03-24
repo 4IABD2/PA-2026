@@ -109,10 +109,7 @@ class Main:
                 input_ai = {"gps": gps.control_to_only_direction(control)}
                 output_to_compute_error = {
                     "gps": gps.control_to_only_direction(control),
-                    "vehicle_location": vehicle.get_location(),
-                    "road_distance_to_vehicle": vehicle.get_location().distance(
-                        target_wp.transform.location
-                    ),
+                    "control": control,
                     "is_blocked": any(
                         vehicle.get_location().distance(other.get_location()) < 3.0
                         for other in other_vehicles
