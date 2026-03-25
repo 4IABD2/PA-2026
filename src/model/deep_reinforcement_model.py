@@ -22,12 +22,22 @@ class DeepReinforcementModel:
         self.buffer_size = 1000
 
     def predict(self, input_ai, training=False):
-        direction = input_ai["gps"]
 
         if training and random.random() < self.epsilon:
             output = np.random.rand(4)
         else:
-            direction_tensor = tf.convert_to_tensor([[direction]], dtype=tf.float32)
+            direction_tensor = tf.convert_to_tensor(
+                [
+                    [
+                        input_ai["gps"],
+                        input_ai["center_left"],
+                        input_ai["center_right"],
+                        input_ai["distance_vehicle_in_front"],
+                        input_ai["distance_fire_light"],
+                    ]
+                ],
+                dtype=tf.float32,
+            )
             output = self.model(direction_tensor).numpy()[0]
 
         if PRINT_DEBUG_OUTPUT_MODEL:
@@ -42,7 +52,16 @@ class DeepReinforcementModel:
 
         if self.last_prediction is not None:
             self.replay_buffer.append(
-                {"input": output_to_compute_error["gps"], "target": corrected_output}
+                {
+                    "input": [
+                        output_to_compute_error["gps"],
+                        output_to_compute_error["center_left"],
+                        output_to_compute_error["center_right"],
+                        output_to_compute_error["distance_vehicle_in_front"],
+                        output_to_compute_error["distance_fire_light"],
+                    ],
+                    "target": corrected_output,
+                }
             )
 
             if len(self.replay_buffer) > self.buffer_size:
@@ -87,7 +106,7 @@ class DeepReinforcementModel:
     def _build_model(filename="deep_reinforcement_model_.weights.h5"):
         model = tf.keras.Sequential(
             [
-                tf.keras.layers.Input(shape=(1,)),
+                tf.keras.layers.Input(shape=(5,)),
                 tf.keras.layers.Dense(128, activation="relu"),
                 tf.keras.layers.Dropout(0.2),
                 tf.keras.layers.Dense(64, activation="relu"),
