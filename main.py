@@ -107,9 +107,14 @@ class Main:
 
                 control = gps.get_control(target_wp)
                 # vehicle.apply_control(control)
-                input_ai = {"gps": gps.control_to_only_direction(control)}
-                output_to_compute_error = {
+                input_ai = {
                     "gps": gps.control_to_only_direction(control),
+                    "center_left": 0,
+                    "center_right": 0,
+                    "distance_vehicle_in_front": -1,  # -1 if no vehicle in front
+                    "distance_fire_light": -1,  # -1 if no fire or fire is green
+                }
+                output_to_compute_error = {
                     "control": control,
                     "is_blocked": any(
                         vehicle.get_location().distance(other.get_location()) < 3.0
@@ -117,6 +122,7 @@ class Main:
                         if other is not None
                     ),
                 }
+                output_to_compute_error = output_to_compute_error | input_ai
                 vehicle.apply_control(ai_vehicle.predict(input_ai))
                 if TRAINING:
                     ai_vehicle.train(output_to_compute_error)
