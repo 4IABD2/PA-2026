@@ -8,11 +8,15 @@ dependencies = [
     "carla==0.9.16",
     "matplotlib==3.10.8",
     "tensorflow",
+    "numpy",
+    "pandas",
+    "Pillow",
 ]
 
 [dependency-groups]
 dev = [
     "black",
+    "pytest>=9.0.3",
 ]
 
 [tool.black]
