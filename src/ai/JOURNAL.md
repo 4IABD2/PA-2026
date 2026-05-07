@@ -23,7 +23,7 @@
 
 **Avancement** :
 - Architecture du repo entièrement scaffolded (READMEs par module, contrats `src/interfaces/`, structure `src/ai/{models,training,inference}/`, `JOURNAL.md` initiés, `.gitignore` configuré pour les docs perso).
-- Spec design du pipeline d'apprentissage rédigé dans `docs/superpowers/specs/2026-05-07-pa2026-cil-pipeline-design.md` (gitignored).
+- Spec design du pipeline d'apprentissage consigné dans une note de design interne (non commitée).
 - Setup CARLA sur le serveur Linux multi-GPU démarré : Docker 28.1.1 OK, 2x RTX A6000 disponibles (GPU 1 libre), ports 2000-2002 libres. NVIDIA Container Toolkit pas encore installé sur le serveur (à installer via sudo).
 
 **Difficultés** :
@@ -43,3 +43,27 @@
 3. Implémenter `src/dataset/` pour la collecte (en collaboration avec Franck).
 4. Implémenter `src/ai/models/pilotnet.py` + `src/ai/training/train.py`.
 5. Première collecte dataset (~10-15k images sur Town01) puis premier entraînement.
+
+---
+
+## 2026-05-07 (suite) — Pivot infra serveur → PC fixe + migration uv
+
+**Avancement** :
+- Migration de la gestion de dépendances vers **uv** (`pyproject.toml` + `uv.lock`, suppression du `requirements.txt`). Workflow `uv sync` / `uv run` documenté dans le README racine.
+- Bootstrap du PC fixe perso comme machine CARLA : simulateur installé, accessible à distance depuis le laptop via tunnel SSH chiffré pour pilotage headless.
+- Black appliqué sur les contrats `src/interfaces/`.
+
+**Difficultés** :
+- **Pas d'accès sudo sur le serveur de l'école** : impossible d'installer NVIDIA Container Toolkit ni les libs système requises pour faire tourner CARLA. C'est ce qui a forcé le pivot d'infra (voir Décisions). Le serveur reste utile uniquement pour le training GPU.
+
+**Décisions** :
+- **Topologie 3 environnements actée** : laptop (édition code + pilotage à distance) / serveur école (training GPU only, pas de CARLA possible) / PC fixe perso (CARLA pour collecte de dataset + démo finale). Workflow distribué : collecte sur PC fixe → dataset transféré au serveur → training A6000 → poids retournent au PC fixe pour la démo.
+- **Python 3.10 strict** dans le `pyproject.toml` (`carla==0.9.16` n'a de wheels que pour cp37/cp38/cp310). uv télécharge Python 3.10 tout seul si pas présent système → cohérent partout.
+- **`carla` en dépendance principale** (pas extra optionnelle) : la wheel client n'a pas besoin des libs système, donc `uv sync` fonctionne sur les 3 envs, même là où le simulateur ne peut pas s'exécuter.
+
+**Benchmarks** : néant.
+
+**Prochaine étape** :
+1. Squelette `src/dataset/collector.py` (avec Franck) : connexion CARLA mode synchrone 20 FPS, autopilot expert, capture toutes les 2s — format défini dans la section "Datasets" du README racine.
+2. Test bout-en-bout sur Town01 (~10-20 frames) en pilotant CARLA distant depuis le laptop pour valider le pipeline.
+3. En parallèle Phase 1 CIL : commencer `src/ai/models/pilotnet.py` + loader `manifest.csv`.
