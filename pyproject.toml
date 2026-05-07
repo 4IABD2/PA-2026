@@ -1,0 +1,20 @@
+[project]
+name = "pa-2026"
+version = "0.1.0"
+description = "Voiture autonome dans CARLA - projet annuel 4IABD2"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "carla==0.9.16",
+    "matplotlib==3.10.8",
+    "tensorflow",
+]
+
+[dependency-groups]
+dev = [
+    "black",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]

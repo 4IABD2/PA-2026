@@ -3,6 +3,10 @@
 **__pycache__/
 **.h5
 
+# Environnement Python (uv)
+.venv/
+*.egg-info/
+
 # Datasets et checkpoints (jamais commités)
 data/
 checkpoints/

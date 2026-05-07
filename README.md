@@ -139,7 +139,8 @@ PA-2026/
 │   └── Canva_PA2026.pdf
 ├── const.py                     ← Constantes globales
 ├── main.py                      ← Point d'entrée
-├── requirements.txt
+├── pyproject.toml               ← Déclaration des dépendances (uv)
+├── uv.lock                      ← Versions figées (généré, commité)
 └── README.md                    ← Ce fichier
 
 Chaque dossier de module dans `src/` contient en plus :
@@ -292,9 +293,31 @@ tar -xzf 2026-MM-DD_town01_clear.tar.gz -C data/runs/
 
 ### Dépendances Python
 
+Le projet utilise [`uv`](https://docs.astral.sh/uv/) pour la gestion des dépendances. Les sources de vérité sont :
+
+- `pyproject.toml` — déclare les dépendances
+- `uv.lock` — fige les versions exactes (commité, **ne pas éditer à la main**)
+
+À la première installation :
+
 ```bash
-uv install -r requirements.txt
+uv sync                 # crée .venv/ + installe toutes les deps (incl. dev group)
+uv sync --no-dev        # variante sans black (utile en CI/prod)
 ```
+
+Au quotidien :
+
+```bash
+uv run main.py          # exécute dans le venv (pas besoin d'activate)
+uv run -m pytest benchmarks/
+uv run -m black .
+
+uv add <package>            # ajouter une dep runtime
+uv add --group dev <package>  # ajouter une dep dev
+uv lock --upgrade           # mettre à jour le lockfile
+```
+
+Python 3.10 est requis (CARLA 0.9.16 n'a pas de wheels pour 3.11+). Si tu n'as pas Python 3.10 sur ta machine, uv le télécharge tout seul au premier `uv sync`.
 
 ## Démarrage
 
