@@ -13,7 +13,6 @@ from typing import Protocol
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Détection d'objets (YOLO)
 # ---------------------------------------------------------------------------
@@ -36,7 +35,9 @@ class DetectedObject:
     class_name: ObjectClass
     bbox: tuple[int, int, int, int]  # (x1, y1, x2, y2) en pixels
     confidence: float  # [0, 1]
-    distance_m: float | None = None  # rempli après fusion avec depth, None si non calculé
+    distance_m: float | None = (
+        None  # rempli après fusion avec depth, None si non calculé
+    )
 
 
 class ObjectDetector(Protocol):
@@ -93,7 +94,9 @@ class LanesInfo:
 
     left_line: Line | None
     right_line: Line | None
-    center_offset: float | None  # offset normalisé [-1, 1] du véhicule par rapport au centre
+    center_offset: (
+        float | None
+    )  # offset normalisé [-1, 1] du véhicule par rapport au centre
 
 
 class LaneDetector(Protocol):

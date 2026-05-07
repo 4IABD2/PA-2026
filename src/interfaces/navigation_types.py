@@ -62,7 +62,9 @@ class RoutePlanner(Protocol):
 class CommandPlanner(Protocol):
     """Contrat pour tout module qui produit la commande haut niveau courante."""
 
-    def next_command(self, vehicle_position: Waypoint, route: Route) -> HighLevelCommand:
+    def next_command(
+        self, vehicle_position: Waypoint, route: Route
+    ) -> HighLevelCommand:
         """Détermine la commande haut niveau pour le prochain segment.
 
         Args:
