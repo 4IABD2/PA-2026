@@ -2,3 +2,15 @@
 **.png
 **__pycache__/
 **.h5
+
+# Datasets et checkpoints (jamais commités)
+data/
+checkpoints/
+**/weights/
+
+# Résultats bruts de benchmarks (les résumés vont dans les JOURNAL.md)
+benchmarks/**/results/
+
+# Docs personnelles (locales, jamais push)
+docs/superpowers/
+docs/ai/
