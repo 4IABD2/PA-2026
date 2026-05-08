@@ -100,3 +100,17 @@
 2. Refactor `YoloLabeler.compute_labels()` (Franck) : dériver bboxes depuis `instance/*.npy` via `np.unique` + `np.where`.
 3. Brancher le `LocalPlanner` réel.
 4. Première vraie collecte 500-1000 frames Town01 — **à lancer en local depuis le PC fixe** (setup `uv` + clone repo + `host="localhost"` dans le script de collecte) pour éviter les stalls Tailscale.
+
+---
+
+## 2026-05-09
+
+**Avancement** :
+- Setup PC fixe en local fait : `uv` installé sur Windows, repo cloné, `data/runs/.collect_baseline.py` recréé avec `host="localhost"`.
+- Première vraie collecte lancée : 3 conditions (Town01 ClearNoon, Town01 CloudyNoon, Town03 ClearNoon), 30 NPC vehicles / 900s par run, 450 frames target par run = **1350 frames total**. Estimation ~2h15 wall-clock en local. Stalls Tailscale éliminés (la connexion CARLA tient sur localhost).
+- Validation que tout le manifest n'a que `command=lane_follow` : confirmation que `CommandPlanner` retombe en fallback parce que le package `agents.*` (qui contient `LocalPlanner`) n'est pas dans le wheel `carla==0.9.16` de PyPI — il vit dans `C:\Carla\PythonAPI\carla\agents\` à côté de l'install CARLA. Pas bloquant pour la V1 du modèle (signal de conditionnement absent ne dégrade pas l'imitation pure).
+
+**Prochaine étape** :
+1. **Rapatrier les données du PC fixe** vers le WSL via Tailscale + rsync, en gardant une copie sur le PC fixe (qui a la GPU, pourra servir au training plus tard) : `rsync -avz fhuang5@<pc-fixe>:/c/Users/Frédéric/Developer/PA-2026/data/runs/2026-05-08_*/ data/runs/`.
+2. **V1 du modèle CIL** dans `src/ai/` : brainstorm archi (CNN backbone + tête de régression steer/throttle/brake), `Dataset` PyTorch qui lit le format actuel, training loop minimal, démo inférence boucle CARLA. La V1 s'entraînera sur le dataset actuel "lane_follow only" pour valider toute la chaîne.
+3. **Brancher `LocalPlanner` réel** avant le vrai CIL : vendor le dossier `agents/` de l'install CARLA dans le repo (option propre, repo autonome) ou `sys.path.insert` du chemin local (quick & dirty, pas portable). Une fois fait, recollecter une fraction du dataset avec vraies commandes diverses pour le conditionnement CIL.
