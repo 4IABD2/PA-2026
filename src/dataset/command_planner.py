@@ -1,8 +1,4 @@
-"""High-level command computation for the dataset manifest.
-
-Maps the next CARLA LocalPlanner RoadOption to a compact enum
-{LEFT, RIGHT, STRAIGHT, LANE_FOLLOW} consumed by the central AI.
-"""
+"""High-level command for the manifest: maps CARLA LocalPlanner's next RoadOption to {LEFT, RIGHT, STRAIGHT, LANE_FOLLOW}."""
 
 from __future__ import annotations
 
@@ -25,8 +21,9 @@ class HighLevelCommand(str, Enum):
 class CommandPlanner:
     """Map the next CARLA LocalPlanner RoadOption to a HighLevelCommand.
 
-    Fallback: if the LocalPlanner cannot be wired up (import error, map
-    without waypoints, etc.), returns LANE_FOLLOW by default.
+    Falls back to LANE_FOLLOW if the LocalPlanner can't be instantiated (import
+    error, map without waypoints) — keeps the collector unblocked while the real
+    wiring is pending.
     """
 
     def __init__(self, world: "carla.World", ego: "carla.Vehicle") -> None:
@@ -35,12 +32,6 @@ class CommandPlanner:
         self._planner = self._try_create_planner()
 
     def _try_create_planner(self) -> object | None:
-        """Best-effort import and init of the LocalPlanner.
-
-        Returns None if not possible (current_command() will fall back to
-        LANE_FOLLOW). To be wired up properly by Franck/Frédéric in a later
-        session when the business need is precise.
-        """
         try:
             from agents.navigation.local_planner import LocalPlanner
 
@@ -49,11 +40,6 @@ class CommandPlanner:
             return None
 
     def current_command(self) -> HighLevelCommand:
-        """Return the high-level command for the next action.
-
-        If the LocalPlanner is available and exposes a RoadOption, map it.
-        Otherwise fall back to LANE_FOLLOW (the most frequent default case).
-        """
         if self._planner is None:
             return HighLevelCommand.LANE_FOLLOW
 

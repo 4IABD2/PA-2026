@@ -261,13 +261,10 @@ class DatasetCollector:
     def _cleanup(self) -> None:
         """Release CARLA actors and restore settings.
 
-        Three phases to avoid two CARLA pitfalls:
-        1) Stop sensor listeners synchronously, so no callback fires during the destroy batch.
-        2) Send all DestroyActor commands as one synchronous batch (avoids the C++ crash
-           caused by sequential per-actor destroy while callbacks are still in flight).
-        3) Null the Python wrapper references AFTER the server confirms destruction,
-           so the Python GC never finalises a Sensor wrapper while its C++ actor is still alive
-           (which produces "sensor object went out of the scope" warnings).
+        Order: stop listeners → batch-destroy synchronously → null Python refs.
+        Sequential destroy crashes the C++ runtime if a callback is in flight; nulling
+        Python refs before the server confirms destruction triggers
+        "sensor object went out of the scope" warnings.
         """
         import carla
 
@@ -279,7 +276,6 @@ class DatasetCollector:
                 self._instance,
             ]
 
-            # Phase 1: stop listeners
             for w in sensor_wrappers:
                 if w is not None and w._sensor is not None:
                     try:
@@ -292,7 +288,6 @@ class DatasetCollector:
                 except Exception:
                     pass
 
-            # Phase 2: build and apply the destroy batch synchronously
             destroy_cmds = []
             if self._collision_sensor is not None:
                 destroy_cmds.append(carla.command.DestroyActor(self._collision_sensor))
@@ -306,13 +301,11 @@ class DatasetCollector:
             if destroy_cmds:
                 self._client.apply_batch_sync(destroy_cmds, True)
 
-            # Phase 3: null Python references now that the server has destroyed the actors
             for w in sensor_wrappers:
                 if w is not None:
                     w._sensor = None
             self._collision_sensor = None
 
-        # Restore settings (frees the server)
         if self._world is not None and self._original_settings is not None:
             try:
                 self._world.apply_settings(self._original_settings)
