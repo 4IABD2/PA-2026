@@ -16,27 +16,9 @@ if TYPE_CHECKING:
 
 
 def pack_instance_carla(rgb: np.ndarray) -> np.ndarray:
-    """Pack a raw CARLA instance segmentation frame into a single uint32 array.
+    """Pack a CARLA instance frame into uint32: ``class_id<<16 | G<<8 | B``.
 
-    CARLA encodes:
-      R = semantic class ID (0-28, CARLA 0.9.13+ mapping)
-      G = instance_id high byte
-      B = instance_id low byte
-
-    Packed layout (uint32):
-      bits [23:16] = class_id
-      bits [15: 8] = G
-      bits [ 7: 0] = B
-
-    Unpack:
-      class_id    = (packed >> 16) & 0xFF
-      instance_id = packed & 0xFFFF
-
-    Args:
-        rgb: (H, W, 3) uint8 array (R, G, B).
-
-    Returns:
-        (H, W) uint32 packed array.
+    Unpack: ``class_id = (packed >> 16) & 0xFF``, ``instance_id = packed & 0xFFFF``.
     """
     r = rgb[..., 0].astype(np.uint32)
     g = rgb[..., 1].astype(np.uint32)
@@ -44,33 +26,18 @@ def pack_instance_carla(rgb: np.ndarray) -> np.ndarray:
     return (r << 16) | (g << 8) | b
 
 
-# Golden ratio conjugate — used to spread instance hues evenly.
 _GOLDEN_RATIO_CONJUGATE = 0.6180339887
 
 
 def colorize_instance(packed: np.ndarray) -> np.ndarray:
-    """Render a packed instance map as RGB with deterministic per-instance colors.
-
-    Each unique instance_id maps to (h, s, v) = ((iid * φ) mod 1, 0.6, 0.95)
-    where φ is the golden ratio conjugate — gives well-spread, non-clashing
-    hues. instance_id == 0 (background / unlabeled) → black.
-
-    A given instance keeps the same color across frames of the same run, so
-    the visualization is useful for tracking objects through time.
-
-    Args:
-        packed: (H, W) uint32 array as returned by pack_instance_carla.
-
-    Returns:
-        (H, W, 3) uint8 RGB image.
-    """
+    """Render a packed instance map as RGB. ``instance_id == 0`` → black, others → deterministic HSV."""
     instance_ids = (packed & 0xFFFF).astype(np.uint32)
     unique_ids = np.unique(instance_ids)
 
     rgb_lookup = np.zeros((len(unique_ids), 3), dtype=np.uint8)
     for i, iid in enumerate(unique_ids):
         if iid == 0:
-            continue  # already (0, 0, 0)
+            continue
         hue = (float(iid) * _GOLDEN_RATIO_CONJUGATE) % 1.0
         r, g, b = colorsys.hsv_to_rgb(hue, 0.6, 0.95)
         rgb_lookup[i] = (int(r * 255), int(g * 255), int(b * 255))
@@ -81,7 +48,7 @@ def colorize_instance(packed: np.ndarray) -> np.ndarray:
 
 
 class InstanceCapture:
-    """Wrapper for sensor.camera.instance_segmentation. Same lifecycle as DepthCapture."""
+    """Wrapper for sensor.camera.instance_segmentation."""
 
     def __init__(
         self,
@@ -123,13 +90,11 @@ class InstanceCapture:
         return self._sensor
 
     def _on_image(self, image: "carla.Image") -> None:
-        """Copy raw pixels to numpy immediately (BGRA -> RGB)."""
         raw = np.frombuffer(image.raw_data, dtype=np.uint8)
         bgra = raw.reshape((image.height, image.width, 4))
         self._last_rgb = bgra[..., [2, 1, 0]].copy()
 
     def save_last_frame(self, npy_path: Path, viz_path: Path) -> None:
-        """Pack the last frame to uint32 and save both .npy + .png viz."""
         if self._last_rgb is None:
             raise RuntimeError(
                 "No buffered image. Call after at least one world.tick()."

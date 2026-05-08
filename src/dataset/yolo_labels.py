@@ -8,14 +8,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import carla  # noqa: F401
 
-# Class mapping documented in the root README.
 YOLO_CLASS_MAPPING: dict[str, int] = {
     "vehicle": 0,
     "walker": 1,
     "traffic_light": 2,
 }
 
-# Type of a label row: (class_id, x_center, y_center, width, height) normalized [0, 1]
+# (class_id, x_center, y_center, width, height) — normalized [0, 1].
 YoloLabel = tuple[int, float, float, float, float]
 
 
@@ -41,30 +40,23 @@ class YoloLabeler:
     def compute_labels(self) -> list[YoloLabel]:
         """Return YOLO labels for the current frame.
 
-        TODO (Franck): implement 3D->2D projection of visible actors using
-        the CARLA intrinsic matrix (cf. carla.Sensor.calibration and
-        world_to_camera_matrix). Filter:
-        - distance ego->actor > max_distance_m
-        - actor outside camera frustum
-        - occluded actor (optional, can be skipped for the skeleton)
+        Pending: derive 2D bboxes from the instance segmentation masks now exposed by
+        the collector (``instance/*.npy``) — ``np.unique`` on the unpacked instance_id,
+        ``np.where`` for the bounding box, filter by class_id (Car=14, Truck=15, Bus=16,
+        Motorcycle=18, Bicycle=19, Pedestrian=12). Drop instances beyond
+        ``max_distance_m`` or outside the camera frustum.
         """
         raise NotImplementedError(
-            "3D->2D projection not implemented yet. "
-            "To be completed by Franck in a later session. "
-            "See docstring for the spec."
+            "compute_labels() pending: see docstring for the instance-mask approach."
         )
 
     def save(self, path: Path) -> None:
-        """Compute and write labels in YOLO format."""
         labels = self.compute_labels()
         self.write_labels_to_file(labels, path)
 
     @staticmethod
     def write_labels_to_file(labels: list[YoloLabel], path: Path) -> None:
-        """Write a list of (already computed) labels in standard YOLO format.
-
-        Static method so it is testable without CARLA.
-        """
+        """Write labels in YOLO format. Static method so the format is testable without CARLA."""
         path.parent.mkdir(parents=True, exist_ok=True)
         lines = [
             f"{cls_id} {x:.6f} {y:.6f} {w:.6f} {h:.6f}"

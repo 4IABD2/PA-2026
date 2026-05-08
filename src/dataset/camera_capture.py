@@ -12,13 +12,8 @@ if TYPE_CHECKING:
     import carla  # noqa: F401
 
 # Shared team camera POV (cf. root README "CARLA conventions").
-# Position : centrée longitudinalement (y=0), légèrement en avant du centre véhicule
-# (x=0.30), juste au-dessus du toit Tesla Model 3 (z=1.50, le toit étant à ~1.44m).
-# Choix dicté par les capteurs semantic / instance qui ne respectent pas la transparence
-# des matériaux : une caméra à l'intérieur de la cabine voit uniquement le mesh de la
-# carrosserie (classe Car partout), inutile pour Karim (lignes) et Franck (bboxes via
-# masks d'instance). z=1.50 est le minimum qui clear proprement le body tout en gardant
-# une perspective "tête au-dessus du toit du conducteur".
+# Above the Tesla roof (~1.44m): an in-cabin camera is unusable because the
+# semantic / instance sensors don't see through transparent materials.
 CAMERA_LOCATION = (0.30, 0.0, 1.50)
 CAMERA_ROTATION_PITCH = -5.0
 
@@ -43,7 +38,6 @@ class CameraCapture:
         self._last_frame: np.ndarray | None = None
 
     def attach(self) -> "carla.Sensor":
-        """Spawn and attach the sensor to the ego vehicle, return the sensor."""
         import carla
 
         bp = self.world.get_blueprint_library().find("sensor.camera.rgb")
@@ -65,13 +59,12 @@ class CameraCapture:
         return self._sensor
 
     def _on_image(self, image: "carla.Image") -> None:
-        """CARLA callback — copy pixels to numpy immediately."""
         raw = np.frombuffer(image.raw_data, dtype=np.uint8)
         bgra = raw.reshape((image.height, image.width, 4))
-        self._last_frame = bgra[..., [2, 1, 0]].copy()  # BGRA -> RGB
+        self._last_frame = bgra[..., [2, 1, 0]].copy()
 
     def save_last_frame(self, path: Path) -> None:
-        """Write the last buffered image as JPEG quality 90."""
+        """Save the last buffered RGB image as JPEG (quality=90)."""
         if self._last_frame is None:
             raise RuntimeError(
                 "No buffered image. Call after at least one world.tick()."

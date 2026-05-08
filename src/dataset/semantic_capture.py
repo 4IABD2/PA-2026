@@ -15,22 +15,11 @@ if TYPE_CHECKING:
 
 
 def decode_semantic_carla(rgb: np.ndarray) -> np.ndarray:
-    """Extract class IDs from a raw CARLA semantic segmentation frame.
-
-    CARLA encodes the semantic class ID in the R channel (G=0, B=0).
-
-    Args:
-        rgb: (H, W, 3) uint8 array (R, G, B) as returned by the sensor.
-
-    Returns:
-        (H, W) uint8 array of class IDs in [0, 28] (CARLA 0.9.13+ mapping).
-    """
+    """Extract class IDs from a CARLA semantic frame (encoded in the R channel)."""
     return rgb[..., 0].copy()
 
 
-# CARLA 0.9.16 CityScape palette — official mapping for sensor.camera.semantic_segmentation.
-# Class set was reorganized in 0.9.13 (29 classes, indices 0-28).
-# See https://carla.readthedocs.io/en/0.9.16/ref_sensors/#semantic-segmentation-camera
+# CARLA 0.9.13+ CityScape palette (29 classes, indices 0-28).
 CITYSCAPE_PALETTE = np.array(
     [
         [0, 0, 0],  # 0  Unlabeled
@@ -68,21 +57,13 @@ CITYSCAPE_PALETTE = np.array(
 
 
 def colorize_semantic(class_ids: np.ndarray) -> np.ndarray:
-    """Apply the CityScape palette to a class-ID map.
-
-    Args:
-        class_ids: (H, W) uint8 array, values in [0, 28].
-
-    Returns:
-        (H, W, 3) uint8 RGB image. Out-of-range IDs are clipped to the
-        last palette entry (defensive).
-    """
+    """Apply the CityScape palette to a class-ID map. Out-of-range IDs are clipped."""
     safe = np.clip(class_ids, 0, len(CITYSCAPE_PALETTE) - 1)
     return CITYSCAPE_PALETTE[safe]
 
 
 class SemanticCapture:
-    """Wrapper for sensor.camera.semantic_segmentation. Same lifecycle as DepthCapture."""
+    """Wrapper for sensor.camera.semantic_segmentation."""
 
     def __init__(
         self,
@@ -124,13 +105,11 @@ class SemanticCapture:
         return self._sensor
 
     def _on_image(self, image: "carla.Image") -> None:
-        """Copy raw pixels to numpy immediately (BGRA -> RGB)."""
         raw = np.frombuffer(image.raw_data, dtype=np.uint8)
         bgra = raw.reshape((image.height, image.width, 4))
         self._last_rgb = bgra[..., [2, 1, 0]].copy()
 
     def save_last_frame(self, npy_path: Path, viz_path: Path) -> None:
-        """Decode the last frame and save both .npy (uint8 class IDs) and .png (palette viz)."""
         if self._last_rgb is None:
             raise RuntimeError(
                 "No buffered image. Call after at least one world.tick()."

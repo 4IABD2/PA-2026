@@ -17,18 +17,9 @@ def decode_carla_depth(
     rgb: np.ndarray,
     max_depth_m: float = 1000.0,
 ) -> np.ndarray:
-    """Decode the CARLA depth encoding (3 uint8 channels) into float32 meters.
+    """Decode CARLA's 3-channel depth encoding into float32 meters, clipped to ``max_depth_m``.
 
-    Official CARLA formula:
-        normalized = (R + G * 256 + B * 256^2) / (256^3 - 1)
-        meters = normalized * 1000
-
-    Args:
-        rgb: array shape (H, W, 3) uint8 (R, G, B)
-        max_depth_m: clip to this value (CARLA encodes up to 1000m)
-
-    Returns:
-        array shape (H, W) float32, values in meters clipped to max_depth_m
+    Formula: ``meters = ((R + G*256 + B*256**2) / (256**3 - 1)) * 1000``.
     """
     rgb_f = rgb.astype(np.float32)
     normalized = (
@@ -81,18 +72,15 @@ class DepthCapture:
         return self._sensor
 
     def _on_image(self, image: "carla.Image") -> None:
-        """Copy depth pixels to numpy immediately (BGRA -> RGB)."""
         raw = np.frombuffer(image.raw_data, dtype=np.uint8)
         bgra = raw.reshape((image.height, image.width, 4))
         self._last_rgb = bgra[..., [2, 1, 0]].copy()
 
     def save_last_frame(self, path: Path) -> None:
-        """Decode the last depth image and save as .npy float32."""
         if self._last_rgb is None:
             raise RuntimeError(
                 "No buffered image. Call after at least one world.tick()."
             )
-
         depth_m = decode_carla_depth(self._last_rgb, max_depth_m=self.max_depth_m)
         path.parent.mkdir(parents=True, exist_ok=True)
         np.save(path, depth_m)

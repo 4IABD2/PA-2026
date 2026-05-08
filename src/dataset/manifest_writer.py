@@ -1,7 +1,6 @@
 """Write manifest.csv (one row per frame) and metadata.json (run-level).
 
-Format documented in the root README "Datasets" section and in
-src/dataset/README.md.
+Format: see "Datasets" section in the root README and src/dataset/README.md.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ CSV_COLUMNS = [
 
 
 class ManifestWriter:
-    """In-memory buffer of manifest rows, flushed to CSV at the end of the run."""
+    """Buffer manifest rows in memory, flush to CSV at the end of the run."""
 
     def __init__(self, output_dir: Path, town: str, weather: str) -> None:
         self.output_dir = Path(output_dir)
@@ -69,12 +68,11 @@ class ManifestWriter:
         )
 
     def flush_csv(self) -> None:
-        """Write all buffered rows to manifest.csv (single write)."""
         df = pd.DataFrame(self._rows, columns=CSV_COLUMNS)
         df.to_csv(self.output_dir / "manifest.csv", index=False)
 
     def write_metadata(self, **kwargs: Any) -> None:
-        """Write metadata.json. Required fields are injected automatically."""
+        """Write metadata.json. Run-level fields (town, weather, timestamps) are injected automatically."""
         ended_at = datetime.now(timezone.utc)
         metadata = {
             "town": self.town,
