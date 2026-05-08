@@ -19,7 +19,9 @@ from src.dataset.camera_capture import (
 from src.dataset.command_planner import CommandPlanner, HighLevelCommand
 from src.dataset.depth_capture import DepthCapture
 from src.dataset.expert_driver import ExpertDriver
+from src.dataset.instance_capture import InstanceCapture
 from src.dataset.manifest_writer import ManifestWriter
+from src.dataset.semantic_capture import SemanticCapture
 from src.dataset.yolo_labels import YoloLabeler
 
 if TYPE_CHECKING:
@@ -28,6 +30,17 @@ if TYPE_CHECKING:
 CARLA_FPS = 20
 FIXED_DELTA_SECONDS = 1.0 / CARLA_FPS  # 0.05
 COLLISION_LOOKBACK_FRAMES = 5
+
+# Subdirectories created under output_dir for every run.
+OUTPUT_SUBDIRS = [
+    "images",
+    "depth",
+    "labels_yolo",
+    "semantic",
+    "semantic_viz",
+    "instance",
+    "instance_viz",
+]
 
 
 class DatasetCollector:
@@ -73,6 +86,8 @@ class DatasetCollector:
         self._npc_actors: list = []
         self._camera: CameraCapture | None = None
         self._depth: DepthCapture | None = None
+        self._semantic: SemanticCapture | None = None
+        self._instance: InstanceCapture | None = None
         self._yolo_labeler: YoloLabeler | None = None
         self._command_planner: CommandPlanner | None = None
         self._expert: ExpertDriver | None = None
@@ -155,9 +170,8 @@ class DatasetCollector:
 
         # Output dir + manifest writer
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        (self.output_dir / "images").mkdir(exist_ok=True)
-        (self.output_dir / "depth").mkdir(exist_ok=True)
-        (self.output_dir / "labels_yolo").mkdir(exist_ok=True)
+        for subdir in OUTPUT_SUBDIRS:
+            (self.output_dir / subdir).mkdir(exist_ok=True)
         self._manifest = ManifestWriter(self.output_dir, self.town, self.weather)
 
     def _spawn_ego(self) -> "carla.Vehicle":
@@ -210,6 +224,24 @@ class DatasetCollector:
         )
         self._depth.attach()
 
+        self._semantic = SemanticCapture(
+            self._world,
+            self._ego,
+            width=self.image_width,
+            height=self.image_height,
+            fov=self.fov,
+        )
+        self._semantic.attach()
+
+        self._instance = InstanceCapture(
+            self._world,
+            self._ego,
+            width=self.image_width,
+            height=self.image_height,
+            fov=self.fov,
+        )
+        self._instance.attach()
+
         # Collision sensor on ego (for is_collision in manifest)
         bp = self._world.get_blueprint_library().find("sensor.other.collision")
         self._collision_sensor = self._world.spawn_actor(
@@ -227,27 +259,58 @@ class DatasetCollector:
             self._collision_events_recent[-1] = 1
 
     def _cleanup(self) -> None:
-        """Release CARLA actors and restore settings."""
+        """Release CARLA actors and restore settings.
+
+        Three phases to avoid two CARLA pitfalls:
+        1) Stop sensor listeners synchronously, so no callback fires during the destroy batch.
+        2) Send all DestroyActor commands as one synchronous batch (avoids the C++ crash
+           caused by sequential per-actor destroy while callbacks are still in flight).
+        3) Null the Python wrapper references AFTER the server confirms destruction,
+           so the Python GC never finalises a Sensor wrapper while its C++ actor is still alive
+           (which produces "sensor object went out of the scope" warnings).
+        """
         import carla
 
-        # Batch destroy: avoids the C++ crash caused by sequential destroy
-        # of attached sensors while CARLA is still processing callbacks
         if self._client is not None:
+            sensor_wrappers = [
+                self._camera,
+                self._depth,
+                self._semantic,
+                self._instance,
+            ]
+
+            # Phase 1: stop listeners
+            for w in sensor_wrappers:
+                if w is not None and w._sensor is not None:
+                    try:
+                        w._sensor.stop()
+                    except Exception:
+                        pass
+            if self._collision_sensor is not None:
+                try:
+                    self._collision_sensor.stop()
+                except Exception:
+                    pass
+
+            # Phase 2: build and apply the destroy batch synchronously
             destroy_cmds = []
             if self._collision_sensor is not None:
                 destroy_cmds.append(carla.command.DestroyActor(self._collision_sensor))
-            if self._camera is not None and self._camera._sensor is not None:
-                destroy_cmds.append(carla.command.DestroyActor(self._camera._sensor))
-                self._camera._sensor = None
-            if self._depth is not None and self._depth._sensor is not None:
-                destroy_cmds.append(carla.command.DestroyActor(self._depth._sensor))
-                self._depth._sensor = None
+            for w in sensor_wrappers:
+                if w is not None and w._sensor is not None:
+                    destroy_cmds.append(carla.command.DestroyActor(w._sensor))
             for npc in self._npc_actors:
                 destroy_cmds.append(carla.command.DestroyActor(npc))
             if self._ego is not None:
                 destroy_cmds.append(carla.command.DestroyActor(self._ego))
             if destroy_cmds:
-                self._client.apply_batch(destroy_cmds)
+                self._client.apply_batch_sync(destroy_cmds, True)
+
+            # Phase 3: null Python references now that the server has destroyed the actors
+            for w in sensor_wrappers:
+                if w is not None:
+                    w._sensor = None
+            self._collision_sensor = None
 
         # Restore settings (frees the server)
         if self._world is not None and self._original_settings is not None:
@@ -293,9 +356,19 @@ class DatasetCollector:
                 img_rel = f"images/{frame_id:06d}.jpg"
                 depth_rel = f"depth/{frame_id:06d}.npy"
                 label_rel = f"labels_yolo/{frame_id:06d}.txt"
+                sem_rel = f"semantic/{frame_id:06d}.npy"
+                sem_viz_rel = f"semantic_viz/{frame_id:06d}.png"
+                inst_rel = f"instance/{frame_id:06d}.npy"
+                inst_viz_rel = f"instance_viz/{frame_id:06d}.png"
 
                 self._camera.save_last_frame(self.output_dir / img_rel)
                 self._depth.save_last_frame(self.output_dir / depth_rel)
+                self._semantic.save_last_frame(
+                    self.output_dir / sem_rel, self.output_dir / sem_viz_rel
+                )
+                self._instance.save_last_frame(
+                    self.output_dir / inst_rel, self.output_dir / inst_viz_rel
+                )
 
                 # YOLO labels: best-effort, NotImplementedError expected in MVP
                 try:
@@ -339,6 +412,7 @@ class DatasetCollector:
                 image_resolution=[self.image_width, self.image_height],
                 fov=self.fov,
                 seed=self.seed,
+                available_modalities=["rgb", "depth", "semantic", "instance"],
             )
         finally:
             self._cleanup()

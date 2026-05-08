@@ -11,9 +11,9 @@ Tous les modules d'apprentissage du projet ont besoin de données issues de CARL
 
 | Module | Données nécessaires |
 |---|---|
-| `src/perception/yolo/` (Franck) | image RGB + bboxes annotées |
+| `src/perception/yolo/` (Franck) | image RGB + masks d'instance (dérivation bboxes) |
 | `src/perception/depth/` (Franck) | image RGB + depth GT |
-| `src/perception/lanes/` (Karim) | image RGB + annotations lignes (validation) |
+| `src/perception/lanes/` (Karim) | image RGB + masks sémantiques (classe RoadLine) |
 | `src/ai/` (Frédéric) | image RGB + commande HN + vitesse + actions expert |
 
 Toutes ces données peuvent être collectées **en une seule passe** dans CARLA. CARLA fournit "gratuitement" :
@@ -34,11 +34,21 @@ Toutes ces données peuvent être collectées **en une seule passe** dans CARLA.
 data/runs/<YYYY-MM-DD>_<town>_<weather>/
 ├── images/                ← RGB JPEG, 1 frame toutes les 2s
 │   ├── 000000.jpg
-│   ├── 000001.jpg
 │   └── ...
-├── depth/                 ← depth maps GT en mètres (.npy)
+├── depth/                 ← depth maps GT en mètres (.npy float32)
 │   ├── 000000.npy
-│   ├── 000001.npy
+│   └── ...
+├── semantic/              ← masks sémantique CARLA (uint8 class IDs 0-28)
+│   ├── 000000.npy
+│   └── ...
+├── semantic_viz/          ← visualisation palette CityScape (PNG)
+│   ├── 000000.png
+│   └── ...
+├── instance/              ← masks instance CARLA (uint32 packed)
+│   ├── 000000.npy
+│   └── ...
+├── instance_viz/          ← visualisation couleur déterministe par instance (PNG)
+│   ├── 000000.png
 │   └── ...
 ├── labels_yolo/           ← labels YOLO (1 .txt par image)
 │   ├── 000000.txt         ← format: <class> <x_center> <y_center> <w> <h>
@@ -71,12 +81,35 @@ data/runs/<YYYY-MM-DD>_<town>_<weather>/
   "n_npc_vehicles": 40,
   "n_npc_walkers": 30,
   "camera_pov": {
-    "location": [0.5, -0.3, 1.2],
+    "location": [0.30, 0.0, 1.50],
     "rotation": [0, 0, -5]
   },
   "duration_sec": 3000
 }
 ```
+
+### Segmentation : encodage des `.npy`
+
+**`semantic/<frame_id>.npy`** — `numpy.ndarray` shape `(H, W)`, dtype `uint8`. Chaque valeur = class ID CARLA (mapping CityScape officiel CARLA 0.9.13+, 0-28 — `1`=Roads, `14`=Car, `24`=RoadLine, etc.). Décodage trivial : c'est le canal R brut renvoyé par `sensor.camera.semantic_segmentation`.
+
+**`instance/<frame_id>.npy`** — `numpy.ndarray` shape `(H, W)`, dtype `uint32`. Bits :
+
+```
+[23..16] = class_id   (R channel)
+[15..8]  = G channel  (instance_id high byte)
+[7..0]   = B channel  (instance_id low byte)
+```
+
+Unpack côté consommateur :
+
+```python
+class_id    = (packed >> 16) & 0xFF
+instance_id = packed & 0xFFFF
+```
+
+`instance_id == 0` = pixel non trackable (fond / classe non comptée).
+
+**Visualisations PNG** (`semantic_viz/`, `instance_viz/`) — colorisations directement ouvrables dans VSCode/feh, régénérables via `colorize_semantic` et `colorize_instance`. Sémantique : palette CityScape officielle CARLA (route grise, voitures bleues, etc.). Instance : couleur HSV golden-ratio par `instance_id`, déterministe à travers les frames d'une même run.
 
 ## API publique
 
@@ -119,7 +152,7 @@ Chacun peut contribuer à son fichier sans bloquer les autres :
 
 - **Mode synchrone CARLA obligatoire** : `world.tick()` à 20 FPS (`fixed_delta_seconds = 0.05`)
 - **Capture toutes les 2s** (40 ticks) : à 20 FPS deux frames consécutives sont quasi identiques. Toutes les 2s, on a une vraie diversité.
-- **Caméra POV partagée** : `Location(x=0.5, y=-0.3, z=1.2), Rotation(pitch=-5)` — voir le [README racine](../../README.md) section "Conventions CARLA"
+- **Caméra POV partagée** : `Location(x=0.30, y=0.0, z=1.50), Rotation(pitch=-5)` — caméra centrée longitudinalement, juste au-dessus du toit Tesla (z=1.50, toit à ~1.44m). Voir le [README racine](../../README.md) section "Conventions CARLA" pour la justification (positionnement hors body imposé par les capteurs `semantic_segmentation` / `instance_segmentation` qui ne respectent pas la transparence des matériaux).
 - **Naming des runs** : `<YYYY-MM-DD>_<town>_<weather>` (ex : `2026-05-09_town01_clear`)
 - **Pas commit** : `data/` est gitignored. Pour partager → voir le [README racine](../../README.md) section "Stockage et partage".
 

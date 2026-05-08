@@ -186,9 +186,9 @@ Lis [src/interfaces/README.md](src/interfaces/README.md) avant de commencer à i
 
 | Module | Données utilisées |
 |---|---|
-| `src/perception/yolo/` (Franck) | `images/*.jpg` + `labels_yolo/*.txt` |
+| `src/perception/yolo/` (Franck) | `images/*.jpg` + `instance/*.npy` (dérivation bboxes) |
 | `src/perception/depth/` (Franck) | `images/*.jpg` + `depth/*.npy` |
-| `src/perception/lanes/` (Karim) | `images/*.jpg` (validation, OpenCV pur) |
+| `src/perception/lanes/` (Karim) | `images/*.jpg` + `semantic/*.npy` (classe RoadLine) |
 | `src/ai/` (Frédéric) | `images/*.jpg` + `manifest.csv` (commande, vitesse, actions expert) |
 
 Une seule collecte de ~30 min = données pour 4 personnes, avec cohérence garantie (même map, même météo, même caméra POV).
@@ -200,8 +200,18 @@ data/runs/<YYYY-MM-DD>_<town>_<weather>/
 ├── images/                ← RGB JPEG, 1 frame toutes les 2s
 │   ├── 000000.jpg
 │   └── ...
-├── depth/                 ← depth maps GT en mètres (.npy)
+├── depth/                 ← depth maps GT en mètres (.npy float32)
 │   ├── 000000.npy
+│   └── ...
+├── semantic/              ← masks sémantique CARLA (uint8 class IDs 0-28)
+│   ├── 000000.npy
+│   └── ...
+├── semantic_viz/          ← visualisation palette CityScape (PNG)
+│   └── ...
+├── instance/              ← masks instance CARLA (uint32 packed: class_id<<16|G<<8|B)
+│   ├── 000000.npy
+│   └── ...
+├── instance_viz/          ← visualisation couleur déterministe par instance (PNG)
 │   └── ...
 ├── labels_yolo/           ← labels YOLO (.txt par image)
 │   ├── 000000.txt         ← format: <class> <x_center> <y_center> <w> <h>
@@ -242,8 +252,9 @@ data/runs/<YYYY-MM-DD>_<town>_<weather>/
   "n_frames": 1500,
   "n_npc_vehicles": 40,
   "n_npc_walkers": 30,
-  "camera_pov": {"location": [0.5, -0.3, 1.2], "rotation": [0, 0, -5]},
-  "duration_sec": 3000
+  "camera_pov": {"location": [0.30, 0.0, 1.50], "rotation": [0, 0, -5]},
+  "duration_sec": 3000,
+  "available_modalities": ["rgb", "depth", "semantic", "instance"]
 }
 ```
 
@@ -255,6 +266,10 @@ data/runs/<YYYY-MM-DD>_<town>_<weather>/
 Mapping des classes : 0=vehicle, 1=walker, 2=traffic_light (extensible).
 
 **`depth/<frame_id>.npy`** — `numpy.ndarray` de forme `(H, W)`, dtype `float32`, valeurs en mètres, plafonnées à 100m.
+
+**`semantic/<frame_id>.npy`** — `numpy.ndarray` de forme `(H, W)`, dtype `uint8`, valeurs = class ID CARLA (mapping CityScape CARLA 0.9.13+, 0-28 — `1`=Roads, `14`=Car, `24`=RoadLine, etc.).
+
+**`instance/<frame_id>.npy`** — `numpy.ndarray` de forme `(H, W)`, dtype `uint32`. Layout : `(class_id << 16) | (G_byte << 8) | B_byte`. Unpack : `class_id = (p >> 16) & 0xFF`, `instance_id = p & 0xFFFF`. `instance_id == 0` = fond.
 
 ### Stockage et partage
 
@@ -633,16 +648,18 @@ world.apply_settings(settings)
 
 Sans mode synchrone, les frames arrivent à un rythme imprévisible et le dataset est inutilisable.
 
-### Caméra POV conducteur (convention partagée)
+### Caméra POV "rooftop driver" (convention partagée)
 
 ```python
 cam_transform = carla.Transform(
-    carla.Location(x=0.5, y=-0.3, z=1.2),
+    carla.Location(x=0.30, y=0.0, z=1.50),
     carla.Rotation(pitch=-5),
 )
 ```
 
-Tous les datasets et démos doivent utiliser cette caméra pour assurer la compatibilité entre les modules entraînés indépendamment.
+Caméra **centrée longitudinalement** (axe y=0), légèrement en avant du centre véhicule (x=0.30), placée **juste au-dessus du toit Tesla Model 3** (z=1.50, le toit étant à ~1.44m), avec un léger tilt vers le bas (pitch=-5°). Tous les datasets et démos doivent utiliser cette caméra pour assurer la compatibilité entre les modules entraînés indépendamment.
+
+**Pourquoi pas une caméra à l'intérieur de la cabine ?** Les capteurs `sensor.camera.semantic_segmentation` et `sensor.camera.instance_segmentation` de CARLA **ne respectent pas la transparence des matériaux** (alors que `sensor.camera.rgb` le fait). Une caméra placée derrière le pare-brise génère donc des masks où ~100% des pixels sont la classe `Car` (le mesh de la carrosserie ego), ce qui rend la donnée inutilisable pour la détection de lignes (Karim) et la dérivation des bboxes YOLO via masks d'instance (Franck). La position « rooftop driver » (z=1.50, +6 cm au-dessus du toit) est le minimum qui clear proprement le body tout en gardant une perspective naturelle "tête au-dessus du conducteur" — testée systématiquement contre plusieurs alternatives (z=1.45 grazing, z=1.55, z=1.60 hood-forward) pour le meilleur compromis lisibilité humaine / cadrage utile pour les modèles.
 
 ### Capture toutes les 2s (1 frame / 40 ticks à 20 FPS)
 

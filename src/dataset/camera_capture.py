@@ -11,8 +11,15 @@ from PIL import Image
 if TYPE_CHECKING:
     import carla  # noqa: F401
 
-# Shared team camera POV (cf. root README "CARLA conventions")
-CAMERA_LOCATION = (0.5, -0.3, 1.2)
+# Shared team camera POV (cf. root README "CARLA conventions").
+# Position : centrée longitudinalement (y=0), légèrement en avant du centre véhicule
+# (x=0.30), juste au-dessus du toit Tesla Model 3 (z=1.50, le toit étant à ~1.44m).
+# Choix dicté par les capteurs semantic / instance qui ne respectent pas la transparence
+# des matériaux : une caméra à l'intérieur de la cabine voit uniquement le mesh de la
+# carrosserie (classe Car partout), inutile pour Karim (lignes) et Franck (bboxes via
+# masks d'instance). z=1.50 est le minimum qui clear proprement le body tout en gardant
+# une perspective "tête au-dessus du toit du conducteur".
+CAMERA_LOCATION = (0.30, 0.0, 1.50)
 CAMERA_ROTATION_PITCH = -5.0
 
 
