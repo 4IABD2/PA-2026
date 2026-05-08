@@ -1,4 +1,0 @@
-carla==0.9.16
-matplotlib==3.10.8
-tensorflow
-black
