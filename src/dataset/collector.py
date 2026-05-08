@@ -7,6 +7,7 @@ Single-threaded, CARLA synchronous mode at 20 FPS. Captures every
 from __future__ import annotations
 
 import random
+import time
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,6 +31,11 @@ if TYPE_CHECKING:
 CARLA_FPS = 20
 FIXED_DELTA_SECONDS = 1.0 / CARLA_FPS  # 0.05
 COLLISION_LOOKBACK_FRAMES = 5
+
+
+def _log(msg: str) -> None:
+    print(f"[collector] {msg}", flush=True)
+
 
 # Subdirectories created under output_dir for every run.
 OUTPUT_SUBDIRS = [
@@ -113,38 +119,32 @@ class DatasetCollector:
         if self.seed is not None:
             random.seed(self.seed)
 
-        # Connect
+        _log(f"connecting to {self.host}:{self.port}")
         self._client = carla.Client(self.host, self.port)
         self._client.set_timeout(10.0)
+        _log(f"loading {self.town}")
         self._world = self._client.load_world(self.town)
 
-        # Weather
         weather_preset = getattr(carla.WeatherParameters, self.weather)
         self._world.set_weather(weather_preset)
 
-        # Synchronous mode 20 FPS
         self._original_settings = self._world.get_settings()
         settings = self._world.get_settings()
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = FIXED_DELTA_SECONDS
         self._world.apply_settings(settings)
 
-        # Synchronous Traffic Manager
         self._traffic_manager = self._client.get_trafficmanager()
         self._traffic_manager.set_synchronous_mode(True)
         if self.seed is not None:
             self._traffic_manager.set_random_device_seed(self.seed)
 
-        # Tick to let the world stabilize after load_world
         self._world.tick()
 
-        # Spawn ego
         self._ego = self._spawn_ego()
-
-        # Spawn NPCs
         self._npc_actors = self._spawn_npcs()
+        _log(f"spawned ego + {len(self._npc_actors)}/{self.n_npc_vehicles} NPCs")
 
-        # Sensors
         self._camera = CameraCapture(
             self._world,
             self._ego,
@@ -153,6 +153,7 @@ class DatasetCollector:
             fov=self.fov,
         )
         self._sensors_attach()
+        _log("sensors attached, warming up")
 
         self._yolo_labeler = YoloLabeler(
             self._world,
@@ -164,15 +165,14 @@ class DatasetCollector:
         self._command_planner = CommandPlanner(self._world, self._ego)
         self._expert = ExpertDriver(self._ego, self._traffic_manager)
 
-        # Warm-up: let sensors produce their first frames
         for _ in range(10):
             self._world.tick()
 
-        # Output dir + manifest writer
         self.output_dir.mkdir(parents=True, exist_ok=True)
         for subdir in OUTPUT_SUBDIRS:
             (self.output_dir / subdir).mkdir(exist_ok=True)
         self._manifest = ManifestWriter(self.output_dir, self.town, self.weather)
+        _log(f"ready, writing to {self.output_dir}")
 
     def _spawn_ego(self) -> "carla.Vehicle":
         """Spawn an ego vehicle at a random spawn point of the map."""
@@ -269,6 +269,7 @@ class DatasetCollector:
         import carla
 
         if self._client is not None:
+            _log("cleanup: stopping listeners")
             sensor_wrappers = [
                 self._camera,
                 self._depth,
@@ -299,6 +300,7 @@ class DatasetCollector:
             if self._ego is not None:
                 destroy_cmds.append(carla.command.DestroyActor(self._ego))
             if destroy_cmds:
+                _log(f"cleanup: destroying {len(destroy_cmds)} actors")
                 self._client.apply_batch_sync(destroy_cmds, True)
 
             for w in sensor_wrappers:
@@ -316,6 +318,7 @@ class DatasetCollector:
                 self._traffic_manager.set_synchronous_mode(False)
             except Exception:
                 pass
+        _log("cleanup done")
 
     def run(self) -> None:
         """Setup -> tick loop -> cleanup. Blocking.
@@ -330,13 +333,23 @@ class DatasetCollector:
             assert self._manifest is not None
 
             target_ticks = int(self.duration_sec * CARLA_FPS)
+            target_frames = target_ticks // self.capture_every_n_ticks
             tick_count = 0
             frame_id = 0
             run_start = self._world.get_snapshot().timestamp.elapsed_seconds
+            wall_start = time.time()
+            _log(f"capture loop: target {target_frames} frames ({target_ticks} ticks)")
 
             while tick_count < target_ticks:
                 self._world.tick()
                 tick_count += 1
+
+                if tick_count % 200 == 0:
+                    pct = 100 * tick_count / target_ticks
+                    elapsed = time.time() - wall_start
+                    _log(
+                        f"tick {tick_count}/{target_ticks} ({pct:.0f}%, {elapsed:.0f}s)"
+                    )
 
                 if tick_count % self.capture_every_n_ticks != 0:
                     continue
@@ -345,7 +358,6 @@ class DatasetCollector:
                 # collision callback will overwrite to 1 if event on this frame)
                 self._collision_events_recent.append(0)
 
-                # Capture
                 img_rel = f"images/{frame_id:06d}.jpg"
                 depth_rel = f"depth/{frame_id:06d}.npy"
                 label_rel = f"labels_yolo/{frame_id:06d}.txt"
@@ -384,9 +396,12 @@ class DatasetCollector:
                     is_collision=is_collision,
                 )
                 frame_id += 1
+                _log(
+                    f"frame {frame_id}/{target_frames} ({expert_controls.speed_kmh:.1f} km/h, {command.value})"
+                )
 
-            # Flush
             run_end = self._world.get_snapshot().timestamp.elapsed_seconds
+            _log(f"capture done: {frame_id} frames in {time.time() - wall_start:.0f}s")
             self._manifest.flush_csv()
             self._manifest.write_metadata(
                 run_id=f"{self.output_dir.name}",

@@ -75,6 +75,7 @@
 - POV équipe changée : `(0.5, -0.3, 1.2)` → `(0.30, 0.0, 1.50)`.
 - READMEs racine + dataset à jour (structure de sortie, encodage des `.npy`, justification POV).
 - Pass de cleanup global du module : commentaires verbeux supprimés, docstrings `Args/Returns` redondantes virées, code resserré.
+- Logs de progression ajoutés au collector (helper `_log` + prints à chaque étape setup, par frame, par 200 ticks, cleanup) — débloque le diagnostic en temps réel des stalls.
 
 **Difficultés** :
 
@@ -83,6 +84,8 @@
 2. **Caméra à l'intérieur du body Tesla** — Avec la palette corrigée, 99.98% des pixels reportés en classe Car. Les capteurs semantic / instance ne respectent pas la transparence des matériaux (alors que RGB la respecte) : depuis la POV `(0.5, -0.3, 1.2)`, ils voient le mesh solide de la carrosserie ego partout. Aucun mécanisme natif CARLA pour exclure un actor d'un sensor (vérifié docs 0.9.16 + 0.8.4). Solution : déplacer la caméra hors du body. POV finale `(0.30, 0.0, 1.50)` choisie après comparaison de 4 z-levels (1.45/1.50/1.55/1.60) — z=1.50 est le minimum qui clear proprement le toit (1.44m) tout en gardant une perspective naturelle.
 
 3. **Warnings `sensor went out of the scope` au cleanup** — Race entre destroy serveur asynchrone (`apply_batch`) et GC Python qui finalisait les wrappers Sensor. Résolu en passant à un cleanup en 3 phases : `stop()` explicite des listeners → `apply_batch_sync(cmds, True)` (synchrone, attend le serveur) → null des refs Python.
+
+4. **Stall réseau Tailscale → WSL → PC fixe sur les runs longs** — Tentatives de première vraie collecte (40 NPCs / 900s, puis 15 NPCs / 600s, puis 10 NPCs / 180s) chokent toutes après un nombre variable de frames (70, 7, 21). `world.tick()` en sync mode bloqué silencieusement, sans timeout effectif côté Python. CARLA serveur reste joignable (port répond), mais la connexion CARLA persistante se gèle. Pas de fix code clean trouvé pendant la session. **Décision** : la vraie collecte sera lancée localement depuis le PC fixe (host=`localhost`, plus de Tailscale), le WSL reste pour le développement code/tests/smoke. À setuper hors session.
 
 **Décisions** :
 - Stockage `.npy` brut (cohérent avec `depth/.npy`, ~7 GB/1500 frames acceptable) + viz PNG colorisée séparée pour trace visuelle directement archivée.
@@ -96,4 +99,4 @@
 1. Communiquer le changement de POV à l'équipe (Franck, Karim, Victor). MAJ `src/ai/JOURNAL.md` à la prochaine session sur le module IA.
 2. Refactor `YoloLabeler.compute_labels()` (Franck) : dériver bboxes depuis `instance/*.npy` via `np.unique` + `np.where`.
 3. Brancher le `LocalPlanner` réel.
-4. Première vraie collecte 500-1000 frames Town01.
+4. Première vraie collecte 500-1000 frames Town01 — **à lancer en local depuis le PC fixe** (setup `uv` + clone repo + `host="localhost"` dans le script de collecte) pour éviter les stalls Tailscale.
