@@ -1,4 +1,4 @@
-"""Wrapper autopilot CARLA et extraction des contrôles experts pour le manifest."""
+"""CARLA autopilot wrapper and expert control extraction for the manifest."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ExpertControls:
-    """Snapshot des contrôles appliqués par l'expert (autopilot CARLA) sur une frame."""
+    """Snapshot of the controls applied by the expert (CARLA autopilot) on a frame."""
 
     steer: float  # [-1, 1]
     throttle: float  # [0, 1]
@@ -20,7 +20,7 @@ class ExpertControls:
 
 
 class ExpertDriver:
-    """Wrapper de l'autopilot CARLA + extraction des contrôles appliqués."""
+    """Wrapper of the CARLA autopilot + extraction of applied controls."""
 
     def __init__(
         self,
@@ -29,14 +29,14 @@ class ExpertDriver:
     ) -> None:
         self.ego = ego
         self.traffic_manager = traffic_manager
-        # Active l'autopilot via le Traffic Manager (plus contrôlable que set_autopilot(True))
+        # Enable autopilot via the Traffic Manager (more controllable than set_autopilot(True))
         ego.set_autopilot(True, traffic_manager.get_port())
 
     def read_controls(self) -> ExpertControls:
-        """Lit les contrôles courants + vitesse du véhicule ego."""
+        """Read the current controls + speed of the ego vehicle."""
         control = self.ego.get_control()
         velocity = self.ego.get_velocity()
-        # |v| en m/s -> km/h
+        # |v| in m/s -> km/h
         speed_mps = (velocity.x**2 + velocity.y**2 + velocity.z**2) ** 0.5
         speed_kmh = speed_mps * 3.6
 

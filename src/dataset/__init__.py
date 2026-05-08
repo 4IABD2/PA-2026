@@ -1,11 +1,11 @@
-"""Module de génération du dataset commun depuis CARLA.
+"""Common dataset generation module from CARLA.
 
-API publique :
-- DatasetCollector : orchestrateur principal
-- HighLevelCommand : enum des commandes haut niveau (manifest)
-- ExpertControls : dataclass des contrôles expert (manifest)
+Public API:
+- DatasetCollector: main orchestrator
+- HighLevelCommand: high-level command enum (manifest)
+- ExpertControls: expert controls dataclass (manifest)
 
-Voir src/dataset/README.md pour le format de sortie et l'usage.
+See src/dataset/README.md for output format and usage.
 """
 
 from src.dataset.collector import DatasetCollector

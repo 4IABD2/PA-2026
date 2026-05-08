@@ -1,4 +1,4 @@
-"""Capture caméra RGB attachée à l'ego véhicule, sauvegarde JPEG."""
+"""RGB camera capture attached to the ego vehicle, JPEG save."""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ from PIL import Image
 if TYPE_CHECKING:
     import carla  # noqa: F401
 
-# Caméra POV partagée équipe (cf. README racine "Conventions CARLA")
+# Shared team camera POV (cf. root README "CARLA conventions")
 CAMERA_LOCATION = (0.5, -0.3, 1.2)
 CAMERA_ROTATION_PITCH = -5.0
 
 
 class CameraCapture:
-    """Wrapper sensor.camera.rgb avec callback qui buffe la dernière image."""
+    """Wrapper for sensor.camera.rgb with a callback that buffers the last image."""
 
     def __init__(
         self,
@@ -36,7 +36,7 @@ class CameraCapture:
         self._last_frame: np.ndarray | None = None
 
     def attach(self) -> "carla.Sensor":
-        """Spawn et attache le sensor au vehicle ego, retourne le sensor."""
+        """Spawn and attach the sensor to the ego vehicle, return the sensor."""
         import carla
 
         bp = self.world.get_blueprint_library().find("sensor.camera.rgb")
@@ -58,16 +58,16 @@ class CameraCapture:
         return self._sensor
 
     def _on_image(self, image: "carla.Image") -> None:
-        """Callback CARLA — copie les pixels en numpy immédiatement."""
+        """CARLA callback — copy pixels to numpy immediately."""
         raw = np.frombuffer(image.raw_data, dtype=np.uint8)
         bgra = raw.reshape((image.height, image.width, 4))
-        self._last_frame = bgra[..., [2, 1, 0]].copy()  # BGRA → RGB
+        self._last_frame = bgra[..., [2, 1, 0]].copy()  # BGRA -> RGB
 
     def save_last_frame(self, path: Path) -> None:
-        """Écrit la dernière image bufferisée en JPEG quality 90."""
+        """Write the last buffered image as JPEG quality 90."""
         if self._last_frame is None:
             raise RuntimeError(
-                "Pas d'image bufferisée. Appeler après au moins un world.tick()."
+                "No buffered image. Call after at least one world.tick()."
             )
         path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(self._last_frame).save(str(path), quality=90)

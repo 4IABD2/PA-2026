@@ -1,7 +1,7 @@
-"""DatasetCollector — orchestrateur de la collecte CARLA pour le dataset commun.
+"""DatasetCollector — orchestrator for CARLA dataset collection.
 
-Single-threaded, mode synchrone CARLA 20 FPS. Capture toutes les
-`capture_every_n_ticks` ticks (40 par défaut = 2s à 20 FPS).
+Single-threaded, CARLA synchronous mode at 20 FPS. Captures every
+`capture_every_n_ticks` ticks (40 by default = 2s at 20 FPS).
 """
 
 from __future__ import annotations
@@ -11,7 +11,11 @@ from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.dataset.camera_capture import CameraCapture
+from src.dataset.camera_capture import (
+    CAMERA_LOCATION,
+    CAMERA_ROTATION_PITCH,
+    CameraCapture,
+)
 from src.dataset.command_planner import CommandPlanner, HighLevelCommand
 from src.dataset.depth_capture import DepthCapture
 from src.dataset.expert_driver import ExpertDriver
@@ -27,7 +31,7 @@ COLLISION_LOOKBACK_FRAMES = 5
 
 
 class DatasetCollector:
-    """Orchestrateur de la collecte. Single instance par run."""
+    """Collection orchestrator. Single instance per run."""
 
     def __init__(
         self,
@@ -80,15 +84,15 @@ class DatasetCollector:
         self._original_settings = None
 
     def _validate_output_dir(self) -> None:
-        """Refuse un output_dir non vide pour éviter d'écraser un run précédent."""
+        """Refuse a non-empty output_dir to avoid overwriting a previous run."""
         if self.output_dir.exists() and any(self.output_dir.iterdir()):
             raise ValueError(
                 f"output_dir is not empty: {self.output_dir}. "
-                f"Choisir un nouveau path ou vider manuellement."
+                f"Choose a new path or empty it manually."
             )
 
     def _setup(self) -> None:
-        """Connexion CARLA + setup synchrone + spawn ego + NPC + sensors + writers."""
+        """Connect to CARLA, set sync mode, spawn ego + NPCs + sensors + writers."""
         import carla
 
         if self.seed is not None:
@@ -103,20 +107,20 @@ class DatasetCollector:
         weather_preset = getattr(carla.WeatherParameters, self.weather)
         self._world.set_weather(weather_preset)
 
-        # Mode synchrone 20 FPS
+        # Synchronous mode 20 FPS
         self._original_settings = self._world.get_settings()
         settings = self._world.get_settings()
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = FIXED_DELTA_SECONDS
         self._world.apply_settings(settings)
 
-        # Traffic Manager synchrone
+        # Synchronous Traffic Manager
         self._traffic_manager = self._client.get_trafficmanager()
         self._traffic_manager.set_synchronous_mode(True)
         if self.seed is not None:
             self._traffic_manager.set_random_device_seed(self.seed)
 
-        # Tick pour laisser le monde se stabiliser après load_world
+        # Tick to let the world stabilize after load_world
         self._world.tick()
 
         # Spawn ego
@@ -145,7 +149,7 @@ class DatasetCollector:
         self._command_planner = CommandPlanner(self._world, self._ego)
         self._expert = ExpertDriver(self._ego, self._traffic_manager)
 
-        # Warm-up : laisser les sensors produire leurs premières données
+        # Warm-up: let sensors produce their first frames
         for _ in range(10):
             self._world.tick()
 
@@ -157,28 +161,28 @@ class DatasetCollector:
         self._manifest = ManifestWriter(self.output_dir, self.town, self.weather)
 
     def _spawn_ego(self) -> "carla.Vehicle":
-        """Spawn un véhicule ego sur un spawn point random de la map."""
+        """Spawn an ego vehicle at a random spawn point of the map."""
         bp = self._world.get_blueprint_library().filter("vehicle.tesla.model3")[0]
         spawn_points = self._world.get_map().get_spawn_points()
         if not spawn_points:
-            raise RuntimeError(f"Pas de spawn points sur la map {self.town}")
+            raise RuntimeError(f"No spawn points on map {self.town}")
         spawn = random.choice(spawn_points)
         ego = self._world.spawn_actor(bp, spawn)
         return ego
 
     def _spawn_npcs(self) -> list:
-        """Spawn N NPC vehicles + walkers (best effort, peut spawn moins si pas de place).
+        """Spawn N NPC vehicles + walkers (best effort, may spawn fewer if no room).
 
-        TODO: implémentation full des walkers nécessite WalkerAIController qui est
-        plus complexe. Pour le squelette MVP, on spawn juste les vehicles NPC.
-        Les walkers seront ajoutés plus tard.
+        TODO: full walker implementation requires WalkerAIController which is
+        more complex. For the MVP skeleton, we spawn only NPC vehicles.
+        Walkers will be added later.
         """
         npcs = []
         bp_lib = self._world.get_blueprint_library()
         vehicle_bps = bp_lib.filter("vehicle.*")
         spawn_points = self._world.get_map().get_spawn_points()
 
-        # Vehicle NPCs
+        # NPC vehicles
         for i in range(min(self.n_npc_vehicles, len(spawn_points) - 1)):
             bp = random.choice(vehicle_bps)
             try:
@@ -189,11 +193,11 @@ class DatasetCollector:
             except Exception:
                 continue
 
-        # TODO walkers (Franck) — pas dans le squelette MVP
+        # TODO walkers (Franck) — not in MVP skeleton
         return npcs
 
     def _sensors_attach(self) -> None:
-        """Attache camera + depth + collision."""
+        """Attach camera + depth + collision sensors."""
         import carla
 
         self._camera.attach()
@@ -206,7 +210,7 @@ class DatasetCollector:
         )
         self._depth.attach()
 
-        # Collision sensor sur ego (pour is_collision dans manifest)
+        # Collision sensor on ego (for is_collision in manifest)
         bp = self._world.get_blueprint_library().find("sensor.other.collision")
         self._collision_sensor = self._world.spawn_actor(
             bp, carla.Transform(), attach_to=self._ego
@@ -215,19 +219,19 @@ class DatasetCollector:
         self._collision_sensor.listen(self._on_collision)
 
     def _on_collision(self, event) -> None:
-        """Marque la frame courante comme ayant eu une collision."""
-        # Pousse 1 dans la fenêtre des dernières frames
-        # (on pousse 0 dans la boucle principale à chaque frame capturée
-        # pour avancer la fenêtre — le 1 écrasera le dernier 0)
+        """Mark the current frame as having a collision."""
+        # Push 1 into the recent-frames window
+        # (the main loop pushes 0 on each captured frame to advance the window;
+        # the 1 will overwrite the latest 0)
         if self._collision_events_recent:
             self._collision_events_recent[-1] = 1
 
     def _cleanup(self) -> None:
-        """Libère les actors CARLA et restaure les settings."""
+        """Release CARLA actors and restore settings."""
         import carla
 
-        # Batch destroy : évite le crash C++ causé par destroy séquentiel
-        # des sensors attachés pendant que CARLA traite encore des callbacks
+        # Batch destroy: avoids the C++ crash caused by sequential destroy
+        # of attached sensors while CARLA is still processing callbacks
         if self._client is not None:
             destroy_cmds = []
             if self._collision_sensor is not None:
@@ -245,7 +249,7 @@ class DatasetCollector:
             if destroy_cmds:
                 self._client.apply_batch(destroy_cmds)
 
-        # Restore settings (libère le serveur)
+        # Restore settings (frees the server)
         if self._world is not None and self._original_settings is not None:
             try:
                 self._world.apply_settings(self._original_settings)
@@ -258,11 +262,11 @@ class DatasetCollector:
                 pass
 
     def run(self) -> None:
-        """Setup -> boucle ticks -> cleanup. Bloquant.
+        """Setup -> tick loop -> cleanup. Blocking.
 
-        Capture une frame complète (image, depth, labels, expert controls)
-        toutes les `capture_every_n_ticks` ticks. Termine quand `duration_sec`
-        est atteint. Cleanup garanti via try/finally.
+        Captures a full frame (image, depth, labels, expert controls)
+        every `capture_every_n_ticks` ticks. Stops when `duration_sec` is
+        reached. Cleanup is guaranteed via try/finally.
         """
         try:
             self._setup()
@@ -281,8 +285,8 @@ class DatasetCollector:
                 if tick_count % self.capture_every_n_ticks != 0:
                     continue
 
-                # Avance la fenêtre collision (pousse 0 par défaut, le callback
-                # collision écrasera en 1 si event sur cette frame)
+                # Advance the collision window (push 0 by default; the
+                # collision callback will overwrite to 1 if event on this frame)
                 self._collision_events_recent.append(0)
 
                 # Capture
@@ -293,11 +297,11 @@ class DatasetCollector:
                 self._camera.save_last_frame(self.output_dir / img_rel)
                 self._depth.save_last_frame(self.output_dir / depth_rel)
 
-                # Labels YOLO : best-effort, NotImplementedError attendu en MVP
+                # YOLO labels: best-effort, NotImplementedError expected in MVP
                 try:
                     self._yolo_labeler.save(self.output_dir / label_rel)
                 except NotImplementedError:
-                    # Écrit un fichier vide pour rester cohérent avec le reste
+                    # Write an empty file to stay consistent with the rest
                     (self.output_dir / label_rel).write_text("")
 
                 expert_controls = self._expert.read_controls()
@@ -325,12 +329,12 @@ class DatasetCollector:
                 capture_every_n_ticks=self.capture_every_n_ticks,
                 n_frames=frame_id,
                 n_npc_vehicles=len(self._npc_actors),
-                n_npc_walkers=0,  # walkers pas dans MVP
+                n_npc_walkers=0,  # walkers not in MVP
                 duration_sec_target=self.duration_sec,
                 duration_sec_actual=round(run_end - run_start, 2),
                 camera_pov={
-                    "location": [0.5, -0.3, 1.2],
-                    "rotation": [0, 0, -5],
+                    "location": list(CAMERA_LOCATION),
+                    "rotation": [0, 0, CAMERA_ROTATION_PITCH],
                 },
                 image_resolution=[self.image_width, self.image_height],
                 fov=self.fov,

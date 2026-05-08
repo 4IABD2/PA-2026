@@ -59,11 +59,24 @@
 **Décisions** :
 - Cleanup via `apply_batch` plutôt que `destroy()` séquentiel → plus robuste et plus rapide.
 - Copie numpy immédiate dans les callbacks (camera RGB et depth) → élimine les dépendances aux objets C++ CARLA.
+- Tout le code, docstrings et commentaires sont passés à l'anglais ; seul le JOURNAL reste en français. Convention pour la suite du projet : code en anglais, doc projet (README, JOURNAL) en français.
+- **Caméra POV — exploration et décision finale** : sur la première sortie e2e, j'ai trouvé que la POV d'origine `(0.5, -0.3, 1.2)` pitch -5 cadrait trop sur le tableau de bord et le volant (~40% de l'image occupée par l'intérieur de la cabine). J'ai donc fait un travail de comparaison systématique :
+  - Création d'un script de preview qui spawn une voiture statique et capture une image par profil (script supprimé après usage, plus besoin).
+  - **Round 1** — 9 profils testés : 4 variantes conducteur (origine, compromise, forward, centered), 2 hood-mounted (high, low), 2 roof-mounted (top, forward), 1 bumper/dashcam.
+  - **Round 2** — focus sur la variante conducteur "plus haute et reculée" : 5 profils du moins au plus agressif (`v1_slight (0.3, -0.3, 1.3)` → `v4_max (-0.3, -0.3, 1.6)`).
+  - **Round 3** — micro-tuning autour de `v1_slight` : 4 sous-variantes (`v1a (0.35, -0.3, 1.33)` → `v1c (0.45, -0.3, 1.38)`).
+  - Présélection : `v1a (0.35, -0.3, 1.33)` pitch -5 — un peu plus haut et reculé que l'origine, garde une partie du volant comme repère humain mais libère la route.
+  - **Décision finale après délibération avec Franck** : on revient à la POV d'origine `(0.5, -0.3, 1.2)` pitch -5. Raison : c'est la convention déjà actée dans le README racine et dans le journal `src/ai/`, garder la cohérence évite de devoir re-collecter le peu de données qu'on aurait pu déjà produire et simplifie la coordination équipe. La présence du volant/tableau de bord est jugée acceptable comme repère visuel humain.
+- **Centralisation des constantes POV** : suite à ce travail, le `camera_pov` du `metadata.json` lit désormais les constantes `CAMERA_LOCATION` / `CAMERA_ROTATION_PITCH` de `camera_capture.py` au lieu d'avoir des valeurs hardcodées. Évite la dérive entre le sensor réel et la metadata.
 
 **Datasets générés** :
 - `data/runs/2026-05-08_smoke_test/` — 20 frames, Town01, ClearNoon, 5 NPC vehicles, 0 walkers, seed=None.
 
 **Prochaine étape** :
-1. Première vraie collecte dataset (~500-1000 frames) sur Town01 pour commencer le training CIL.
-2. Brancher le `LocalPlanner` dans `CommandPlanner`.
-3. Coordination avec Franck pour `YoloLabeler` (projection 3D→2D).
+1. **Étendre le collector aux caméras GT supplémentaires de CARLA** : ajouter `sensor.camera.semantic_segmentation` et `sensor.camera.instance_segmentation` au pipeline. Bénéfices :
+   - **Karim** récupère un GT propre pour la détection de lignes (les marquages au sol sont une classe distincte dans la sémantique CARLA), plus besoin de labels manuels.
+   - **Franck** peut dériver les bounding boxes YOLO directement depuis les masks d'instance (`find_contours` par instance ID), ce qui résout proprement le `NotImplementedError` actuel de `YoloLabeler.compute_labels()` sans avoir à coder la projection 3D→2D matricielle.
+   - Format de sortie envisagé : `.npy` brut (uint8 pour la sémantique = class IDs CARLA 0-22, uint32 pour l'instance = `class_id<<16 | instance_id`). Pas de PNG visualisable, palette régénérable au besoin.
+   - Coût disque estimé : +~6.7 GB pour 1500 frames (acceptable). Design discuté et acté en session, à implémenter au prochain pass.
+2. Première vraie collecte dataset (~500-1000 frames) sur Town01 pour commencer le training CIL.
+3. Brancher le `LocalPlanner` dans `CommandPlanner`.

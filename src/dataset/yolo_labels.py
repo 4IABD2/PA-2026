@@ -1,4 +1,4 @@
-"""Génération des labels YOLO (bboxes 2D normalisées) pour le dataset."""
+"""YOLO label generation (normalized 2D bboxes) for the dataset."""
 
 from __future__ import annotations
 
@@ -8,19 +8,19 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import carla  # noqa: F401
 
-# Mapping des classes documentées dans le README racine.
+# Class mapping documented in the root README.
 YOLO_CLASS_MAPPING: dict[str, int] = {
     "vehicle": 0,
     "walker": 1,
     "traffic_light": 2,
 }
 
-# Type d'une ligne de label: (class_id, x_center, y_center, width, height) normalisés [0, 1]
+# Type of a label row: (class_id, x_center, y_center, width, height) normalized [0, 1]
 YoloLabel = tuple[int, float, float, float, float]
 
 
 class YoloLabeler:
-    """Calcule les labels YOLO à partir des actors CARLA dans le champ caméra."""
+    """Compute YOLO labels from CARLA actors visible in the camera frame."""
 
     def __init__(
         self,
@@ -39,31 +39,31 @@ class YoloLabeler:
         self.max_distance_m = max_distance_m
 
     def compute_labels(self) -> list[YoloLabel]:
-        """Retourne les labels YOLO pour la frame courante.
+        """Return YOLO labels for the current frame.
 
-        TODO (Franck): implémenter la projection 3D->2D des actors visibles via
-        la matrice intrinsèque CARLA (cf. carla.Sensor.calibration et
-        world_to_camera_matrix). Filtrer:
-        - Distance ego->actor > max_distance_m
-        - Actor hors du champ caméra
-        - Actor occlus (optionnel, peut être skip pour le squelette)
+        TODO (Franck): implement 3D->2D projection of visible actors using
+        the CARLA intrinsic matrix (cf. carla.Sensor.calibration and
+        world_to_camera_matrix). Filter:
+        - distance ego->actor > max_distance_m
+        - actor outside camera frustum
+        - occluded actor (optional, can be skipped for the skeleton)
         """
         raise NotImplementedError(
-            "Projection 3D->2D pas encore implémentée. "
-            "À compléter par Franck dans une session ultérieure. "
-            "Voir docstring pour la spec."
+            "3D->2D projection not implemented yet. "
+            "To be completed by Franck in a later session. "
+            "See docstring for the spec."
         )
 
     def save(self, path: Path) -> None:
-        """Compute et écrit les labels au format YOLO."""
+        """Compute and write labels in YOLO format."""
         labels = self.compute_labels()
         self.write_labels_to_file(labels, path)
 
     @staticmethod
     def write_labels_to_file(labels: list[YoloLabel], path: Path) -> None:
-        """Écrit une liste de labels (déjà calculés) au format YOLO standard.
+        """Write a list of (already computed) labels in standard YOLO format.
 
-        Méthode statique pour être testable sans CARLA.
+        Static method so it is testable without CARLA.
         """
         path.parent.mkdir(parents=True, exist_ok=True)
         lines = [
