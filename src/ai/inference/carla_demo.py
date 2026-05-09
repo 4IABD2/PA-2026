@@ -40,6 +40,11 @@ if TYPE_CHECKING:
 CARLA_FPS = 20
 FIXED_DELTA_SECONDS = 1.0 / CARLA_FPS
 
+KICKSTART_SPEED_KMH = 3.0
+KICKSTART_THROTTLE = 0.6
+
+RESPAWN_DELAY_S = 2.0
+
 
 def _log(msg: str) -> None:
     print(f"[demo] {msg}", flush=True)
@@ -87,19 +92,43 @@ def main(argv: list[str] | None = None) -> int:
     settings.fixed_delta_seconds = FIXED_DELTA_SECONDS
     world.apply_settings(settings)
 
+    bp = world.get_blueprint_library().filter("vehicle.tesla.model3")[0]
+    collision_bp = world.get_blueprint_library().find("sensor.other.collision")
+    spawn_points = world.get_map().get_spawn_points()
+    if not spawn_points:
+        raise RuntimeError(f"No spawn points on {args.town}")
+    random.seed(0)
+
+    def spawn_episode():
+        e = world.spawn_actor(bp, random.choice(spawn_points))
+        c = CameraCapture(world, e)
+        c.attach()
+        cs = world.spawn_actor(collision_bp, carla.Transform(), attach_to=e)
+        flag = {"hit": False}
+        cs.listen(lambda _ev: flag.__setitem__("hit", True))
+        return e, c, cs, flag
+
+    def destroy_episode(e, c, cs):
+        cmds = []
+        for sensor in (c._sensor if c is not None else None, cs):
+            if sensor is None:
+                continue
+            try:
+                sensor.stop()
+            except Exception:
+                pass
+            cmds.append(carla.command.DestroyActor(sensor))
+        if e is not None:
+            cmds.append(carla.command.DestroyActor(e))
+        if cmds:
+            client.apply_batch_sync(cmds, True)
+
     ego = None
     camera = None
+    collision_sensor = None
     try:
-        bp = world.get_blueprint_library().filter("vehicle.tesla.model3")[0]
-        spawn_points = world.get_map().get_spawn_points()
-        if not spawn_points:
-            raise RuntimeError(f"No spawn points on {args.town}")
-        random.seed(0)
-        ego = world.spawn_actor(bp, random.choice(spawn_points))
+        ego, camera, collision_sensor, collision_flag = spawn_episode()
         _log("ego spawned")
-
-        camera = CameraCapture(world, ego)
-        camera.attach()
 
         spectator = world.get_spectator()
 
@@ -109,9 +138,36 @@ def main(argv: list[str] | None = None) -> int:
 
         target_ticks = int(args.duration * CARLA_FPS)
         log_every = CARLA_FPS  # 1×/sec
+        respawn_delay_ticks = int(RESPAWN_DELAY_S * CARLA_FPS)
+        wait_until_tick = -1  # -1 = not in collision wait
+        respawn_count = 0
         wall_start = time.time()
         for tick in range(target_ticks):
             world.tick()
+            t_now = tick / CARLA_FPS
+
+            if collision_flag["hit"] and wait_until_tick < 0:
+                wait_until_tick = tick + respawn_delay_ticks
+                respawn_count += 1
+                _log(
+                    f"collision #{respawn_count} at t={t_now:.1f}s, "
+                    f"respawn in {RESPAWN_DELAY_S:.0f}s"
+                )
+
+            if wait_until_tick >= 0:
+                if tick >= wait_until_tick:
+                    destroy_episode(ego, camera, collision_sensor)
+                    ego, camera, collision_sensor, collision_flag = spawn_episode()
+                    for _ in range(10):
+                        world.tick()
+                    wait_until_tick = -1
+                    _log(f"respawned (#{respawn_count})")
+                else:
+                    ego.apply_control(
+                        carla.VehicleControl(brake=1.0, hand_brake=True)
+                    )
+                continue
+
             if camera._last_frame is None:
                 continue
 
@@ -131,6 +187,14 @@ def main(argv: list[str] | None = None) -> int:
                 brake = 0.0
             else:
                 throttle = 0.0
+
+            # Kickstart override: 51% of training frames are at low speed where
+            # the autopilot brakes, so the model learned a stable "stopped → brake"
+            # attractor it can never escape on its own. Force a creep below
+            # KICKSTART_SPEED_KMH to break the fixed point.
+            if speed_kmh < KICKSTART_SPEED_KMH:
+                throttle = KICKSTART_THROTTLE
+                brake = 0.0
 
             ego.apply_control(
                 carla.VehicleControl(
@@ -152,24 +216,18 @@ def main(argv: list[str] | None = None) -> int:
 
             if tick % log_every == 0:
                 _log(
-                    f"t={tick / CARLA_FPS:5.1f}s speed={speed_kmh:5.1f} "
+                    f"t={t_now:5.1f}s speed={speed_kmh:5.1f} "
                     f"steer={steer:+.2f} throttle={throttle:.2f} brake={brake:.2f}"
                 )
 
-        _log(f"done in {time.time() - wall_start:.0f}s")
+        _log(
+            f"done in {time.time() - wall_start:.0f}s, respawns={respawn_count}"
+        )
     finally:
-        if camera is not None and camera._sensor is not None:
-            try:
-                camera._sensor.stop()
-            except Exception:
-                pass
-        cmds = []
-        if camera is not None and camera._sensor is not None:
-            cmds.append(carla.command.DestroyActor(camera._sensor))
-        if ego is not None:
-            cmds.append(carla.command.DestroyActor(ego))
-        if cmds:
-            client.apply_batch_sync(cmds, True)
+        try:
+            destroy_episode(ego, camera, collision_sensor)
+        except Exception:
+            pass
         try:
             world.apply_settings(original)
         except Exception:
