@@ -101,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         camera = CameraCapture(world, ego)
         camera.attach()
 
+        spectator = world.get_spectator()
+
         for _ in range(10):
             world.tick()
         _log("warm-up done, entering inference loop")
@@ -122,11 +124,29 @@ def main(argv: list[str] | None = None) -> int:
             throttle = float(out["throttle"].numpy()[0, 0])
             brake = float(out["brake"].numpy()[0, 0])
 
+            # Mutex throttle/brake: the V1 model emits both heads simultaneously
+            # because the autopilot demonstrations did. CARLA inhibits torque when
+            # any brake is applied, so without this the car never moves.
+            if throttle > brake:
+                brake = 0.0
+            else:
+                throttle = 0.0
+
             ego.apply_control(
                 carla.VehicleControl(
                     steer=steer,
                     throttle=throttle,
                     brake=brake,
+                )
+            )
+
+            ego_tf = ego.get_transform()
+            fwd = ego_tf.get_forward_vector()
+            spectator.set_transform(
+                carla.Transform(
+                    ego_tf.location
+                    + carla.Location(x=-6.0 * fwd.x, y=-6.0 * fwd.y, z=3.0),
+                    carla.Rotation(pitch=-15.0, yaw=ego_tf.rotation.yaw),
                 )
             )
 

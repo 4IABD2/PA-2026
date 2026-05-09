@@ -94,3 +94,34 @@
 2. Lancer le training sur noyse (GPU A6000) — quelques secondes wall-clock attendues sur 1350 frames.
 3. Rapatrier `best.keras` vers le PC fixe et lancer `carla_demo` Town01 ClearNoon. Critère de succès : la voiture avance et garde la route en environnement vide.
 4. Selon résultat : passer à la V2 (augmentations, plus de data, NPCs en démo) ou aller vendor `agents/` de l'install CARLA pour avoir les vraies commandes HN et faire la vraie CIL multi-têtes.
+
+---
+
+## 2026-05-09 (suite — training noyse)
+
+**Avancement** :
+- Première run du training V1 sur noyse (Linux, 2× RTX A6000, sans sudo). 30 epochs complets sur les 3 runs du 2026-05-08 (Town01 ClearNoon + CloudyNoon, Town03 ClearNoon), 1350 frames brutes → 1080 train / 270 val, 0 collision filtrée.
+- Loss qui descend du début à la fin sans plateau ni divergence, EarlyStopping (patience=5) jamais déclenché.
+- Sortie OK dans `checkpoints/pilotnet_v1/` : `best.keras` 7.0 M, `last.keras` 7.0 M, `splits.json` 147 K, `config.json`, `training_log.csv` 5.6 K (aucune NaN).
+- Wall-clock 77 s sur GPU 1 (`CUDA_VISIBLE_DEVICES=1`), GPU 0 laissée libre pour les autres.
+
+**Difficultés** :
+- `pyproject.toml` déclare `tensorflow` sans extra `[and-cuda]`, donc `uv sync` n'installe pas les libs CUDA bundled (cuDNN, cuBLAS, etc.) → TF tombait en CPU silencieusement avec `GPUs: []`. Fix : `uv pip install 'tensorflow[and-cuda]==2.21.0'` qui ajoute les 12 paquets `nvidia-*-cu12` dans le venv sans toucher à `pyproject.toml` ni à `uv.lock`.
+- Même après install, TF ne trouvait pas les `.so` (chargement dynamique). Il faut exporter `LD_LIBRARY_PATH` vers `.venv/lib/python3.10/site-packages/nvidia/*/lib` avant chaque appel. Solution : pattern inline dans la commande de lancement, plutôt qu'un script setup persistant qui serait spécifique à noyse.
+- Driver système en CUDA 13.0 (très récent) avec runtime 12.x dans les wheels Python — pas de souci grâce à la forward-compatibility des drivers NVIDIA.
+
+**Décisions** :
+- `pyproject.toml` non modifié : la fix CUDA reste locale au venv de noyse, n'impacte pas le PC fixe Windows (CARLA + démo) où la stack est différente. Si on veut industrialiser plus tard, on rajoutera l'extra côté pyproject avec un marker plateforme.
+- Pas créé de helper script `scripts/setup_gpu_env.sh` cette fois pour ne pas polluer le repo avec un fichier machine-specific. À reconsidérer si on relance régulièrement.
+
+**Benchmarks** :
+- `val_loss` final : **0.0735** (epoch 30) — départ 0.1966 (epoch 1), descente quasi-monotone, deux stagnations courtes (e5–6 et e14–15) résorbées sans intervention.
+- Détail par head sur la val : `val_throttle_loss` 0.142 → 0.045 (descente nette), `val_brake_loss` 0.241 → 0.083 (descente nette), `val_steer_loss` 0.0046 → **0.0067** (légère dégradation).
+- Le head steer dégrade un peu pendant que throttle/brake convergent → c'est le mode collapse "predict 0 partout" attendu vu la distribution observée par le data loader : `[data] steer counts=[0, 0, 0, 25, 281, 1025, 11, 7, 1, 0]`. Le bin central concentre 76 % des frames, 304/1350 (~22.5 %) sont dans des bins légèrement décalés, et seulement 19 frames (~1.4 %) ont `|steer| > 0.4`. Le réseau apprend à imiter le prior trivial sur la majorité et perd un peu de précision quand il s'aventure ailleurs.
+- Distribution speed : `counts=[695, 93, 95, 402, 10, 9, 12, 8, 8, 18]` sur `[0..90 km/h]`, soit deux modes (arrêt/lent ~50 % et croisière ~30 km/h ~30 %), max ~88 km/h conforme aux notes.
+- Wall-clock training 77 s. Setup env (uv sync + install CUDA libs) ~3 min. Smoke tests 34 s, 4 passed.
+
+**Prochaine étape** :
+1. Rapatrier `checkpoints/pilotnet_v1/best.keras` vers le PC fixe pour lancer `carla_demo` Town01 ClearNoon.
+2. Critère réel à observer en sim : est-ce que la voiture braque effectivement dans les virages, ou reste-t-elle "tout droit" à cause du steer collapse ? Le `val_steer_loss` bas est trompeur (il bénéficie du prior trivial), c'est le comportement visuel qui tranchera.
+3. Si la voiture ne tourne pas : avant de passer à V2 (augmentations, plus de data), tester un rééquilibrage steer (oversampling des frames `|steer|>0.05`) dans le data loader, ou une loss `huber`/`weighted_mse` sur le head steer. Si elle tourne raisonnablement : V1 considérée comme baseline acquise, on enchaîne sur la collecte de plus de data variée (Town02/04/05, dynamic_weather, NPCs).
