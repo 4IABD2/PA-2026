@@ -129,8 +129,14 @@ Hyperparamètres centralisés dans `config.py` :
 
 Dans [benchmarks/ai/](../../benchmarks/ai/) :
 
-- **`smoke.py`** : vérifier que les modèles produisent des sorties dans les bons intervalles (`steer ∈ [-1, 1]`, `throttle, brake ∈ [0, 1]`), que le data loader fonctionne sur un mini-dataset synthétique, que `ControlOutput` est bien produit à partir d'une `SceneState` factice
-- **`benchmark.py`** : loss val sur jeu de validation, taux de succès trajet sans collision en démo CARLA, FPS d'inférence
+- **`smoke.py`** — 4 tests pytest, sans CARLA, sans GPU, ~10 sec total :
+    - `test_pilotnet_output_shapes_and_ranges` : 3 têtes nommées avec shapes correctes et activations dans les bons intervalles (`steer ∈ [-1, 1]`, `throttle/brake ∈ [0, 1]`).
+    - `test_pilotnet_trainable` : le modèle peut fitter un mini batch synthétique (loss diminue sur 20 epochs).
+    - `test_data_loader_synthetic` : lit un run factice (manifest + JPEGs noise), drop les frames `is_collision=1`, produit les bons shapes en sortie.
+    - `test_data_loader_split_deterministic` : même seed → même split train/val.
+- **Benchmark de performance V2+** : loss val sur jeu de validation, taux de succès trajet sans collision en démo CARLA, FPS d'inférence — pas en V1.
+
+Lancer : `uv run pytest benchmarks/ai/smoke.py -v`
 
 Voir [benchmarks/README.md](../../benchmarks/README.md) pour la convention.
 
