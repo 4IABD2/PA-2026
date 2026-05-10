@@ -41,19 +41,69 @@ Définit les architectures de réseaux. Plusieurs variantes :
 
 ### `training/`
 
-Scripts CLI pour entraîner les modèles. Sauvegarde des poids dans `checkpoints/<model_name>/`.
+Scripts CLI pour entraîner les modèles. Sauvegarde dans `checkpoints/<model_name>/` : `best.keras`, `last.keras`, `splits.json`, `config.json`, `training_log.csv`.
 
 ```bash
-uv run -m src.ai.training.train --model pilotnet --dataset data/runs/<date>/
+uv run -m src.ai.training.train \
+  --runs data/runs/<date>_town01_clearnoon data/runs/<date>_town01_cloudynoon ... \
+  --output checkpoints/pilotnet_v1/
+```
+
+**Args** :
+- `--runs` (requis) : un ou plusieurs dossiers de runs (chacun avec son `manifest.csv`)
+- `--output` (requis) : dossier de sortie pour les checkpoints
+- `--epochs` / `--batch-size` / `--seed` : optionnels, défauts dans `src/ai/config.py`
+
+**Sur GPU NVIDIA Linux sans bundle CUDA système** : `uv sync` n'installe que TF sans les libs CUDA bundled. Avant de lancer, ajouter `tensorflow[and-cuda]` dans le venv et exporter `LD_LIBRARY_PATH` vers les wheels :
+
+```bash
+uv pip install 'tensorflow[and-cuda]==2.21.0'
+export LD_LIBRARY_PATH="$(ls -d .venv/lib/python3.10/site-packages/nvidia/*/lib | tr '\n' ':')${LD_LIBRARY_PATH:-}"
+CUDA_VISIBLE_DEVICES=1 uv run -m src.ai.training.train ...
 ```
 
 ### `inference/`
 
-Boucle de démo : lance CARLA, charge un modèle entraîné, prédit et applique les contrôles à chaque tick. Inclut un overlay HUD pour visualiser ce que fait le modèle.
+Boucle de démo : lance CARLA, charge un modèle entraîné, prédit et applique les contrôles à chaque tick. Spectator chase cam derrière la voiture, et après une collision la voiture est despawnée puis respawnée à un autre spawn point pour que la démo tienne sur toute la `--duration`.
+
+**Pré-requis** : serveur CARLA tournant sur `localhost:2000` (ou autre via `--host`/`--port`).
 
 ```bash
-uv run -m src.ai.inference.carla_demo --weights checkpoints/<model_name>/best.h5
+uv run -m src.ai.inference.carla_demo \
+  --weights checkpoints/pilotnet_v1/best.keras \
+  --town Town01 --weather ClearNoon --duration 120
 ```
+
+**Args** :
+- `--weights` (requis) : chemin du `best.keras` issu du training
+- `--town` (défaut Town01) : carte CARLA (Town01, Town02, Town03, …)
+- `--weather` (défaut ClearNoon) : preset météo CARLA
+- `--duration` (défaut 120) : durée simu en secondes
+- `--host` / `--port` (défauts localhost:2000) : serveur CARLA
+- `--record DIR` : dump chaque frame caméra avec HUD overlay en JPEG dans `DIR/frames/`, plus mirror du log console dans `DIR/demo.log`. La commande ffmpeg pour assembler le MP4 est imprimée à la fin.
+
+**Post-processing appliqué dans la boucle** (constantes en haut du fichier `carla_demo.py`) :
+- **Mutex throttle/brake** : le V1 sort les deux pédales non-nulles simultanément (artefact des démonstrations autopilot). On garde la plus grande et on zéro l'autre, sinon CARLA inhibe la traction et la voiture reste collée.
+- **Kickstart** (`KICKSTART_SPEED_KMH=3.0`, `KICKSTART_THROTTLE=0.6`) : à basse vitesse, force throttle pour casser le point fixe stable "stopped → brake" appris du dataset (51 % des frames de training sont à <9 km/h).
+- **Respawn** (`RESPAWN_DELAY_S=2.0`) : sensor `sensor.other.collision` attaché à l'ego ; après hit, handbrake forcé 2 s puis despawn + respawn au prochain `random.choice(spawn_points)`.
+
+**Exemple avec recording vidéo** :
+
+```bash
+uv run -m src.ai.inference.carla_demo \
+  --weights checkpoints/pilotnet_v1/best.keras \
+  --town Town01 --weather ClearNoon --duration 120 \
+  --record logs/demo_v1_<date>
+```
+
+Puis (la commande exacte est imprimée par la démo en fin de run) :
+
+```bash
+ffmpeg -framerate 20 -i logs/demo_v1_<date>/frames/%06d.jpg \
+  -c:v libx264 -pix_fmt yuv420p logs/demo_v1_<date>/demo.mp4
+```
+
+Sortie attendue : ~360 MB de JPEGs intermédiaires (jetables après assemblage) → MP4 ~10–30 MB.
 
 ## Pipeline complet
 
