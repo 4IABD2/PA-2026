@@ -19,7 +19,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import tensorflow as tf
 from tensorflow import keras
 
@@ -34,7 +33,7 @@ from src.ai.config import (
     REDUCE_LR_PATIENCE,
     SEED,
 )
-from src.ai.models.pilotnet import build_pilotnet_speed
+from src.ai.models.v1_pilotnet_speed import build_pilotnet_speed
 from src.ai.training.data_loader import (
     _read_manifests,
     load_dataset,

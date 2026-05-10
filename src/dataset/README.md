@@ -1,7 +1,7 @@
 # `src/dataset/` — Génération du dataset commun depuis CARLA
 
-> **Owner principal** : Franck Zhuang (script de collecte)
-> **Contributeurs** : Frédéric (colonnes commande HN + actions expert), Karim (annotations lignes si nécessaire)
+> **Owner principal** : Frédéric (script de collecte)
+> **Contributeurs** : Franck (colonnes commande HN + actions expert), Karim (annotations lignes si nécessaire)
 
 ---
 
@@ -144,8 +144,8 @@ src/dataset/
 
 Chacun peut contribuer à son fichier sans bloquer les autres :
 
-- **Franck** : `collector.py`, `camera_capture.py`, `depth_capture.py`, `yolo_labels.py` (il a déjà commencé un `carla_dataset_generator.py` dans son contexte)
-- **Frédéric** : `command_planner.py`, `expert_driver.py`, et l'enrichissement du `manifest.csv`
+- **Frédéric** : `collector.py`, `camera_capture.py`, `depth_capture.py`, `yolo_labels.py` (il a déjà commencé un `carla_dataset_generator.py` dans son contexte)
+- **Franck** : `command_planner.py`, `expert_driver.py`, et l'enrichissement du `manifest.csv`
 - **Karim** : `lanes_gt.py` si on décide d'annoter les lignes via les waypoints CARLA
 
 ## Conventions importantes

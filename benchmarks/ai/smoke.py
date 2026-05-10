@@ -9,7 +9,7 @@ import tensorflow as tf
 def test_pilotnet_output_shapes_and_ranges():
     """Model produces 3 named heads with correct shapes and activation ranges."""
     from src.ai.config import IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS
-    from src.ai.models.pilotnet import build_pilotnet_speed
+    from src.ai.models.v1_pilotnet_speed import build_pilotnet_speed
 
     model = build_pilotnet_speed()
 
@@ -34,7 +34,7 @@ def test_pilotnet_output_shapes_and_ranges():
 def test_pilotnet_trainable():
     """Sanity: the model can fit a tiny synthetic dataset (loss decreases)."""
     from src.ai.config import IMAGE_CHANNELS, IMAGE_HEIGHT, IMAGE_WIDTH, LOSS_WEIGHTS
-    from src.ai.models.pilotnet import build_pilotnet_speed
+    from src.ai.models.v1_pilotnet_speed import build_pilotnet_speed
 
     tf.keras.utils.set_random_seed(0)
     model = build_pilotnet_speed()
@@ -152,7 +152,7 @@ def test_data_loader_synthetic(tmp_path):
     ]
     _make_synthetic_run(run, frames)
 
-    train_ds, val_ds, info = load_dataset([run], batch_size=2, seed=0)
+    train_ds, _, info = load_dataset([run], batch_size=2, seed=0)
 
     assert info["n_total_kept"] == 4
     assert info["n_dropped_collisions"] == 1
