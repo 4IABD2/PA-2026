@@ -1,21 +1,16 @@
 """CARLA semantic segmentation capture and palette colorization."""
 
 from __future__ import annotations
-
 from pathlib import Path
 from typing import TYPE_CHECKING
-
 import numpy as np
 from PIL import Image
-
 from src.dataset.camera_capture import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
-
-if TYPE_CHECKING:
-    import carla  # noqa: F401
+import carla
 
 
 def decode_semantic_carla(rgb: np.ndarray) -> np.ndarray:
-    """Extract class IDs from a CARLA semantic frame (encoded in the R channel)."""
+    """Carla use Red Channel to encode the semantic : 0 to 28 classes. Green and Blue are always 0."""
     return rgb[..., 0].copy()
 
 
@@ -57,14 +52,11 @@ CITYSCAPE_PALETTE = np.array(
 
 
 def colorize_semantic(class_ids: np.ndarray) -> np.ndarray:
-    """Apply the CityScape palette to a class-ID map. Out-of-range IDs are clipped."""
     safe = np.clip(class_ids, 0, len(CITYSCAPE_PALETTE) - 1)
     return CITYSCAPE_PALETTE[safe]
 
 
 class SemanticCapture:
-    """Wrapper for sensor.camera.semantic_segmentation."""
-
     def __init__(
         self,
         world: "carla.World",
@@ -121,9 +113,3 @@ class SemanticCapture:
         viz = colorize_semantic(class_ids)
         viz_path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(viz).save(str(viz_path))
-
-    def destroy(self) -> None:
-        if self._sensor is not None:
-            self._sensor.stop()
-            self._sensor.destroy()
-            self._sensor = None

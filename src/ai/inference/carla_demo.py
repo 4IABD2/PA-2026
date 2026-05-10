@@ -55,10 +55,6 @@ KICKSTART_THROTTLE = 0.6
 RESPAWN_DELAY_S = 2.0
 
 
-def _log(msg: str) -> None:
-    print(f"[demo] {msg}", flush=True)
-
-
 def _preprocess_image(rgb: np.ndarray) -> np.ndarray:
     """Apply the same crop + resize + normalize as the training data loader."""
     h = IMAGE_RAW_HEIGHT
@@ -139,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         record_log = None
 
-    def _log(msg: str) -> None:  # noqa: F811 -- shadows module-level on purpose
+    def _log(msg: str) -> None:
         line = f"[demo] {msg}"
         print(line, flush=True)
         if record_log is not None:

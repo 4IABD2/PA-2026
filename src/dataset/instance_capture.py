@@ -1,18 +1,12 @@
 """CARLA instance segmentation capture and per-instance colorization."""
 
 from __future__ import annotations
-
 import colorsys
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 import numpy as np
 from PIL import Image
-
 from src.dataset.camera_capture import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
-
-if TYPE_CHECKING:
-    import carla  # noqa: F401
+import carla  
 
 
 def pack_instance_carla(rgb: np.ndarray) -> np.ndarray:
@@ -48,8 +42,6 @@ def colorize_instance(packed: np.ndarray) -> np.ndarray:
 
 
 class InstanceCapture:
-    """Wrapper for sensor.camera.instance_segmentation."""
-
     def __init__(
         self,
         world: "carla.World",
@@ -106,9 +98,3 @@ class InstanceCapture:
         viz = colorize_instance(packed)
         viz_path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(viz).save(str(viz_path))
-
-    def destroy(self) -> None:
-        if self._sensor is not None:
-            self._sensor.stop()
-            self._sensor.destroy()
-            self._sensor = None

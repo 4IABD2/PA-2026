@@ -125,3 +125,49 @@
 1. Rapatrier `checkpoints/pilotnet_v1/best.keras` vers le PC fixe pour lancer `carla_demo` Town01 ClearNoon.
 2. Critère réel à observer en sim : est-ce que la voiture braque effectivement dans les virages, ou reste-t-elle "tout droit" à cause du steer collapse ? Le `val_steer_loss` bas est trompeur (il bénéficie du prior trivial), c'est le comportement visuel qui tranchera.
 3. Si la voiture ne tourne pas : avant de passer à V2 (augmentations, plus de data), tester un rééquilibrage steer (oversampling des frames `|steer|>0.05`) dans le data loader, ou une loss `huber`/`weighted_mse` sur le head steer. Si elle tourne raisonnablement : V1 considérée comme baseline acquise, on enchaîne sur la collecte de plus de data variée (Town02/04/05, dynamic_weather, NPCs).
+
+---
+
+## 2026-05-10 (démo CARLA, recording vidéo, analyse V1)
+
+**Avancement** :
+- Démo CARLA branchée sur le checkpoint V1 du PC fixe : 3 patches successifs ajoutés à `src/ai/inference/carla_demo.py` au fil des problèmes runtime :
+  1. **Mutex throttle/brake** — sans ça, le modèle commande les deux pédales en même temps (autopilot du dataset le faisait) et CARLA inhibe la traction → voiture reste collée.
+  2. **Kickstart override** à `speed < 3 km/h` (`KICKSTART_THROTTLE = 0.6`) — sinon, après le premier crash, le modèle voit "scène stationnaire" → output `brake = 0.37` → reste à 0 km/h → re-confirme brake → point fixe stable infini.
+  3. **Boucle respawn** sur sensor `sensor.other.collision` (2 s wait + despawn + spawn au prochain `random.choice(spawn_points)`) — pour que la démo tienne 120 s sans intervention manuelle quel que soit le nombre de crashs.
+- Plus chase cam spectator (suivi auto à -6m, +3m, pitch -15°) et flag `--record DIR` qui dump des JPEG quality 85 avec HUD overlay (raw vs applied controls + speed + respawn count) → assemblage MP4 via ffmpeg, commande imprimée à la fin du run.
+- Run de démo 120 s sur Town01 ClearNoon récupéré sur noyse : `logs/demo_v1_2026-05-10/demo.log` + `demo.mp4` (35 MB).
+- Notebook `benchmarks/ai/v1_analysis.ipynb` (29 cells, 5 sections : training curves, dataset distrib, val predictions, bench inférence, demo timeline) → 7 PNG dans `benchmarks/ai/figures/v1/` + `checkpoints/pilotnet_v1/metrics.json` consolidé.
+- README `src/ai/README.md` réécrit : sections training et inference avec les commandes réelles, args expliqués, bloc Linux+CUDA pour noyse, bloc `--record` + ffmpeg, et récap des 3 post-process avec les constantes pour retrouver direct où les tweaker.
+
+**Difficultés** :
+- 3 itérations sur la démo avant qu'elle tourne convenablement, chaque problème étant le symptôme d'un bias du dataset (pédales conflictuelles, bias "stationary→brake", crashs fréquents).
+- **Mon diagnostic initial du biais "tourne à gauche" était grossièrement faux**. J'avais lu les 10 bins de 0.2 width du data loader et fait `bins négatifs / bins positifs = 306/19 = 16×`. En réalité ces bins capturent énormément de micro-jitter autour de 0 (le data loader bin `[0.0, +0.2)` contient 1025 frames, presque toutes entre 0 et 0.05). Avec un seuil propre `|steer| > 0.05`, le ratio L/R réel est de **1.28×** (55 vs 43 sur 1350 frames). Le dataset est à **92.7 %** "tout droit", pas biaisé gauche.
+- Conséquence : tout le narratif "le modèle a appris le biais gauche du dataset" était mal calibré. Le vrai problème est ailleurs (cf. benchmarks).
+- Sur noyse, `LD_LIBRARY_PATH` relatif au venv s'évapore après un `cd benchmarks/ai`, donc le notebook a tourné en CPU au lieu de GPU. Pas grave pour 270 frames de val (19 ms/frame CPU c'est large), mais à savoir si on relance ailleurs.
+
+**Décisions** :
+- **Mutex / kickstart / respawn** = patches runtime explicitement non figés. Le mutex en particulier sacrifie le head qui apprend le mieux (brake, R² 0.64) au profit du moins fiable (throttle, R² 0.33). À refondre en V2 — peut-être un blending continu plutôt qu'un winner-takes-all.
+- **Recording activable** via flag opt-in pour pas alourdir un run normal. JPEG 85 plutôt que PNG : 360 MB pour 120 s, jetable une fois le MP4 généré.
+- **Notebook séparé** des smoke tests dans `benchmarks/ai/` : smoke = unit/CI rapide, notebook = analyse interactive lente. Cohabitent OK.
+- **`metrics.json` à côté du checkpoint** plutôt que dans `benchmarks/` : c'est une métadonnée du modèle, pas du benchmark.
+- `jupyterlab` + `nbformat` installés en venv-local (`uv pip install`) sans toucher pyproject.toml — même pattern temporaire que le fix CUDA. À industrialiser dans le pyproject si on en fait régulièrement.
+
+**Benchmarks** : analyse complète + figures dans [`benchmarks/ai/v1_analysis.ipynb`](../../benchmarks/ai/v1_analysis.ipynb), chiffres consolidés dans [`checkpoints/pilotnet_v1/metrics.json`](../../checkpoints/pilotnet_v1/metrics.json). Synthèse :
+- **Démo Town01 ClearNoon 120 s** : 9 respawns (1 crash / ~13 s), top 22.6 km/h, épisode médian ~10 s.
+- **Inférence** : 19 ms/frame CPU (noyse) → 51 FPS, marge OK vs cible 20 FPS = 50 ms.
+- **Val 270 frames** : `R² steer = -0.67` (pire que la moyenne, **échec net**), `R² throttle = +0.33`, `R² brake = +0.64` (head le plus fiable, ironiquement celui que le mutex sacrifie le plus).
+- **Sur-activation** : modèle prédit `|steer| > 0.05` 8× plus que la réalité, et `brake > 0.1` 93 % du temps vs 55 % truth.
+- **Dataset 1350 frames** : 92.7 % `|steer| ≤ 0.05`, ratio L/R réel = **1.28×** (pas le 16× lu naïvement sur les bins de 0.2), seulement 19 frames `|steer| > 0.4`.
+
+**Prochaine étape** :
+1. **Vraie priorité V2 = comprendre pourquoi steer R² est négatif**. Pistes (probablement plusieurs causes combinées) :
+   - signal steer trop faible vs bruit modèle
+   - MSE inadaptée pour cibles à 92 % nulles (passer en Huber, ou en classification soft sur des bins, ou en MSE pondérée)
+   - capacity insuffisante du PilotNet baseline pour cette tâche
+   - pas assez de signal informatif côté caméra (une intersection vide vue de la POV haute donne ~aucune info sur la direction à prendre)
+2. **Collecter de la data avec virages serrés** : 19 frames à `|steer| > 0.4` sur 1350 ne suffisent pas. Cible : ≥100 frames `|steer| > 0.4` pour donner quelque chose à apprendre au head.
+3. Reconsidérer le mutex throttle/brake — blending continu (`brake -= throttle` ou similaire) pour pas perdre le head brake qui marche.
+4. Si on garde le kickstart, le déclencher sur **temps stuck** (ex : `speed < 1 km/h pendant >2 s`) plutôt qu'à chaque tick à basse vitesse, pour casser le cycle "pousse-mur".
+5. Flip horizontal aug désormais bonus (dataset ~équilibré L/R), pas prioritaire.
+6. Side-quest perso : nettoyage du code, repasser toute la session V1 en revue à tête reposée. Peut-être adapter le `pyproject.toml` pour formaliser jupyter et CUDA si on tient à la reproductibilité totale.

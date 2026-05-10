@@ -34,10 +34,11 @@ src/ai/
 
 ### `models/`
 
-Définit les architectures de réseaux. Plusieurs variantes :
+Définit les architectures de réseaux. **Convention** : préfixe `v<N>_` + nom auto-documenté pour garder la trace chronologique. Chaque version a son propre fichier ; on ne réécrit pas en place.
 
-- **`pilotnet.py`** — CNN style NVIDIA PilotNet, baseline simple `image → contrôles`
-- **`cil.py`** — Conditional Imitation Learning, consomme aussi commande HN + vitesse
+- **`v1_pilotnet_speed.py`** — CNN style NVIDIA PilotNet + speed scalaire concat. Baseline `(image, speed) → (steer, throttle, brake)`. Voir [JOURNAL](JOURNAL.md) pour les résultats V1.
+- (à venir) **`v2_*.py`** — itérations basées sur les résultats V1 (Huber loss, oversampling steer, etc.).
+- (à venir) **`v<N>_cil_*.py`** — Conditional Imitation Learning multi-têtes, une fois `LocalPlanner` branché et commandes HN diverses dans le dataset.
 
 ### `training/`
 
@@ -155,7 +156,7 @@ Le modèle pré-entraîné par CIL sert de point de départ à un algorithme RL 
 - Input : `SceneState` (image + objets détectés + depth + lignes + état véhicule + commande HN)
 - Output : `ControlOutput`
 
-Les deux modes coexistent et le choix se fait au niveau du modèle (`models/pilotnet.py` vs `models/cil.py`).
+Les deux modes coexistent et le choix se fait au niveau du modèle (`v<N>_pilotnet_*.py` vs `v<N>_cil_*.py`).
 
 ## Stratégie face aux modules pas encore prêts
 
