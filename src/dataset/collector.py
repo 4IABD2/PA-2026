@@ -159,6 +159,7 @@ class DatasetCollector:
             self._world,
             self._ego,
             self._camera._sensor,
+            self._instance,
             image_w=self.image_width,
             image_h=self.image_height,
         )
