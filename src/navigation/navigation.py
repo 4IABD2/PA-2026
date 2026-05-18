@@ -52,8 +52,8 @@ class Navigation:
             )
             for neighbor in neighbors:
                 tentative_g = g_score[
-                                  current_id
-                              ] + current_wp.transform.location.distance(neighbor.transform.location)
+                    current_id
+                ] + current_wp.transform.location.distance(neighbor.transform.location)
                 if neighbor.id not in g_score or tentative_g < g_score[neighbor.id]:
                     came_from[neighbor.id] = (current_id, current_wp)
                     g_score[neighbor.id] = tentative_g
@@ -120,7 +120,7 @@ class Navigation:
         return Route(waypoints=waypoints, destination=destination)
 
     def next_command(
-            self, vehicle_position: Waypoint, route: Route
+        self, vehicle_position: Waypoint, route: Route
     ) -> HighLevelCommand:
         print(f"newt command: {self.index_way}")
         control = self.get_control(route.waypoints[self.index_way])

@@ -20,24 +20,30 @@ class Main:
         self.world = self.client.load_world(world_to_get)
         self.last_line = None
 
-    def init_navigation(self, vehicle, carla_map, spawn_points, world, start_point) -> tuple[Route, Navigation]:
+    def init_navigation(
+        self, vehicle, carla_map, spawn_points, world, start_point
+    ) -> tuple[Route, Navigation]:
         route = None
         while route is None:
             nav = Navigation(vehicle, carla_map)
             dest_point = random.choice(spawn_points)
-            route: Route = nav.plan(
-                start_point.location, dest_point.location
-            )
+            route: Route = nav.plan(start_point.location, dest_point.location)
 
         if ENABLE_GPS_DEBUG_LINE:
             for i in range(len(route) - 1):
                 if self.last_line is not None:
                     world.debug.remove(self.last_line)
-                carla_location_i0 = carla.Location(x=route.waypoints[i].x, y=route.waypoints[i].y,
-                                                   z=route.waypoints[i].z)
+                carla_location_i0 = carla.Location(
+                    x=route.waypoints[i].x,
+                    y=route.waypoints[i].y,
+                    z=route.waypoints[i].z,
+                )
 
-                carla_location_i1 = carla.Location(x=route.waypoints[i + 1].x, y=route.waypoints[i + 1].y,
-                                                   z=route.waypoints[i + 1].z)
+                carla_location_i1 = carla.Location(
+                    x=route.waypoints[i + 1].x,
+                    y=route.waypoints[i + 1].y,
+                    z=route.waypoints[i + 1].z,
+                )
 
                 self.last_line = world.debug.draw_line(
                     carla_location_i0 + carla.Location(z=1),
@@ -102,10 +108,16 @@ class Main:
 
             while target_idx < len(route):
                 target_idx += 1
-                navigation_command: HighLevelCommand = navigation.next_command(vehicle.get_location(), route)
+                navigation_command: HighLevelCommand = navigation.next_command(
+                    vehicle.get_location(), route
+                )
                 print(navigation_command)
                 input_ai = {
-                    "gps": 0 if navigation_command == "straight" else 1 if navigation_command == "right" else -1,
+                    "gps": (
+                        0
+                        if navigation_command == "straight"
+                        else 1 if navigation_command == "right" else -1
+                    ),
                     "center_left": 0,
                     "center_right": 0,
                     "distance_vehicle_in_front": -1,  # -1 if no vehicle in front
@@ -124,9 +136,9 @@ class Main:
                 if TRAINING:
                     ai_vehicle.train(output_to_compute_error)
                     if (
-                            time.time() - start_time
-                            > MAX_TIME_TO_RESET_DURING_TRAINING_IN_SECONDE
-                            + (number_reset * 2)
+                        time.time() - start_time
+                        > MAX_TIME_TO_RESET_DURING_TRAINING_IN_SECONDE
+                        + (number_reset * 2)
                     ):
                         print("Resetting road...")
                         number_reset += 1

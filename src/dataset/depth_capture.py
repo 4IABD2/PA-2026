@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import numpy as np
 from src.dataset.camera_capture import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
-import carla  
+import carla
 
 """
 Carla sensor depth : 3 RGB channels 8 bits par channel (24 bits/frame) -> pow(base-256,3) 
@@ -12,6 +12,7 @@ Depth encoding : ((R + G*256 + B*256**2) / (256**3 - 1))
 Carla physical range : 0 to 1000m.
 The alpha channel is not used and always 255.
 """
+
 
 def decode_carla_depth(
     rgb: np.ndarray,
@@ -25,7 +26,7 @@ def decode_carla_depth(
         rgb_f[..., 0] + rgb_f[..., 1] * 256.0 + rgb_f[..., 2] * (256.0 * 256.0)
     ) / (256.0**3 - 1.0)
     meters = normalized * 1000.0
-    return np.clip(meters, 0.0, max_depth_m).astype(np.float32) # clip for sky
+    return np.clip(meters, 0.0, max_depth_m).astype(np.float32)  # clip for sky
 
 
 class DepthCapture:
@@ -67,9 +68,13 @@ class DepthCapture:
         return self._sensor
 
     def _on_image(self, image: "carla.Image") -> None:
-        raw = np.frombuffer(image.raw_data, dtype=np.uint8) # (H*W*4)1D - BytesInSeries in uint8
-        bgra = raw.reshape((image.height, image.width, 4))  # (H, W, 4) 3D - BGRA in uint8
-        self._last_rgb = bgra[..., [2, 1, 0]].copy() # (H, W, 3) 3D - RGB in uint8
+        raw = np.frombuffer(
+            image.raw_data, dtype=np.uint8
+        )  # (H*W*4)1D - BytesInSeries in uint8
+        bgra = raw.reshape(
+            (image.height, image.width, 4)
+        )  # (H, W, 4) 3D - BGRA in uint8
+        self._last_rgb = bgra[..., [2, 1, 0]].copy()  # (H, W, 3) 3D - RGB in uint8
 
     def save_last_frame(self, path: Path) -> None:
         if self._last_rgb is None:

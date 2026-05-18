@@ -60,7 +60,7 @@ class Navigation(Protocol):
         """
 
     def next_command(
-            self, vehicle_position: Waypoint, route: Route
+        self, vehicle_position: Waypoint, route: Route
     ) -> HighLevelCommand:
         """Détermine la commande haut niveau pour le prochain segment.
 

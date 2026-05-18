@@ -31,10 +31,7 @@ def test_navigation():
         else:
             neighbors = []
 
-        graph[wp_id] = {
-            "waypoint": waypoints[wp_id],
-            "neighbors": neighbors
-        }
+        graph[wp_id] = {"waypoint": waypoints[wp_id], "neighbors": neighbors}
 
     # TESTING
     result = Navigation.a_star(graph, start_wp, end_wp)
@@ -42,5 +39,6 @@ def test_navigation():
     assert isinstance(result, list), "a_star should return a list"
     assert len(result) > 0, "a_star should return a valid path"
     assert result[0] == start_wp, "Path should start with start waypoint"
-    assert result[-1].transform.location.distance(end_wp.transform.location) < 4.0, \
-        "Path should end near the end waypoint"
+    assert (
+        result[-1].transform.location.distance(end_wp.transform.location) < 4.0
+    ), "Path should end near the end waypoint"

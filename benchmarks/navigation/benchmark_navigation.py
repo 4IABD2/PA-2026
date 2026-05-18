@@ -19,14 +19,14 @@ class Main:
         self.last_line = None
 
     @staticmethod
-    def init_navigation(vehicle, carla_map, spawn_points, world, start_point) -> tuple[Route, Navigation]:
+    def init_navigation(
+        vehicle, carla_map, spawn_points, world, start_point
+    ) -> tuple[Route, Navigation]:
         route = None
         while route is None:
             nav = Navigation(vehicle, carla_map)
             dest_point = random.choice(spawn_points)
-            route: Route = nav.plan(
-                start_point.location, dest_point.location
-            )
+            route: Route = nav.plan(start_point.location, dest_point.location)
 
         return route, nav
 
@@ -41,8 +41,8 @@ class Main:
                 "min_time": min(total_time),
                 "max_time": max(total_time),
                 "all_time": sum(total_time),
-                "times": total_time
-            }
+                "times": total_time,
+            },
         }
         print(data)
         os.makedirs("results", exist_ok=True)
