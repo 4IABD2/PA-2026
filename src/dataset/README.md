@@ -33,31 +33,18 @@ Toutes ces données peuvent être collectées **en une seule passe** dans CARLA.
 ```
 data/runs/<YYYY-MM-DD>_<town>_<weather>/
 ├── images/                ← RGB JPEG, 1 frame toutes les 2s
-│   ├── 000000.jpg
-│   └── ...
-├── depth/                 ← depth maps GT en mètres (.npy float32)
-│   ├── 000000.npy
-│   └── ...
-├── semantic/              ← masks sémantique CARLA (uint8 class IDs 0-28)
-│   ├── 000000.npy
-│   └── ...
-├── semantic_viz/          ← visualisation palette CityScape (PNG)
-│   ├── 000000.png
-│   └── ...
-├── instance/              ← masks instance CARLA (uint32 packed)
-│   ├── 000000.npy
-│   └── ...
-├── instance_viz/          ← visualisation couleur déterministe par instance (PNG)
-│   ├── 000000.png
-│   └── ...
-├── labels_yolo/           ← labels YOLO (1 .txt par image)
-│   ├── 000000.txt         ← format: <class> <x_center> <y_center> <w> <h>
-│   └── ...
-├── lanes_gt/              ← annotations lignes (.json par image, optionnel)
-│   ├── 000000.json
-│   └── ...
-├── manifest.csv           ← 1 ligne par frame, métadonnées par-image
-└── metadata.json          ← métadonnées globales de la run
+├── depth/                 ← float32 (.npy), distance en mètres, plafonné 100m
+├── semantic/              ← uint8 (.npy), class_id CityScape 0-28
+├── instance/              ← uint32 (.npy), (class_id << 16) | instance_id
+├── viz/                   ← visualisations PNG (debug uniquement)
+│   ├── semantic/          ← palette CityScape
+│   └── instance/          ← couleurs HSV par instance_id
+├── labels_yolo/           ← raw 4-classes (collector) : vehicle/walker/traffic_light/traffic_sign
+├── labels_yolo_color/     ← final 12-classes (après enrich_labels) : red/yellow/green + speed_30..90
+├── debug_dropped_tl/      ← optionnel (enrich --debug-drops) : crops feux non classés
+├── debug_dropped_signs/   ← optionnel : crops panneaux non classés
+├── manifest.csv           ← 1 ligne par frame (timestamp, command, controles, collision)
+└── metadata.json          ← métadonnées globales (run_id, seed, fps, npc count…)
 ```
 
 ### `manifest.csv`
@@ -109,9 +96,36 @@ instance_id = packed & 0xFFFF
 
 `instance_id == 0` = pixel non trackable (fond / classe non comptée).
 
-**Visualisations PNG** (`semantic_viz/`, `instance_viz/`) — colorisations directement ouvrables dans VSCode/feh, régénérables via `colorize_semantic` et `colorize_instance`. Sémantique : palette CityScape officielle CARLA (route grise, voitures bleues, etc.). Instance : couleur HSV golden-ratio par `instance_id`, déterministe à travers les frames d'une même run.
+**Visualisations PNG** (`viz/semantic/`, `viz/instance/`) — colorisations directement ouvrables dans VSCode/feh, régénérables via `colorize_semantic` et `colorize_instance` (dans `encodings.py`). Sémantique : palette CityScape officielle CARLA (route grise, voitures bleues, etc.). Instance : couleur HSV golden-ratio par `instance_id`, déterministe à travers les frames d'une même run.
 
-## API publique
+## Workflow d'usage
+
+### 1 — Lancer une collecte (CARLA tournant sur localhost:2000)
+
+```powershell
+# Une run simple (defaut Town01/ClearNoon, 30s)
+uv run -m src.dataset.run_collection --town Town01 --duration 600 --npcs 30
+
+# Multi-runs avec enrichissement automatique
+uv run -m src.dataset.collect_multi --maps Town01,Town03 --weathers ClearNoon,CloudyNoon --frames-per-run 500 --npcs 30 --enrich
+```
+
+### 2 — Enrichir les labels (raw 4-classes → final 12-classes)
+
+```powershell
+uv run -m src.dataset.enrich_labels --run data/runs/<run>
+uv run -m src.dataset.enrich_labels --run data/runs/<run> --debug-drops   # pour debug les drops
+```
+
+### 3 — Inspecter
+
+```powershell
+uv run -m src.dataset.inspect_run --run data/runs/<run>             # compteurs + disque
+uv run -m src.dataset.inspect_run --run data/runs/<run> --frame 17  # mask d'une frame
+uv run -m src.tools.visualize_fiftyone --run data/runs/<run>        # UI bboxes
+```
+
+### API programmatique
 
 ```python
 from src.dataset.collector import DatasetCollector
@@ -121,32 +135,40 @@ collector = DatasetCollector(
     town="Town01",
     weather="ClearNoon",
     n_npc_vehicles=40,
-    n_npc_walkers=30,
     duration_sec=1800,
     capture_every_n_ticks=40,  # 1 frame toutes les 2s à 20 FPS
 )
 collector.run()
 ```
 
-## Squelette suggéré
+Pour la doc narrative complète (étapes internes du collector, post-process,
+gotchas), voir [COLLECTION_GUIDE.md](COLLECTION_GUIDE.md).
+
+## Structure du module
 
 ```
 src/dataset/
 ├── __init__.py
-├── collector.py          ← classe DatasetCollector (orchestration)
-├── camera_capture.py     ← setup caméra RGB + sauvegarde JPEG
-├── depth_capture.py      ← setup capteur depth GT + sauvegarde .npy
-├── yolo_labels.py        ← projection 3D→2D des actors → format YOLO
-├── command_planner.py    ← calcul de la commande HN (G/D/TT/Suivre)
-├── expert_driver.py      ← wrapper autopilot CARLA
-└── README.md
+├── collector.py             ← orchestrateur DatasetCollector
+├── sensors.py               ← CameraSensor unifié + 4 writers (rgb/depth/semantic/instance)
+├── encodings.py             ← helpers numpy purs (decode/pack/colorize) + constantes POV
+├── yolo_labels.py           ← YoloLabeler : bboxes via instance mask + composants connexes
+├── command_planner.py       ← commande haut niveau pour le manifest
+├── expert_driver.py         ← wrapper autopilot CARLA (lecture controles)
+├── manifest_writer.py       ← manifest.csv + metadata.json
+├── run_collection.py        ← CLI 1 run
+├── collect_multi.py         ← CLI multi-runs (maps × weathers)
+├── enrich_labels.py         ← post-process : HSV feux + template panneaux → 12 classes
+├── inspect_run.py           ← diagnostic d'une run (compteurs / inspection frame)
+├── README.md                ← ce fichier (reference)
+├── COLLECTION_GUIDE.md      ← guide narratif end-to-end
+└── PROBLEMS_AND_FIXES.md    ← bugs rencontrés + solutions
 ```
 
-Chacun peut contribuer à son fichier sans bloquer les autres :
+Le module produit deux jeux de labels :
 
-- **Frédéric** : `collector.py`, `camera_capture.py`, `depth_capture.py`, `yolo_labels.py` (il a déjà commencé un `carla_dataset_generator.py` dans son contexte)
-- **Franck** : `command_planner.py`, `expert_driver.py`, et l'enrichissement du `manifest.csv`
-- **Karim** : `lanes_gt.py` si on décide d'annoter les lignes via les waypoints CARLA
+- **`labels_yolo/`** — raw, 4 classes (`vehicle, walker, traffic_light, traffic_sign`) écrit par le collector en live.
+- **`labels_yolo_color/`** — final, 12 classes (`vehicle, walker, red_light, yellow_light, green_light, speed_30..90`) produit hors-ligne par `enrich_labels.py`. C'est ce qu'on donne à YOLO en entraînement.
 
 ## Conventions importantes
 
