@@ -5,9 +5,9 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-import carla  
+import carla
 
-# Shared team camera POV parameters 
+# Shared team camera POV parameters
 # POV outside the cockpit : # semantic/instance !see transparent materials.
 CAMERA_LOCATION = (0.30, 0.0, 1.50)
 CAMERA_ROTATION_PITCH = -5.0
@@ -45,14 +45,20 @@ class CameraCapture:
             carla.Rotation(pitch=CAMERA_ROTATION_PITCH),
         )
 
-        self._sensor = self.world.spawn_actor(bp, transform, attach_to=self.ego) # Stick to the car
+        self._sensor = self.world.spawn_actor(
+            bp, transform, attach_to=self.ego
+        )  # Stick to the car
         self._sensor.listen(self._on_image)
         return self._sensor
 
     def _on_image(self, image: "carla.Image") -> None:
-        raw = np.frombuffer(image.raw_data, dtype=np.uint8) # (H*W*4)1D - BytesInSeries in uint8
-        bgra = raw.reshape((image.height, image.width, 4))  # (H, W, 4) 3D - BGRA in uint8
-        self._last_frame = bgra[..., [2, 1, 0]].copy() # (H, W, 3) 3D - RGB in uint8
+        raw = np.frombuffer(
+            image.raw_data, dtype=np.uint8
+        )  # (H*W*4)1D - BytesInSeries in uint8
+        bgra = raw.reshape(
+            (image.height, image.width, 4)
+        )  # (H, W, 4) 3D - BGRA in uint8
+        self._last_frame = bgra[..., [2, 1, 0]].copy()  # (H, W, 3) 3D - RGB in uint8
 
     def save_last_frame(self, path: Path) -> None:
         """JPEG (quality=90)."""

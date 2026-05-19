@@ -88,9 +88,7 @@ def _render_hud(rgb: np.ndarray, hud: dict) -> Image.Image:
     draw = ImageDraw.Draw(img, "RGBA")
     draw.rectangle([(0, 0), (520, 90)], fill=(0, 0, 0, 170))
     font = _hud_font()
-    line1 = (
-        f"t={hud['t']:6.1f}s  v={hud['speed']:5.1f} km/h  resp={hud['resp']}"
-    )
+    line1 = f"t={hud['t']:6.1f}s  v={hud['speed']:5.1f} km/h  resp={hud['resp']}"
     draw.text((10, 4), line1, fill=(255, 255, 255), font=font)
     if hud.get("state") == "wait":
         line2 = f"WAIT {hud['wait_left']:.1f}s before respawn"
@@ -231,9 +229,7 @@ def main(argv: list[str] | None = None) -> int:
                     wait_until_tick = -1
                     _log(f"respawned (#{respawn_count})")
                 else:
-                    ego.apply_control(
-                        carla.VehicleControl(brake=1.0, hand_brake=True)
-                    )
+                    ego.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
                     if record_dir is not None and camera._last_frame is not None:
                         hud = {
                             "t": t_now,
@@ -322,9 +318,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"steer={steer:+.2f} throttle={throttle:.2f} brake={brake:.2f}"
                 )
 
-        _log(
-            f"done in {time.time() - wall_start:.0f}s, respawns={respawn_count}"
-        )
+        _log(f"done in {time.time() - wall_start:.0f}s, respawns={respawn_count}")
         if record_dir is not None:
             _log(f"recorded {frame_idx} frames in {record_dir / 'frames'}")
             _log(

@@ -3,12 +3,15 @@ import heapq
 import math
 
 from src.tools.matplot_visualizer import MatplotVisualizer
+from src.interfaces.navigation_types import HighLevelCommand, Waypoint, Route
 
 
-class GPS:
+class Navigation:
 
-    def __init__(self, vehicle):
+    def __init__(self, vehicle, carla_map):
         self.vehicle = vehicle
+        self.carla_map = carla_map
+        self.index_way = 0
 
     @staticmethod
     def extract_road_network(carla_map, resolution=2.0):
@@ -24,10 +27,8 @@ class GPS:
     def heuristic(wp1, wp2):
         return wp1.transform.location.distance(wp2.transform.location)
 
-    def manual_a_star(self, graph, start_location, end_location, carla_map):
-        start_wp = carla_map.get_waypoint(start_location)
-        end_wp = carla_map.get_waypoint(end_location)
-
+    @staticmethod
+    def a_star(graph, start_wp, end_wp):
         open_set = []
         heapq.heappush(open_set, (0, start_wp.id, start_wp))
         came_from = {}
@@ -56,16 +57,26 @@ class GPS:
                 if neighbor.id not in g_score or tentative_g < g_score[neighbor.id]:
                     came_from[neighbor.id] = (current_id, current_wp)
                     g_score[neighbor.id] = tentative_g
-                    f_cost = tentative_g + self.heuristic(neighbor, end_wp)
+                    f_cost = tentative_g + Navigation.heuristic(neighbor, end_wp)
                     heapq.heappush(open_set, (f_cost, neighbor.id, neighbor))
         return []
 
-    def get_control(self, target_waypoint):
+    def manual_a_star(self, graph, start_location, end_location):
+        start_wp = self.carla_map.get_waypoint(start_location)
+        end_wp = self.carla_map.get_waypoint(end_location)
+        return self.a_star(graph, start_wp, end_wp)
+
+    def get_control(self, target_waypoint: Waypoint):
         v_transform = self.vehicle.get_transform()
         v_loc = v_transform.location
         v_rot = v_transform.rotation.yaw
 
-        target_loc = target_waypoint.transform.location
+        target_loc = carla.Location(
+            x=target_waypoint.x,
+            y=target_waypoint.y,
+            z=target_waypoint.z,
+        )
+
         dy = target_loc.y - v_loc.y
         dx = target_loc.x - v_loc.x
 
@@ -78,22 +89,40 @@ class GPS:
             delta_yaw += 360
 
         control = carla.VehicleControl()
-
-        control.steer = delta_yaw / 90.0
-        control.steer = max(-1.0, min(1.0, control.steer))
-
+        control.steer = max(-1.0, min(1.0, delta_yaw / 90.0))
         control.throttle = 0.5 if abs(delta_yaw) < 20 else 0.2
         control.brake = 0.0
         control.hand_brake = False
-
         return control
 
     @staticmethod
-    def control_to_only_direction(control):
-        # return 0 for straight, -1 for left, 1 for right
+    def control_to_only_direction(control) -> HighLevelCommand:
         if control.steer < -0.1:
-            return -1
+            return "left"
         elif control.steer > 0.1:
-            return 1
+            return "right"
         else:
-            return 0
+            return "straight"
+
+    def plan(self, start, destination) -> Route:
+        graph = self.extract_road_network(self.carla_map)
+        path = self.manual_a_star(graph, start, destination)
+        MatplotVisualizer.plot_plan(path)
+        waypoints = [
+            Waypoint(
+                x=wp.transform.location.x,
+                y=wp.transform.location.y,
+                z=wp.transform.location.z,
+                yaw_deg=wp.transform.rotation.yaw,
+            )
+            for wp in path
+        ]
+        return Route(waypoints=waypoints, destination=destination)
+
+    def next_command(
+        self, vehicle_position: Waypoint, route: Route
+    ) -> HighLevelCommand:
+        print(f"newt command: {self.index_way}")
+        control = self.get_control(route.waypoints[self.index_way])
+        self.index_way += 1
+        return self.control_to_only_direction(control)
