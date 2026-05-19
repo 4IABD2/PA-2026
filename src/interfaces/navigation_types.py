@@ -42,9 +42,11 @@ class Route:
     waypoints: list[Waypoint]
     destination: Waypoint
 
+    def __len__(self) -> int:
+        return len(self.waypoints)
 
-class RoutePlanner(Protocol):
-    """Contrat pour tout planificateur de route (A* sur waypoints CARLA)."""
+
+class Navigation(Protocol):
 
     def plan(self, start: Waypoint, destination: Waypoint) -> Route:
         """Calcule une route entre deux waypoints.
@@ -56,11 +58,6 @@ class RoutePlanner(Protocol):
         Returns:
             Route avec la liste ordonnée des waypoints à suivre.
         """
-        ...
-
-
-class CommandPlanner(Protocol):
-    """Contrat pour tout module qui produit la commande haut niveau courante."""
 
     def next_command(
         self, vehicle_position: Waypoint, route: Route

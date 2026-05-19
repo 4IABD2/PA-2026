@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from src.dataset.camera_capture import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
-import carla  
+import carla
 
 
 def pack_instance_carla(rgb: np.ndarray) -> np.ndarray:
