@@ -1,27 +1,20 @@
-"""Visualise une run CARLA dans FiftyOne (images + labels YOLO superposes).
+"""FiftyOne visualizer for CARLA dataset runs.
 
 Usage:
-    uv run -m src.tools.visualize_fiftyone --run data/runs/<run_id>
-    uv run -m src.tools.visualize_fiftyone --run data/runs/<run_id> --labels labels_yolo
-
-Par defaut affiche les labels post-process (12 classes, dossier
-``labels_yolo_color/`` produit par ``enrich_labels``). Avec
-``--labels labels_yolo`` on visualise les labels bruts 4 classes sortis du
-collector.
-
-Au lancement : ouvre un onglet navigateur sur http://localhost:5151 avec une
-grille des frames et les bboxes superposes (filtrables par classe).
+    uv run -m src.tools.visualize_fiftyone --run data/runs/<RUN>
+    uv run -m src.tools.visualize_fiftyone --run data/runs/<RUN> --labels labels_yolo
+    uv run -m src.tools.visualize_fiftyone --run data/runs/<RUN> --port 5152
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import fiftyone as fo
 
-_CLASSES_RAW = ["vehicle", "walker", "traffic_light", "traffic_sign"]
-_CLASSES_COLOR = [
+FINAL_CLASSES = [
     "vehicle",
     "walker",
     "red_light",
@@ -36,79 +29,94 @@ _CLASSES_COLOR = [
     "speed_90",
 ]
 
+RAW_CLASSES = [
+    "vehicle",
+    "walker",
+    "traffic_light",
+    "traffic_sign",
+]
 
-def _line_to_detection(line: str, classes: list[str]) -> fo.Detection | None:
+
+def _parse_yolo_line(line: str, img_w: int, img_h: int, class_names: list[str]) -> dict | None:
     parts = line.strip().split()
-    if len(parts) != 5:
+    if len(parts) < 5:
         return None
     cls_id = int(parts[0])
-    if cls_id < 0 or cls_id >= len(classes):
+    if cls_id >= len(class_names):
         return None
-    cx, cy, w, h = (float(p) for p in parts[1:])
+    cx, cy, w, h = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+    x = cx - w / 2
+    y = cy - h / 2
     return fo.Detection(
-        label=classes[cls_id],
-        bounding_box=[cx - w / 2.0, cy - h / 2.0, w, h],
+        label=class_names[cls_id],
+        bounding_box=[x, y, w, h],
     )
 
 
-def build_dataset(run_dir: Path, labels_subdir: str) -> fo.Dataset:
+def load_run(run_dir: Path, labels_dir_name: str = "labels_yolo_enriched") -> fo.Dataset:
     images_dir = run_dir / "images"
-    labels_dir = run_dir / labels_subdir
+    labels_dir = run_dir / labels_dir_name
+
     if not images_dir.is_dir():
-        raise SystemExit(f"Dossier images introuvable : {images_dir}")
+        sys.exit(f"Images directory not found: {images_dir}")
     if not labels_dir.is_dir():
-        raise SystemExit(f"Dossier labels introuvable : {labels_dir}")
+        sys.exit(f"Labels directory not found: {labels_dir}")
 
-    classes = _CLASSES_COLOR if labels_subdir == "labels_yolo_color" else _CLASSES_RAW
-    name = f"{run_dir.name}__{labels_subdir}"
+    class_names = FINAL_CLASSES if "enriched" in labels_dir_name else RAW_CLASSES
 
-    if fo.dataset_exists(name):
-        fo.delete_dataset(name)
-    dataset = fo.Dataset(name)
-    dataset.default_classes = classes
+    image_paths = sorted(images_dir.glob("*.jpg"))
+    if not image_paths:
+        image_paths = sorted(images_dir.glob("*.png"))
+    if not image_paths:
+        sys.exit(f"No images found in {images_dir}")
+
+    dataset_name = f"carla_{run_dir.name}_{labels_dir_name}"
+    if fo.dataset_exists(dataset_name):
+        fo.delete_dataset(dataset_name)
+
+    dataset = fo.Dataset(name=dataset_name)
+    dataset.persistent = False
 
     samples = []
-    for image_path in sorted(images_dir.glob("*.jpg")):
-        label_path = labels_dir / f"{image_path.stem}.txt"
-        detections: list[fo.Detection] = []
-        if label_path.exists():
-            for line in label_path.read_text().splitlines():
-                if line.strip():
-                    det = _line_to_detection(line, classes)
-                    if det is not None:
-                        detections.append(det)
-        sample = fo.Sample(filepath=str(image_path.resolve()))
+    for img_path in image_paths:
+        label_path = labels_dir / f"{img_path.stem}.txt"
+        sample = fo.Sample(filepath=str(img_path))
+
+        detections = []
+        if label_path.exists() and label_path.stat().st_size > 0:
+            from PIL import Image
+
+            img = Image.open(img_path)
+            img_w, img_h = img.size
+            for line in label_path.read_text().strip().splitlines():
+                det = _parse_yolo_line(line, img_w, img_h, class_names)
+                if det is not None:
+                    detections.append(det)
+
         sample["ground_truth"] = fo.Detections(detections=detections)
         samples.append(sample)
 
     dataset.add_samples(samples)
-    dataset.persistent = False
     return dataset
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Visualiser une run CARLA dans FiftyOne"
-    )
-    parser.add_argument("--run", type=Path, required=True, help="Dossier de la run")
-    parser.add_argument(
-        "--labels",
-        default="labels_yolo_color",
-        choices=["labels_yolo", "labels_yolo_color"],
-        help="Sous-dossier de labels (defaut : labels_yolo_color)",
-    )
-    parser.add_argument(
-        "--port", type=int, default=5151, help="Port FiftyOne (defaut 5151)"
-    )
+    parser = argparse.ArgumentParser(description="Visualize a CARLA dataset run with FiftyOne")
+    parser.add_argument("--run", required=True, help="Path to a run directory (e.g. data/runs/2026-05-20_town01_clearnoon)")
+    parser.add_argument("--labels", default="labels_yolo_enriched", help="Labels subdirectory to use (default: labels_yolo_enriched)")
+    parser.add_argument("--port", type=int, default=5151, help="FiftyOne app port (default: 5151)")
     args = parser.parse_args()
 
-    if not args.run.exists():
-        raise SystemExit(f"Run introuvable : {args.run}")
+    run_dir = Path(args.run)
+    if not run_dir.is_dir():
+        sys.exit(f"Run directory not found: {run_dir}")
 
-    dataset = build_dataset(args.run, args.labels)
-    print(f"Dataset cree : {dataset.name} ({len(dataset)} frames)")
-    print(f"Ouverture de FiftyOne sur http://localhost:{args.port}")
+    print(f"Loading {run_dir.name} with labels from {args.labels}...")
+    dataset = load_run(run_dir, args.labels)
+    print(f"Loaded {len(dataset)} samples ({dataset.count('ground_truth.detections')} detections)")
+
     session = fo.launch_app(dataset, port=args.port)
+    print(f"FiftyOne app running at http://localhost:{args.port}")
     session.wait()
 
 

@@ -18,3 +18,5 @@ benchmarks/**/results/
 # Docs personnelles (locales, jamais push)
 docs/superpowers/
 docs/ai/
+
+runs/

@@ -5,15 +5,18 @@ description = "Voiture autonome dans CARLA - projet annuel 4IABD2"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
-    "carla==0.9.16",
     "matplotlib==3.10.8",
     "tensorflow",
     "numpy",
     "pandas",
     "Pillow",
-    "ultralytics>=8.4.48",
     "fiftyone>=1.0.0",
+    "ultralytics>=8.4.51",
+    "easyocr>=1.7.2",
 ]
+
+[project.optional-dependencies]
+carla = ["carla==0.9.16"]
 
 [dependency-groups]
 dev = [
