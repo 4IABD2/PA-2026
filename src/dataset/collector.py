@@ -1,7 +1,11 @@
-"""DatasetCollector — orchestrator for CARLA dataset collection.
+"""DatasetCollector — orchestrateur de collecte CARLA.
 
-Single-threaded, CARLA synchronous mode at 20 FPS. Captures every
-`capture_every_n_ticks` ticks (40 by default = 2s at 20 FPS).
+Single-threaded, CARLA mode synchrone à 20 FPS. Capture une frame toutes les
+``capture_every_n_ticks`` ticks (40 par défaut = 2s).
+
+Architecture : la classe orchestre 4 sensors via la spec déclarative
+``sensors.SENSOR_SPECS``. Toute la logique de capture/écriture est déléguée
+aux writers, le collector ne fait que la séquence setup → tick loop → cleanup.
 """
 
 from __future__ import annotations
@@ -12,45 +16,32 @@ from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.dataset.camera_capture import (
-    CAMERA_LOCATION,
-    CAMERA_ROTATION_PITCH,
-    CameraCapture,
-)
-from src.dataset.command_planner import CommandPlanner, HighLevelCommand
-from src.dataset.depth_capture import DepthCapture
+from src.dataset.command_planner import CommandPlanner
+from src.dataset.encodings import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
 from src.dataset.expert_driver import ExpertDriver
-from src.dataset.instance_capture import InstanceCapture
 from src.dataset.manifest_writer import ManifestWriter
-from src.dataset.semantic_capture import SemanticCapture
+from src.dataset.sensors import SENSOR_SPECS, CameraSensor
 from src.dataset.yolo_labels import YoloLabeler
 
 if TYPE_CHECKING:
     import carla  # noqa: F401
 
 CARLA_FPS = 20
-FIXED_DELTA_SECONDS = 1.0 / CARLA_FPS  # 0.05
+FIXED_DELTA_SECONDS = 1.0 / CARLA_FPS
 COLLISION_LOOKBACK_FRAMES = 5
+# Timeout pour attendre que tous les sensors aient reçu leur frame du tick
+# courant. Les callbacks Python tournent sur des threads séparés, on doit
+# attendre activement la synchro avant de sauver.
+SENSOR_SYNC_TIMEOUT_S = 2.0
+SENSOR_SYNC_POLL_S = 0.001
 
 
 def _log(msg: str) -> None:
     print(f"[collector] {msg}", flush=True)
 
 
-# Subdirectories created under output_dir for every run.
-OUTPUT_SUBDIRS = [
-    "images",
-    "depth",
-    "labels_yolo",
-    "semantic",
-    "semantic_viz",
-    "instance",
-    "instance_viz",
-]
-
-
 class DatasetCollector:
-    """Collection orchestrator. Single instance per run."""
+    """Orchestrateur de collecte CARLA (une instance par run)."""
 
     def __init__(
         self,
@@ -84,16 +75,13 @@ class DatasetCollector:
 
         self._validate_output_dir()
 
-        # Internal state set up in setup()
+        # État interne, initialisé dans _setup()
         self._client: "carla.Client | None" = None
         self._world: "carla.World | None" = None
         self._traffic_manager: "carla.TrafficManager | None" = None
         self._ego: "carla.Vehicle | None" = None
         self._npc_actors: list = []
-        self._camera: CameraCapture | None = None
-        self._depth: DepthCapture | None = None
-        self._semantic: SemanticCapture | None = None
-        self._instance: InstanceCapture | None = None
+        self._sensors: dict[str, CameraSensor] = {}
         self._yolo_labeler: YoloLabeler | None = None
         self._command_planner: CommandPlanner | None = None
         self._expert: ExpertDriver | None = None
@@ -105,15 +93,15 @@ class DatasetCollector:
         self._original_settings = None
 
     def _validate_output_dir(self) -> None:
-        """Refuse a non-empty output_dir to avoid overwriting a previous run."""
         if self.output_dir.exists() and any(self.output_dir.iterdir()):
             raise ValueError(
                 f"output_dir is not empty: {self.output_dir}. "
                 f"Choose a new path or empty it manually."
             )
 
+    # ------------------------------------------------------------------------
+
     def _setup(self) -> None:
-        """Connect to CARLA, set sync mode, spawn ego + NPCs + sensors + writers."""
         import carla
 
         if self.seed is not None:
@@ -145,20 +133,35 @@ class DatasetCollector:
         self._npc_actors = self._spawn_npcs()
         _log(f"spawned ego + {len(self._npc_actors)}/{self.n_npc_vehicles} NPCs")
 
-        self._camera = CameraCapture(
-            self._world,
-            self._ego,
-            width=self.image_width,
-            height=self.image_height,
-            fov=self.fov,
+        # Sensors via spec déclarative
+        for key, blueprint, writer in SENSOR_SPECS:
+            sensor = CameraSensor(
+                self._world,
+                self._ego,
+                blueprint=blueprint,
+                writer=writer,
+                width=self.image_width,
+                height=self.image_height,
+                fov=self.fov,
+            )
+            sensor.attach()
+            self._sensors[key] = sensor
+
+        # Collision sensor (séparé : pas dans SENSOR_SPECS car logique d'écriture
+        # différente — il pousse un événement, pas un frame complet).
+        bp = self._world.get_blueprint_library().find("sensor.other.collision")
+        self._collision_sensor = self._world.spawn_actor(
+            bp, carla.Transform(), attach_to=self._ego
         )
-        self._sensors_attach()
+        self._collision_events_recent.clear()
+        self._collision_sensor.listen(self._on_collision)
+
         _log("sensors attached, warming up")
 
         self._yolo_labeler = YoloLabeler(
             self._world,
             self._ego,
-            self._camera._sensor,
+            instance_sensor=self._sensors["instance"],
             image_w=self.image_width,
             image_h=self.image_height,
         )
@@ -169,34 +172,24 @@ class DatasetCollector:
             self._world.tick()
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        for subdir in OUTPUT_SUBDIRS:
-            (self.output_dir / subdir).mkdir(exist_ok=True)
         self._manifest = ManifestWriter(self.output_dir, self.town, self.weather)
         _log(f"ready, writing to {self.output_dir}")
 
     def _spawn_ego(self) -> "carla.Vehicle":
-        """Spawn an ego vehicle at a random spawn point of the map."""
         bp = self._world.get_blueprint_library().filter("vehicle.tesla.model3")[0]
         spawn_points = self._world.get_map().get_spawn_points()
         if not spawn_points:
             raise RuntimeError(f"No spawn points on map {self.town}")
         spawn = random.choice(spawn_points)
-        ego = self._world.spawn_actor(bp, spawn)
-        return ego
+        return self._world.spawn_actor(bp, spawn)
 
     def _spawn_npcs(self) -> list:
-        """Spawn N NPC vehicles + walkers (best effort, may spawn fewer if no room).
-
-        TODO: full walker implementation requires WalkerAIController which is
-        more complex. For the MVP skeleton, we spawn only NPC vehicles.
-        Walkers will be added later.
-        """
+        """Spawn N NPC vehicles (best effort). Walkers : TODO."""
         npcs = []
         bp_lib = self._world.get_blueprint_library()
         vehicle_bps = bp_lib.filter("vehicle.*")
         spawn_points = self._world.get_map().get_spawn_points()
 
-        # NPC vehicles
         for i in range(min(self.n_npc_vehicles, len(spawn_points) - 1)):
             bp = random.choice(vehicle_bps)
             try:
@@ -206,81 +199,51 @@ class DatasetCollector:
                     npcs.append(npc)
             except Exception:
                 continue
-
-        # TODO walkers (Franck) — not in MVP skeleton
         return npcs
 
-    def _sensors_attach(self) -> None:
-        """Attach camera + depth + collision sensors."""
-        import carla
-
-        self._camera.attach()
-        self._depth = DepthCapture(
-            self._world,
-            self._ego,
-            width=self.image_width,
-            height=self.image_height,
-            fov=self.fov,
-        )
-        self._depth.attach()
-
-        self._semantic = SemanticCapture(
-            self._world,
-            self._ego,
-            width=self.image_width,
-            height=self.image_height,
-            fov=self.fov,
-        )
-        self._semantic.attach()
-
-        self._instance = InstanceCapture(
-            self._world,
-            self._ego,
-            width=self.image_width,
-            height=self.image_height,
-            fov=self.fov,
-        )
-        self._instance.attach()
-
-        # Collision sensor on ego (for is_collision in manifest)
-        bp = self._world.get_blueprint_library().find("sensor.other.collision")
-        self._collision_sensor = self._world.spawn_actor(
-            bp, carla.Transform(), attach_to=self._ego
-        )
-        self._collision_events_recent.clear()
-        self._collision_sensor.listen(self._on_collision)
-
     def _on_collision(self, event) -> None:
-        """Mark the current frame as having a collision."""
-        # Push 1 into the recent-frames window
-        # (the main loop pushes 0 on each captured frame to advance the window;
-        # the 1 will overwrite the latest 0)
         if self._collision_events_recent:
             self._collision_events_recent[-1] = 1
 
-    def _cleanup(self) -> None:
-        """Release CARLA actors and restore settings.
+    def _wait_sensors_sync(self, expected_frame: int) -> None:
+        """Bloque jusqu'à ce que tous les sensors aient leur buffer à la
+        frame ``expected_frame``. Warn et continue si timeout.
+        """
+        deadline = time.time() + SENSOR_SYNC_TIMEOUT_S
+        while True:
+            if all(s.has_frame(expected_frame) for s in self._sensors.values()):
+                return
+            if time.time() > deadline:
+                missing = [
+                    k
+                    for k, s in self._sensors.items()
+                    if not s.has_frame(expected_frame)
+                ]
+                _log(
+                    f"WARN: sensors not synced at frame {expected_frame} after "
+                    f"{SENSOR_SYNC_TIMEOUT_S}s (missing: {missing})"
+                )
+                return
+            time.sleep(SENSOR_SYNC_POLL_S)
 
-        Order: stop listeners → batch-destroy synchronously → null Python refs.
-        Sequential destroy crashes the C++ runtime if a callback is in flight; nulling
-        Python refs before the server confirms destruction triggers
-        "sensor object went out of the scope" warnings.
+    # ------------------------------------------------------------------------
+
+    def _cleanup(self) -> None:
+        """Libère les actors CARLA et restaure les settings.
+
+        Ordre critique : stop listeners → batch-destroy synchrone → null refs.
+        Sequential destroy crashe le runtime C++ si une callback est en vol ;
+        null les refs Python avant confirmation du serveur déclenche des
+        warnings "sensor went out of scope".
         """
         import carla
 
         if self._client is not None:
             _log("cleanup: stopping listeners")
-            sensor_wrappers = [
-                self._camera,
-                self._depth,
-                self._semantic,
-                self._instance,
-            ]
-
-            for w in sensor_wrappers:
-                if w is not None and w._sensor is not None:
+            for sensor in self._sensors.values():
+                if sensor._sensor is not None:
                     try:
-                        w._sensor.stop()
+                        sensor._sensor.stop()
                     except Exception:
                         pass
             if self._collision_sensor is not None:
@@ -292,9 +255,9 @@ class DatasetCollector:
             destroy_cmds = []
             if self._collision_sensor is not None:
                 destroy_cmds.append(carla.command.DestroyActor(self._collision_sensor))
-            for w in sensor_wrappers:
-                if w is not None and w._sensor is not None:
-                    destroy_cmds.append(carla.command.DestroyActor(w._sensor))
+            for sensor in self._sensors.values():
+                if sensor._sensor is not None:
+                    destroy_cmds.append(carla.command.DestroyActor(sensor._sensor))
             for npc in self._npc_actors:
                 destroy_cmds.append(carla.command.DestroyActor(npc))
             if self._ego is not None:
@@ -303,9 +266,8 @@ class DatasetCollector:
                 _log(f"cleanup: destroying {len(destroy_cmds)} actors")
                 self._client.apply_batch_sync(destroy_cmds, True)
 
-            for w in sensor_wrappers:
-                if w is not None:
-                    w._sensor = None
+            for sensor in self._sensors.values():
+                sensor._sensor = None
             self._collision_sensor = None
 
         if self._world is not None and self._original_settings is not None:
@@ -320,12 +282,14 @@ class DatasetCollector:
                 pass
         _log("cleanup done")
 
-    def run(self) -> None:
-        """Setup -> tick loop -> cleanup. Blocking.
+    # ------------------------------------------------------------------------
 
-        Captures a full frame (image, depth, labels, expert controls)
-        every `capture_every_n_ticks` ticks. Stops when `duration_sec` is
-        reached. Cleanup is guaranteed via try/finally.
+    def run(self) -> None:
+        """Setup → tick loop → cleanup. Bloquant.
+
+        Capture un frame complet (image + depth + semantic + instance + labels
+        + manifest) tous les ``capture_every_n_ticks`` ticks. Cleanup garanti
+        via try/finally.
         """
         try:
             self._setup()
@@ -338,7 +302,9 @@ class DatasetCollector:
             frame_id = 0
             run_start = self._world.get_snapshot().timestamp.elapsed_seconds
             wall_start = time.time()
-            _log(f"capture loop: target {target_frames} frames ({target_ticks} ticks)")
+            _log(
+                f"capture loop: target {target_frames} frames ({target_ticks} ticks)"
+            )
 
             while tick_count < target_ticks:
                 self._world.tick()
@@ -354,33 +320,23 @@ class DatasetCollector:
                 if tick_count % self.capture_every_n_ticks != 0:
                     continue
 
-                # Advance the collision window (push 0 by default; the
-                # collision callback will overwrite to 1 if event on this frame)
+                # Avance la fenêtre de collision (0 par défaut, callback écrit 1).
                 self._collision_events_recent.append(0)
 
-                img_rel = f"images/{frame_id:06d}.jpg"
-                depth_rel = f"depth/{frame_id:06d}.npy"
-                label_rel = f"labels_yolo/{frame_id:06d}.txt"
-                sem_rel = f"semantic/{frame_id:06d}.npy"
-                sem_viz_rel = f"semantic_viz/{frame_id:06d}.png"
-                inst_rel = f"instance/{frame_id:06d}.npy"
-                inst_viz_rel = f"instance_viz/{frame_id:06d}.png"
+                # Synchro : attendre que tous les sensors aient reçu la frame
+                # du tick courant. Sans ça, les callbacks Python (threads
+                # séparés) peuvent encore avoir le buffer du tick précédent.
+                expected_frame = self._world.get_snapshot().frame
+                self._wait_sensors_sync(expected_frame)
 
-                self._camera.save_last_frame(self.output_dir / img_rel)
-                self._depth.save_last_frame(self.output_dir / depth_rel)
-                self._semantic.save_last_frame(
-                    self.output_dir / sem_rel, self.output_dir / sem_viz_rel
-                )
-                self._instance.save_last_frame(
-                    self.output_dir / inst_rel, self.output_dir / inst_viz_rel
-                )
+                # Sauvegarde toutes les modalités via writers.
+                for sensor in self._sensors.values():
+                    sensor.save(self.output_dir, frame_id)
 
-                # YOLO labels: best-effort, NotImplementedError expected in MVP
-                try:
-                    self._yolo_labeler.save(self.output_dir / label_rel)
-                except NotImplementedError:
-                    # Write an empty file to stay consistent with the rest
-                    (self.output_dir / label_rel).write_text("")
+                # Labels YOLO (peuvent ne rien écrire si la frame n'a pas d'objet).
+                self._yolo_labeler.save(
+                    self.output_dir / "labels_yolo" / f"{frame_id:06d}.txt"
+                )
 
                 expert_controls = self._expert.read_controls()
                 command = self._command_planner.current_command()
@@ -389,7 +345,7 @@ class DatasetCollector:
 
                 self._manifest.append_row(
                     frame_id=frame_id,
-                    image_path=img_rel,
+                    image_path=f"images/{frame_id:06d}.jpg",
                     timestamp=ts,
                     command=command,
                     expert=expert_controls,
@@ -397,20 +353,23 @@ class DatasetCollector:
                 )
                 frame_id += 1
                 _log(
-                    f"frame {frame_id}/{target_frames} ({expert_controls.speed_kmh:.1f} km/h, {command.value})"
+                    f"frame {frame_id}/{target_frames} "
+                    f"({expert_controls.speed_kmh:.1f} km/h, {command.value})"
                 )
 
             run_end = self._world.get_snapshot().timestamp.elapsed_seconds
-            _log(f"capture done: {frame_id} frames in {time.time() - wall_start:.0f}s")
+            _log(
+                f"capture done: {frame_id} frames in {time.time() - wall_start:.0f}s"
+            )
             self._manifest.flush_csv()
             self._manifest.write_metadata(
-                run_id=f"{self.output_dir.name}",
+                run_id=self.output_dir.name,
                 carla_version=str(self._client.get_server_version()),
                 fps=CARLA_FPS,
                 capture_every_n_ticks=self.capture_every_n_ticks,
                 n_frames=frame_id,
                 n_npc_vehicles=len(self._npc_actors),
-                n_npc_walkers=0,  # walkers not in MVP
+                n_npc_walkers=0,  # TODO walkers
                 duration_sec_target=self.duration_sec,
                 duration_sec_actual=round(run_end - run_start, 2),
                 camera_pov={

@@ -11,6 +11,8 @@ dependencies = [
     "numpy",
     "pandas",
     "Pillow",
+    "ultralytics>=8.4.48",
+    "fiftyone>=1.0.0",
 ]
 
 [dependency-groups]
