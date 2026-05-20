@@ -5,7 +5,7 @@ du bbox dans l'image RGB.
 Architecture : le collector écrit des labels 3-classes (vehicle=0, walker=1,
 traffic_light=2) dans ``labels_yolo/``. Ce script lit ces labels et les
 images correspondantes, classe chaque feu par couleur dominante dans son bbox,
-et écrit un dossier ``labels_yolo_color/`` avec le mapping 5-classes
+et écrit un dossier ``labels_yolo_enriched/`` avec le mapping 5-classes
 (vehicle=0, walker=1, red_light=2, yellow_light=3, green_light=4) que YOLO
 consomme à l'entraînement.
 
@@ -88,7 +88,7 @@ def process_run(run_dir: Path, debug_drops: bool = False) -> dict[str, int]:
     """
     labels_dir = run_dir / "labels_yolo"
     images_dir = run_dir / "images"
-    out_dir = run_dir / "labels_yolo_color"
+    out_dir = run_dir / "labels_yolo_enriched"
 
     if not labels_dir.is_dir():
         raise FileNotFoundError(f"Pas de dossier labels_yolo dans {run_dir}")
@@ -184,7 +184,7 @@ def main() -> None:
     print(f"  -> jaunes:          {stats['yellow']}")
     print(f"  -> verts:           {stats['green']}")
     print(f"  -> dropped (flou):  {stats['dropped']}")
-    print(f"Output: {args.run / 'labels_yolo_color'}")
+    print(f"Output: {args.run / 'labels_yolo_enriched'}")
     if args.debug_drops:
         print(f"Crops droppes:      {args.run / 'debug_dropped_tl'}")
 
