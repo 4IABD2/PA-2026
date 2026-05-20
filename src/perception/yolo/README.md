@@ -48,17 +48,38 @@ src/perception/yolo/
 └── README.md
 ```
 
-## Mapping des classes
+## Classes du projet (12 classes)
 
-Convertir les classes du modèle vers les classes du projet définies dans `ObjectClass` :
+Le dataset CARLA enrichi (`labels_yolo_enriched/`) et le contrat `ObjectClass` utilisent 12 classes :
+
+| Index | Classe | `ObjectClass` |
+|---|---|---|
+| 0 | `vehicle` | `VEHICLE` |
+| 1 | `walker` | `WALKER` |
+| 2 | `red_light` | `RED_LIGHT` |
+| 3 | `yellow_light` | `YELLOW_LIGHT` |
+| 4 | `green_light` | `GREEN_LIGHT` |
+| 5 | `speed_30` | `SPEED_30` |
+| 6 | `speed_40` | `SPEED_40` |
+| 7 | `speed_50` | `SPEED_50` |
+| 8 | `speed_60` | `SPEED_60` |
+| 9 | `speed_70` | `SPEED_70` |
+| 10 | `speed_80` | `SPEED_80` |
+| 11 | `speed_90` | `SPEED_90` |
+
+### Mapping COCO (pré-entraîné, avant fine-tune)
+
+En mode pré-entraîné COCO, mapper les classes COCO vers les classes du projet :
 
 | YOLO COCO | `ObjectClass` |
 |---|---|
 | `car`, `truck`, `bus`, `motorcycle` | `VEHICLE` |
 | `person` | `WALKER` |
-| `traffic light` | `TRAFFIC_LIGHT` |
-| `stop sign` | `TRAFFIC_SIGN` |
-| autres | `UNKNOWN` (ou ignorer) |
+| `traffic light` | `RED_LIGHT` (couleur inconnue sans fine-tune) |
+| `stop sign` | `UNKNOWN` (pas de panneaux vitesse en COCO) |
+| autres | ignorer |
+
+Après fine-tune sur le dataset CARLA, le modèle prédit directement les 12 classes.
 
 ## Entraînement
 

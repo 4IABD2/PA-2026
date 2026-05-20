@@ -1,0 +1,17 @@
+path: /Users/franck/Documents/ESGI/4IABD/PA-2026/data/yolo_dataset
+train: train/images
+val: val/images
+
+names:
+  0: vehicle
+  1: walker
+  2: red_light
+  3: yellow_light
+  4: green_light
+  5: speed_30
+  6: speed_40
+  7: speed_50
+  8: speed_60
+  9: speed_70
+  10: speed_80
+  11: speed_90

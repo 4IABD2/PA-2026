@@ -3,7 +3,7 @@
 
 Pipeline :
 - ``labels_yolo/`` (collector, 4 classes : vehicle, walker, traffic_light, traffic_sign)
-  → ``labels_yolo_color/`` (entraînement, 12 classes)
+  → ``labels_yolo_enriched/`` (entraînement, 12 classes)
 
 Deux passes pendant la même traversée d'un .txt :
 
@@ -81,7 +81,34 @@ _TEMPLATE_SIZE = 64
 # ne matchent jamais parfaitement le style CARLA → seuil bas. Si tu vois trop
 # de faux positifs, monte à 0.40. Si tu vois des vrais panneaux droppés,
 # baisse à 0.25.
-_MIN_TEMPLATE_SCORE = 0.30
+_MIN_TEMPLATE_SCORE = 0.45
+
+_ocr_reader = None
+
+
+def _classify_sign_ocr(bgr_crop: np.ndarray, debug: bool = False) -> int | None:
+    """Try reading a speed number via EasyOCR. Returns final class ID (5-11)
+    or None."""
+    global _ocr_reader
+    if _ocr_reader is None:
+        import easyocr
+        _ocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+
+    h, w = bgr_crop.shape[:2]
+    if max(h, w) < 150:
+        scale = 150 / max(h, w)
+        bgr_crop = cv2.resize(bgr_crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    results = _ocr_reader.readtext(bgr_crop, detail=1, allowlist="0123456789")
+    if debug and results:
+        for bbox, text, conf in results:
+            print(f"  [OCR] text={text!r} conf={conf:.2f} crop={bgr_crop.shape[:2]}")
+    for bbox, text, conf in results:
+        text = text.strip()
+        if text.isdigit():
+            value = int(text)
+            if value in _SPEED_TO_FINAL:
+                return _SPEED_TO_FINAL[value]
+    return None
 
 
 def _build_speed_template(value: int) -> np.ndarray:
@@ -174,14 +201,14 @@ def classify_tl_color(bgr_crop: np.ndarray) -> tuple[int | None, dict[int, int]]
 
 
 def classify_speed_sign(bgr_crop: np.ndarray) -> tuple[int | None, dict[int, float]]:
-    """Retourne (classe finale, scores par valeur). None si aucun template
-    n'atteint le seuil de matching.
-
-    On scale **les templates** à la taille du crop (pas l'inverse) pour ne pas
-    blurrer les détails du crop, qui est déjà petit (typiquement 10-30 px).
-    """
-    if bgr_crop.size == 0 or min(bgr_crop.shape[:2]) < 8:
+    """Retourne (classe finale, scores par valeur). Essaie d'abord EasyOCR,
+    puis fallback template matching. None si les deux échouent."""
+    if bgr_crop.size == 0 or min(bgr_crop.shape[:2]) < 25:
         return None, {v: 0.0 for v in _SPEED_VALUES}
+
+    ocr_result = _classify_sign_ocr(bgr_crop, debug=True)
+    if ocr_result is not None:
+        return ocr_result, {v: 0.0 for v in _SPEED_VALUES}
 
     crop_h, crop_w = bgr_crop.shape[:2]
     scores: dict[int, float] = {}
@@ -194,7 +221,6 @@ def classify_speed_sign(bgr_crop: np.ndarray) -> tuple[int | None, dict[int, flo
                 )
             else:
                 tpl = template
-            # Image et template de même taille → matchTemplate retourne un 1×1.
             result = cv2.matchTemplate(bgr_crop, tpl, cv2.TM_CCOEFF_NORMED)
             best_for_value = max(best_for_value, float(result.max()))
         scores[value] = best_for_value
@@ -220,7 +246,7 @@ def _crop_bbox(image: np.ndarray, x: float, y: float, w: float, h: float) -> np.
 
 
 def process_run(run_dir: Path, debug_drops: bool = False) -> dict[str, int]:
-    """Traverse les labels d'une run, écrit ``labels_yolo_color/``.
+    """Traverse les labels d'une run, écrit ``labels_yolo_enriched/``.
 
     Si ``debug_drops``, sauvegarde les crops droppés dans :
     - ``debug_dropped_tl/`` avec nom encodant les counts HSV
@@ -228,7 +254,7 @@ def process_run(run_dir: Path, debug_drops: bool = False) -> dict[str, int]:
     """
     labels_dir = run_dir / "labels_yolo"
     images_dir = run_dir / "images"
-    out_dir = run_dir / "labels_yolo_color"
+    out_dir = run_dir / "labels_yolo_enriched"
 
     if not labels_dir.is_dir():
         raise FileNotFoundError(f"Pas de dossier labels_yolo dans {run_dir}")
@@ -307,6 +333,7 @@ def process_run(run_dir: Path, debug_drops: bool = False) -> dict[str, int]:
 
             if cls == RAW_TRAFFIC_SIGN:
                 stats["sign_in"] += 1
+                print(f"  [{label_path.stem}] bbox#{bbox_idx} sign crop={crop.shape[:2]}")
                 new_cls, scores = classify_speed_sign(crop)
                 if new_cls is None:
                     stats["sign_dropped"] += 1
@@ -371,7 +398,7 @@ def main() -> None:
     print(f"    -> classifies:       {stats['sign_classified']}")
     print(f"    -> dropped:          {stats['sign_dropped']}")
     print()
-    print(f"Output: {args.run / 'labels_yolo_color'}")
+    print(f"Output: {args.run / 'labels_yolo_enriched'}")
     if args.debug_drops:
         print(f"Crops droppes TL:     {args.run / 'debug_dropped_tl'}")
         print(f"Crops droppes signs:  {args.run / 'debug_dropped_signs'}")
