@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from src.ai.config import (
+from src.ai.phase0.config import (
     CROP_BOTTOM_PX,
     CROP_TOP_PX,
     IMAGE_HEIGHT,

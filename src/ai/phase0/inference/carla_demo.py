@@ -33,7 +33,7 @@ from tensorflow import keras
 
 from PIL import Image, ImageDraw, ImageFont
 
-from src.ai.config import (
+from src.ai.phase0.config import (
     CROP_BOTTOM_PX,
     CROP_TOP_PX,
     IMAGE_HEIGHT,

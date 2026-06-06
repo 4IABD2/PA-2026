@@ -171,3 +171,42 @@
 4. Si on garde le kickstart, le déclencher sur **temps stuck** (ex : `speed < 1 km/h pendant >2 s`) plutôt qu'à chaque tick à basse vitesse, pour casser le cycle "pousse-mur".
 5. Flip horizontal aug désormais bonus (dataset ~équilibré L/R), pas prioritaire.
 6. Side-quest perso : nettoyage du code, repasser toute la session V1 en revue à tête reposée. Peut-être adapter le `pyproject.toml` pour formaliser jupyter et CUDA si on tient à la reproductibilité totale.
+
+---
+
+## 2026-06-06 — Pivot Phase 0 → Phase 1 RL
+
+**Avancement** :
+- Revue complète du travail équipe depuis le début du projet.
+- Décision architecturale actée : **abandon de l'approche CIL, pivot vers RL par renforcement** (PPO, Stable-Baselines3).
+- README `src/ai/` et README racine mis à jour pour refléter Phase 0 (archivé) vs Phase 1 (en cours).
+
+**Décisions** :
+
+- **Phase 0 CIL = archivé, pas supprimé.** Tout le code `v1_*` reste intact. C'était une introduction valide à la stack CARLA + un baseline utile pour la défense.
+
+- **Pourquoi on abandonne le CIL** : R² steer = -0.67 l'illustre. L'imitation copie un comportement — elle ne peut pas dépasser l'expert et s'effondre sur les cas rares (virages). Ajouter de la data aurait pu aider, mais le plafond structurel de l'imitation learning sur ce type de tâche est trop bas.
+
+- **Pourquoi le RL pur sur pixels est écarté** : espace d'état trop grand (200×88×3 pixels), millions de steps nécessaires, pas faisable dans les délais du PA.
+
+- **Architecture retenue** : PPO (Stable-Baselines3) sur observations structurées — 7 scalaires : `speed_norm`, `cmd_one_hot (×3)`, `center_offset`, `nearest_obstacle_m`, `heading_error`. Métriques de perception depuis stubs GT CARLA d'abord, vrais modèles ensuite (swap transparent via `src/interfaces/`).
+
+- **Navigation Victor branchée** : `nav.plan()` au reset de chaque épisode, `nav.next_command()` à chaque intersection → HighLevelCommand encodée en one-hot dans l'observation.
+
+- **Reward function** :
+  - `r_speed = (speed_kmh / MAX_SPEED) × 0.5`
+  - `r_center = (1 − |center_offset|) × 0.3`
+  - `r_alive = +0.01 / step`
+  - `r_offroad = −0.5` si hors route
+  - `r_collision = −1.0 + done=True`
+
+- **Pas de pretraining CIL → RL** : avec des observations compactes, PPO from scratch devrait converger en quelques heures. Le transfert de poids TF → SB3 aurait ajouté de la complexité sans gain prouvé.
+
+**Benchmarks** : néant (session de design, pas de code).
+
+**Prochaine étape** :
+1. Compléter les stubs GT dans `src/interfaces/stubs.py` : `CarlaGTLaneDetector` (offset via waypoint le plus proche) et `CarlaGTDepthEstimator` (depth sensor CARLA).
+2. Implémenter `src/ai/rewards/reward_fn.py` : fonction pure `compute_reward(speed_kmh, center_offset, is_on_road, collision) → float`.
+3. Implémenter `src/ai/training/rl_env.py` : `CarlaEnv(gym.Env)` — `reset()`, `step(action)`, `_get_observation()`, `_compute_reward()`.
+4. Implémenter `src/ai/training/rl_train.py` : `PPO("MlpPolicy", env)` + `learn(total_timesteps=500_000)` + sauvegarde `checkpoints/ppo_v1/`.
+5. Premier run sur noyse (A6000) : vérifier que la reward monte sur les 50k premiers steps.

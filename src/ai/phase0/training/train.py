@@ -22,7 +22,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 
-from src.ai.config import (
+from src.ai.phase0.config import (
     BATCH_SIZE,
     EARLY_STOPPING_PATIENCE,
     EPOCHS,
@@ -33,8 +33,8 @@ from src.ai.config import (
     REDUCE_LR_PATIENCE,
     SEED,
 )
-from src.ai.models.v1_pilotnet_speed import build_pilotnet_speed
-from src.ai.training.data_loader import (
+from src.ai.phase0.models.v1_pilotnet_speed import build_pilotnet_speed
+from src.ai.phase0.training.data_loader import (
     _read_manifests,
     load_dataset,
     log_stats,

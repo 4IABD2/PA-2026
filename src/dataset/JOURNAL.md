@@ -114,3 +114,25 @@
 1. **Rapatrier les données du PC fixe** vers le WSL via Tailscale + rsync, en gardant une copie sur le PC fixe (qui a la GPU, pourra servir au training plus tard) : `rsync -avz fhuang5@<pc-fixe>:/c/Users/Frédéric/Developer/PA-2026/data/runs/2026-05-08_*/ data/runs/`.
 2. **V1 du modèle CIL** dans `src/ai/` : brainstorm archi (CNN backbone + tête de régression steer/throttle/brake), `Dataset` PyTorch qui lit le format actuel, training loop minimal, démo inférence boucle CARLA. La V1 s'entraînera sur le dataset actuel "lane_follow only" pour valider toute la chaîne.
 3. **Brancher `LocalPlanner` réel** avant le vrai CIL : vendor le dossier `agents/` de l'install CARLA dans le repo (option propre, repo autonome) ou `sys.path.insert` du chemin local (quick & dirty, pas portable). Une fois fait, recollecter une fraction du dataset avec vraies commandes diverses pour le conditionnement CIL.
+
+---
+
+## 2026-06-06 — Pivot IA centrale : le dataset offline n'alimente plus le training RL
+
+**Avancement** :
+- Aucun code nouveau dans ce module. Entrée de clarification suite au pivot architectural de l'IA centrale (voir [src/ai/JOURNAL.md](../ai/JOURNAL.md)).
+
+**Décisions** :
+
+- **L'IA centrale ne consomme plus ce dataset pour s'entraîner.** Elle passe en RL online (boucle CARLA directe). Le pipeline "collecte → manifest → data_loader → train.py" est archivé en Phase 0.
+
+- **Ce module reste central pour les modules de perception** : Franck a besoin des images + instance masks pour fine-tuner YOLO et entraîner le modèle de depth. Karim a besoin des images + semantic masks pour entraîner le détecteur de lignes. Le `collector.py` reste donc la source de données principale de l'équipe — juste plus pour Frédéric.
+
+- **`labels_yolo_enriched/`** (sortie de `enrich_labels.py`) est le format final utilisé par Franck pour le training YOLO custom. Le pipeline enrich reste valide.
+
+- **`collect_multi.py`** devient l'outil principal pour générer des datasets variés (maps × weathers) pour Franck et Karim. Plus besoin de collecter spécifiquement pour l'IA centrale.
+
+**Prochaine étape** :
+1. Coordonner avec Franck pour une nouvelle collecte multi-maps si son fine-tuning YOLO en a besoin.
+2. Éventuellement : collecter des runs avec plus de virages (Town02, Town04) si Karim a besoin de diversité pour les lignes.
+3. Aucun changement de code prévu dans ce module pour l'instant.

@@ -8,8 +8,8 @@ import tensorflow as tf
 
 def test_pilotnet_output_shapes_and_ranges():
     """Model produces 3 named heads with correct shapes and activation ranges."""
-    from src.ai.config import IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS
-    from src.ai.models.v1_pilotnet_speed import build_pilotnet_speed
+    from src.ai.phase0.config import IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS
+    from src.ai.phase0.models.v1_pilotnet_speed import build_pilotnet_speed
 
     model = build_pilotnet_speed()
 
@@ -33,8 +33,8 @@ def test_pilotnet_output_shapes_and_ranges():
 
 def test_pilotnet_trainable():
     """Sanity: the model can fit a tiny synthetic dataset (loss decreases)."""
-    from src.ai.config import IMAGE_CHANNELS, IMAGE_HEIGHT, IMAGE_WIDTH, LOSS_WEIGHTS
-    from src.ai.models.v1_pilotnet_speed import build_pilotnet_speed
+    from src.ai.phase0.config import IMAGE_CHANNELS, IMAGE_HEIGHT, IMAGE_WIDTH, LOSS_WEIGHTS
+    from src.ai.phase0.models.v1_pilotnet_speed import build_pilotnet_speed
 
     tf.keras.utils.set_random_seed(0)
     model = build_pilotnet_speed()
@@ -104,8 +104,8 @@ def _make_synthetic_run(run_dir, frames):
 
 def test_data_loader_synthetic(tmp_path):
     """load_dataset reads a synthetic run, drops collision frames, produces correct shapes."""
-    from src.ai.config import IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS
-    from src.ai.training.data_loader import load_dataset
+    from src.ai.phase0.config import IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS
+    from src.ai.phase0.training.data_loader import load_dataset
 
     run = tmp_path / "run01"
     frames = [
@@ -168,7 +168,7 @@ def test_data_loader_synthetic(tmp_path):
 
 def test_data_loader_split_deterministic(tmp_path):
     """Same seed → same train/val split (set of (run_dir, frame_id) tuples)."""
-    from src.ai.training.data_loader import load_dataset
+    from src.ai.phase0.training.data_loader import load_dataset
 
     run = tmp_path / "run01"
     frames = [

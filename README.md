@@ -38,7 +38,16 @@ Le véhicule doit, dans CARLA :
 - Adapter sa cinématique (vitesse, accélération) à son environnement
 - Réagir aux feux de signalisation
 
-Le pilotage se fait à partir d'une **caméra frontale RGB unique**. Aucun capteur natif de CARLA (segmentation, depth ground truth) n'est utilisé en production — ils servent uniquement à entraîner et valider les modèles.
+Le pilotage se fait à partir d'une **caméra frontale RGB unique**, enrichie par les modules de perception (YOLO, depth, lignes). Aucun capteur natif de CARLA n'est utilisé en production — ils servent uniquement à entraîner et valider les modèles.
+
+## Phases du projet
+
+| Phase | Nom | État | Description |
+|---|---|---|---|
+| **Phase 0** | CIL — introduction à CARLA | ✅ Archivé | PilotNet (imitation learning sur l'autopilot CARLA). Sert de référence et d'apprentissage de la stack. Ne pas modifier. |
+| **Phase 1** | RL — apprentissage par renforcement | 🔄 En cours | L'IA apprend seule via PPO (Stable-Baselines3). Observations structurées : vitesse, commande nav Victor, centrage voie, distance obstacles. Reward function à la place des labels copiés. |
+
+> **Phase 0 est gardée telle quelle** dans `src/ai/` (préfixe `v1_`). C'était notre introduction à CARLA et à la chaîne dataset → training → démo. Elle ne sera jamais supprimée — elle est juste archivée.
 
 ## Équipe et responsabilités
 
@@ -89,28 +98,60 @@ L'orchestration générale (boucle temps réel CARLA) est portée collectivement
 À chaque tick (mode synchrone CARLA, 20 FPS) :
 
 1. CARLA capture une frame RGB de la caméra du véhicule
-2. Cette frame est traitée par les **modules de perception** (YOLO, Depth, Lignes) qui produisent une représentation structurée de la scène (`scene_state`)
-3. Le module de **navigation** fournit la prochaine commande haut niveau (gauche / droite / tout droit / suivre la voie)
-4. L'**IA centrale** consomme `(scene_state, commande haut niveau, vitesse actuelle)` et produit `(steer, throttle, brake)`
+2. Cette frame est traitée par les **modules de perception** (YOLO, Depth, Lignes) qui produisent des métriques structurées (distance aux obstacles, centrage sur la voie, objets détectés)
+3. Le module de **navigation** fournit la prochaine commande haut niveau (gauche / droite / tout droit / suivre la voie) à chaque intersection
+4. L'**IA centrale** consomme un vecteur d'observation compact `[speed_norm, cmd_one_hot, center_offset, nearest_obstacle_m, heading_error]` et produit `(steer, throttle, brake)` via sa policy PPO
 5. Ces contrôles sont appliqués au véhicule via `vehicle.apply_control(...)`
 
+> **Stratégie de substitution perception** : pendant l'entraînement RL, les métriques de perception proviennent des GT CARLA (via `src/interfaces/stubs.py`). Une fois les modèles de Franck et Karim prêts, on substitue les stubs par les vraies implémentations — le code de l'IA centrale ne change pas (protocoles `src/interfaces/`).
+
 ## Pipeline d'entraînement
+
+### Modules de perception (Franck + Karim) — offline sur dataset
 
 ```
 [CARLA + autopilot] ──> [src/dataset/] ──> data/runs/<date>/
                                                  │
-                                                 │ (transfert serveur, partage cloud)
+                                                 │ (transfert serveur)
                                                  ▼
                               ┌──────────────────┼──────────────────┐
                               ▼                  ▼                  ▼
-                       [perception/yolo/  [perception/depth/  [ai/training/]
-                        train.py]          train.py]
+                       [perception/yolo/  [perception/depth/  [perception/lanes/
+                        train.py]          train.py]            train.py]
                               │                  │                  │
                               ▼                  ▼                  ▼
-                          weights/           weights/          checkpoints/
+                          weights/           weights/            weights/
 ```
 
-Une seule collecte commune produit toutes les modalités en parallèle. Chaque module d'apprentissage consomme ce qu'il lui faut. Voir [Datasets](#datasets) pour le format et [src/dataset/README.md](src/dataset/README.md) pour le générateur.
+### IA centrale (Frédéric) — online en boucle CARLA
+
+```
+                     CARLA (20 FPS, sync)
+                           │
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+     GT depth        GT lanes         Navigation Victor
+     (→ distance     (→ center       (→ HighLevelCommand)
+      obstacles)      offset)
+           │               │               │
+           └───────────────┴───────────────┘
+                           │
+                    [Observation vector]
+                    speed + cmd + offset + dist + heading
+                           │
+                           ▼
+                    [PPO Policy] (Stable-Baselines3)
+                           │
+                    action (steer/throttle/brake)
+                           │
+                           ▼
+                    [Reward Function]
+                    r_speed + r_center + r_alive − r_collision
+                           │
+                      mise à jour policy
+```
+
+Une seule collecte commune produit les données pour les modules perception (YOLO, depth, lanes). L'IA centrale s'entraîne directement en boucle CARLA — plus de dataset offline pour elle. Voir [Datasets](#datasets) pour le format et [src/dataset/README.md](src/dataset/README.md) pour le générateur.
 
 ## Structure du repo
 
@@ -305,6 +346,18 @@ tar -xzf 2026-MM-DD_town01_clear.tar.gz -C data/runs/
 - **CARLA Simulator 0.9.16** (installé séparément, voir [docs CARLA](https://carla.readthedocs.io/en/0.9.16/start_quickstart/))
 - **uv** pour la gestion des dépendances ([install uv](https://docs.astral.sh/uv/))
 - **GPU NVIDIA recommandé** pour faire tourner CARLA confortablement
+
+### Stack principale
+
+| Composant | Bibliothèque | Usage |
+|---|---|---|
+| Simulateur | CARLA 0.9.16 | Environnement de simulation |
+| Vision | OpenCV, Ultralytics (YOLOv8) | Perception |
+| Depth | MIDAS / Depth Anything v2 | Estimation profondeur |
+| IA Phase 0 | TensorFlow / Keras | CIL archivé |
+| IA Phase 1 | Stable-Baselines3 + Gymnasium | RL PPO en boucle CARLA |
+| Gestion deps | uv | `pyproject.toml` + `uv.lock` |
+| Format | black | Linter imposé |
 
 ### Dépendances Python
 
