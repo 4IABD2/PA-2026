@@ -1,15 +1,6 @@
-"""Implémentations 'triche' des protocoles de perception, basées sur les
-ground truths CARLA.
+"""Ground-truth CARLA stubs — replaced by real perception models once ready.
 
-Ces stubs servent à développer un module en isolation, sans attendre que les
-implémentations réelles des coéquipiers (YOLO, MIDAS, lignes) soient prêtes.
-
-Ils LISENT directement l'état interne de CARLA (liste des actors, capteur depth
-sémantique...) au lieu de faire de la vraie computer vision sur l'image.
-
-⚠️ NE JAMAIS UTILISER EN PRODUCTION : ces stubs sont des outils de
-développement. La promesse du projet est de piloter à partir de la caméra RGB
-seule. Voir le README racine section "Conventions architecturales".
+Never use in production: stubs read CARLA internals, bypassing real CV.
 """
 
 from __future__ import annotations
@@ -25,67 +16,67 @@ from src.interfaces.perception_types import (
 )
 
 if TYPE_CHECKING:
-    import carla  # noqa: F401  (import différé pour permettre les tests sans carla)
+    import carla  # noqa: F401
 
 
+# replaced by: src/perception/detection/ — Franck's YOLO-based detector
 class CarlaGTObjectDetector:
-    """Détecteur d'objets qui lit la liste des actors CARLA au lieu de faire de la vision.
-
-    Permet de bosser sur l'IA centrale ou la fusion sans attendre YOLO.
-    """
-
     def __init__(self, world: "carla.World", ego_vehicle: "carla.Actor") -> None:
         self.world = world
         self.ego = ego_vehicle
 
     def detect(self, image: np.ndarray) -> list[DetectedObject]:
-        """Ignore l'image, lit `world.get_actors()` et projette en 2D.
-
-        TODO: implémenter la projection 3D->2D des bounding boxes des actors
-        sur la caméra ego (utiliser la matrice de projection CARLA).
-        """
-        raise NotImplementedError("Stub à compléter — voir TODO ci-dessus.")
+        raise NotImplementedError("TODO: project actor bboxes via CARLA camera matrix")
 
 
+# replaced by: src/perception/depth/ — Franck's MiDaS / Depth-Anything estimator
 class CarlaGTDepthEstimator:
-    """Estimateur de profondeur qui lit la depth map ground truth de CARLA.
-
-    Utilise un capteur `sensor.camera.depth` attaché au véhicule.
-    Permet de bosser sans attendre MIDAS / Depth Anything.
-    """
-
+    # CARLA depth encoding: (R + G*256 + B*65536) / 16_777_215 * 1000 m  (raw_data is BGRA)
     def __init__(self, depth_sensor: "carla.Sensor") -> None:
         self.depth_sensor = depth_sensor
         self._last_depth: np.ndarray | None = None
+        depth_sensor.listen(self._on_depth)
+
+    def _on_depth(self, raw_image) -> None:
+        arr = np.frombuffer(raw_image.raw_data, dtype=np.uint8).reshape(
+            raw_image.height, raw_image.width, 4
+        )
+        r = arr[:, :, 2].astype(np.float32)
+        g = arr[:, :, 1].astype(np.float32)
+        b = arr[:, :, 0].astype(np.float32)
+        self._last_depth = (r + g * 256.0 + b * 65536.0) / 16_777_215.0 * 1000.0
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
-        """Ignore l'image, retourne la dernière depth map reçue du capteur GT."""
         if self._last_depth is None:
-            raise RuntimeError(
-                "Aucune frame depth GT reçue. Le capteur depth est-il bien démarré ?"
-            )
+            raise RuntimeError("No depth frame received yet — is the sensor running?")
         return self._last_depth
 
 
+# replaced by: src/perception/lanes/ — Karim's lane-detection model
 class CarlaGTLaneDetector:
-    """Détecteur de lignes qui calcule l'offset à partir de la position véhicule
-    et du waypoint le plus proche dans CARLA.
-
-    Permet de bosser sans attendre la détection de lignes OpenCV.
-    """
-
     def __init__(self, world: "carla.World", ego_vehicle: "carla.Actor") -> None:
         self.world = world
         self.ego = ego_vehicle
 
-    def detect(self, image: np.ndarray) -> LanesInfo:
-        """Ignore l'image, calcule l'offset via les waypoints CARLA.
+    def detect(self, _image: np.ndarray) -> LanesInfo:
+        import math
 
-        TODO: implémenter le calcul d'offset entre la position véhicule et le
-        waypoint courant, et fabriquer des Line approximatives à partir des
-        waypoints adjacents.
-        """
-        raise NotImplementedError("Stub à compléter — voir TODO ci-dessus.")
+        v_loc = self.ego.get_transform().location
+        wp = self.world.get_map().get_waypoint(v_loc, project_to_road=True)
+
+        yaw_rad = math.radians(wp.transform.rotation.yaw)
+        fwd_x = math.cos(yaw_rad)
+        fwd_y = math.sin(yaw_rad)
+
+        dx = v_loc.x - wp.transform.location.x
+        dy = v_loc.y - wp.transform.location.y
+
+        # cross product z-component: positive = vehicle is right of waypoint heading
+        lateral = fwd_x * dy - fwd_y * dx
+        half_width = (wp.lane_width or 3.5) / 2.0
+        center_offset = max(-1.0, min(1.0, lateral / half_width))
+
+        return LanesInfo(left_line=None, right_line=None, center_offset=center_offset)
 
 
 __all__ = [

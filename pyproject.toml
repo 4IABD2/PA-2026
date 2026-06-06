@@ -13,6 +13,9 @@ dependencies = [
     "fiftyone>=1.0.0",
     "ultralytics>=8.4.51",
     "easyocr>=1.7.2",
+    "gymnasium>=0.29",
+    "stable-baselines3>=2.3",
+    "opencv-python-headless>=4.9",
 ]
 
 [project.optional-dependencies]

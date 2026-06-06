@@ -204,9 +204,64 @@
 
 **Benchmarks** : néant (session de design, pas de code).
 
+---
+
+## 2026-06-06 (suite) — Skeleton Phase 1 RL complet, TDD
+
+**Avancement** :
+- Skeleton Phase 1 entièrement implémenté via TDD, 40 tests, 0 CARLA requis offline :
+  - `src/ai/rewards/reward_fn.py` — fonction pure `compute_reward()`, 7 tests.
+  - `src/interfaces/stubs.py` — `CarlaGTDepthEstimator` (listener depth CARLA, décodage BGRA→mètres) + `CarlaGTLaneDetector` (offset via produit vectoriel waypoint), 7 tests.
+  - `src/ai/training/rl_env.py` — `CarlaEnv(gym.Env)` complet : spaces, reset, step, observation 7D, guard `ModuleNotFoundError` pour tests hors CARLA, 15 tests.
+  - `src/ai/training/rl_train.py` — `make_model()` + `train()` PPO SB3, device CPU forcé, 4 tests.
+  - `src/ai/inference/rl_demo.py` — `load_model()` + `run_episode()` avec accumulation reward et raisons d'arrêt, 7 tests.
+- `gymnasium>=0.29` et `stable-baselines3>=2.3` ajoutés à `pyproject.toml` et installés.
+- `scripts/run_rl_training.py` : script de lancement complet qui branche CARLA → stubs GT → nav Victor → CarlaEnv → PPO.
+
+**Difficultés** :
+- `math` pas importé au niveau module → `NameError` dans `_speed_kmh()`. Fixé.
+- `step()` importait `carla.VehicleControl` directement → `ModuleNotFoundError` en tests. Isolé dans `_apply_control()` avec `try/except ModuleNotFoundError`.
+- `CarlaGTDepthEstimator` : les tests ne déclenchent pas le callback `listen()`. Géré via `_last_image is None` → fallback array de zéros.
+- Navigation Victor : `next_command()` incrémente `index_way` sans guard → `IndexError` en fin de route. Géré dans le script de lancement par un `NavAdapter` qui reset l'index et retombe sur `LANE_FOLLOW`.
+- `plan()` de Victor appelle `MatplotVisualizer.plot_road_network()` → bloquant en headless. Contourné en passant `headless=True` dans le script (ou en désactivant l'affichage Matplotlib via `matplotlib.use('Agg')` avant import).
+
+**Décisions** :
+- `is_on_road = True` hardcodé dans `rl_env.step()` — remplacé quand Karim fournira son modèle de segmentation sémantique.
+- `device='cpu'` dans les defaults PPO — MlpPolicy entraîne plus vite sur CPU que GPU (accès mémoire fréquents, batch petits).
+- Chaque stub porte un commentaire `# replaced by: src/perception/...` avec le chemin attendu du vrai module.
+
+**Benchmarks** : 40 tests offline, 0 CARLA. Wall-clock test suite : ~4 s.
+
 **Prochaine étape** :
-1. Compléter les stubs GT dans `src/interfaces/stubs.py` : `CarlaGTLaneDetector` (offset via waypoint le plus proche) et `CarlaGTDepthEstimator` (depth sensor CARLA).
-2. Implémenter `src/ai/rewards/reward_fn.py` : fonction pure `compute_reward(speed_kmh, center_offset, is_on_road, collision) → float`.
-3. Implémenter `src/ai/training/rl_env.py` : `CarlaEnv(gym.Env)` — `reset()`, `step(action)`, `_get_observation()`, `_compute_reward()`.
-4. Implémenter `src/ai/training/rl_train.py` : `PPO("MlpPolicy", env)` + `learn(total_timesteps=500_000)` + sauvegarde `checkpoints/ppo_v1/`.
-5. Premier run sur noyse (A6000) : vérifier que la reward monte sur les 50k premiers steps.
+1. **Lancer `scripts/run_rl_training.py`** sur le PC fixe avec CARLA actif — valider que la boucle de training tourne sans crash (même 1000 steps suffit comme smoke e2e).
+2. **Vérifier que la reward monte** sur les 50k premiers steps — si elle stagne à 0, investiguer l'observation (vitesse nulle ? nav commande toujours LANE_FOLLOW ?).
+3. Lancer un training long (≥500k steps) sur noyse si le smoke e2e passe.
+4. Swap `is_on_road` : brancher le modèle de segmentation de Karim quand disponible.
+5. Swap depth estimator : brancher le modèle de Franck quand disponible.
+
+---
+
+## 2026-06-06 (suite) — Correction bug critique CarlaEnv.reset()
+
+**Avancement** :
+- Identification et correction du bug critique de `CarlaEnv.reset()` qui ne réinitialisait pas le monde CARLA.
+- 3 nouveaux tests TDD ajoutés pour couvrir le comportement de reset (20 tests au total sur `rl_env`).
+- 43 tests totaux, 43 passés, suite complète offline.
+
+**Difficultés** :
+- Le bug : après un épisode terminé par collision, PPO appelle `reset()` mais la voiture restait à la position du crash avec la même vitesse, les mêmes données capteurs périmées. L'agent repartait de la collision comme état initial → training cassé dès le 2e épisode.
+- `carla.Vector3D` ne peut pas être importé hors contexte CARLA → même pattern `try/except ModuleNotFoundError` que pour `VehicleControl`, avec `set_target_velocity(None)` en fallback test.
+- `self.np_random` (le RNG gymnasium) n'est disponible qu'après `super().reset(seed=seed)` — l'appel à `_teleport_to_spawn()` doit venir après.
+
+**Décisions** :
+- **Spawn aléatoire à chaque reset** : on tire un point de spawn au hasard dans `world.get_map().get_spawn_points()` via `self.np_random.integers()` (RNG gymnasium, seedable). Permet une vraie diversité des épisodes dès le départ.
+- **`_WARMUP_TICKS = 5` après téléport** : on tique 5 fois pour que la physique se stabilise et que les capteurs produisent leur premier frame à la nouvelle position. Sans ça, le 1er step du nouvel épisode s'appuie sur des données de l'emplacement du crash.
+- **Reset `nav.index_way` via `hasattr`** : `_NavAdapter` expose désormais `index_way` comme property qui délègue à `Navigation._nav.index_way`. L'env ne connaît pas l'implémentation concrète — si nav est un Mock (tests), `hasattr` retourne True et l'assignation passe sans effet.
+- **`_last_image = None` dans reset** : évite que le 1er `_get_obs()` du nouvel épisode consomme une image périmée de l'épisode précédent. Le fallback `np.zeros((88, 200, 3))` dans `_get_obs()` gère ce cas.
+
+**Benchmarks** : 43 tests, 43 passed, ~5 s wall-clock.
+
+**Prochaine étape** :
+1. Smoke e2e sur PC fixe : `python scripts/run_rl_training.py --timesteps 1000`. Vérifier que les épisodes 2 et suivants partent d'une nouvelle position (pas du crash précédent).
+2. Si OK → training long 500k steps.
+3. Ajout image dans l'observation (CombinedExtractor SB3) une fois que la boucle scalaire est validée.
