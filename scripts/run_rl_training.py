@@ -27,6 +27,10 @@ Known limitations (replaced as team modules land):
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import matplotlib
 matplotlib.use("Agg")  # must be before any other matplotlib / pyplot import
@@ -164,7 +168,7 @@ def main() -> None:
         spawn_pts   = carla_map.get_spawn_points()
         route       = nav.plan(ego.get_transform().location, spawn_pts[-1].location)
 
-        monitor_csv = run_dir / "training_log.csv"
+        monitor_base = run_dir / "training_log"   # Monitor appends .monitor.csv itself
         env = CarlaEnv(
             world=world, ego_vehicle=ego, nav=nav, route=route,
             depth_estimator=depth_estimator, lane_detector=lane_detector,
@@ -176,11 +180,8 @@ def main() -> None:
         from stable_baselines3.common.monitor import Monitor
         from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
 
-        env_monitored = Monitor(env, filename=str(monitor_csv))
-        model = make_model(
-            env_monitored,
-            tensorboard_log=str(run_dir / "tb"),
-        )
+        env_monitored = Monitor(env, filename=str(monitor_base))
+        model = make_model(env_monitored)
 
         callbacks = [
             EvalCallback(
@@ -199,7 +200,7 @@ def main() -> None:
         print("Training done.")
 
         # reward curve
-        plot_reward_curve(monitor_csv, run_dir / "reward_curve.png")
+        plot_reward_curve(Path(str(monitor_base) + ".monitor.csv"), run_dir / "reward_curve.png")
         print(f"Reward curve → {run_dir / 'reward_curve.png'}")
 
         # demo video

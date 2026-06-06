@@ -1465,6 +1465,7 @@ name = "pa-2026"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "carla" },
     { name = "easyocr" },
     { name = "fiftyone" },
     { name = "gymnasium" },
@@ -1478,11 +1479,6 @@ dependencies = [
     { name = "ultralytics" },
 ]
 
-[package.optional-dependencies]
-carla = [
-    { name = "carla" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "black" },
@@ -1491,7 +1487,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "carla", marker = "extra == 'carla'", specifier = "==0.9.16" },
+    { name = "carla", specifier = "==0.9.16" },
     { name = "easyocr", specifier = ">=1.7.2" },
     { name = "fiftyone", specifier = ">=1.0.0" },
     { name = "gymnasium", specifier = ">=0.29" },
@@ -1504,7 +1500,6 @@ requires-dist = [
     { name = "tensorflow" },
     { name = "ultralytics", specifier = ">=8.4.51" },
 ]
-provides-extras = ["carla"]
 
 [package.metadata.requires-dev]
 dev = [
