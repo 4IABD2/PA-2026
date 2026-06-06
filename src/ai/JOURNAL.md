@@ -265,3 +265,34 @@
 1. Smoke e2e sur PC fixe : `python scripts/run_rl_training.py --timesteps 1000`. Vérifier que les épisodes 2 et suivants partent d'une nouvelle position (pas du crash précédent).
 2. Si OK → training long 500k steps.
 3. Ajout image dans l'observation (CombinedExtractor SB3) une fois que la boucle scalaire est validée.
+
+---
+
+## 2026-06-06 (suite) — Smoke e2e + correctifs post-run
+
+**Avancement** :
+- Smoke e2e validé sur le PC fixe (WSL + CARLA Windows) : pipeline complet tourne, artefacts générés (`params.json`, `model_final.zip`, `training_log.monitor.csv`, `reward_curve.png`, `demo.mp4`).
+- Correctifs appliqués suite à l'analyse du premier run.
+
+**Difficultés** :
+- `uv run` sans `PYTHONPATH=.` → `ModuleNotFoundError: No module named 'src'`. Fix : `sys.path.insert(0, ...)` dans le script + `pythonpath = ["."]` dans `pyproject.toml`.
+- `carla` installée en optional-dep, absente après `uv sync`. Fix : déplacée en dep principale.
+- `tensorboard_log` passé à SB3 sans tensorboard installé → `ImportError`. Fix : supprimé du script.
+- Monitor SB3 ajoute `.monitor.csv` au nom de fichier → `training_log.csv.monitor.csv` au lieu de `training_log.csv`. Fix : base path sans extension → `Path(str(monitor_base) + ".monitor.csv")` passé à `plot_reward_curve`.
+- `newt command: X` spammé dans le terminal à chaque step → `print()` de debug dans le code de Victor (`navigation.py:125`). Fix : filtre stdout `_StdoutFilter` dans le script, bloque les lignes contenant `"newt command:"` sans toucher au code de Victor.
+- **Lazy policy** : l'agent apprenait à rester immobile (reward = 0.3 r_center + 0.01 r_alive = 0.31/step × 1000 = 310 par épisode). Confirmé par le CSV du smoke (r=311, r=308). Le risque de collision dissuadait toute action. Fix : pénalité stall `−0.05` si `speed_kmh < 1.0` → rester immobile coûte plus que tenter d'avancer.
+- WSL : `localhost` ne pointe pas vers Windows, CARLA inaccessible. Solution : utiliser l'IP du host Windows (`cat /etc/resolv.conf | grep nameserver`).
+
+**Décisions** :
+- `_StdoutFilter` dans `run_rl_training.py` : filtre propre, ne touche pas au code de Victor, extensible (liste `_BLOCKED`).
+- `r_stall = −0.05 si speed < 1 km/h` : valeur choisie pour que avancer à 5 km/h soit toujours mieux que rester immobile, sans rendre la politique trop agressive (pas de panique = accélérer à fond pour fuir la pénalité).
+- 1000 steps = smoke test (1 seul rollout PPO, 1 seule mise à jour). Résultats non significatifs en termes de conduite. Minimum pour observer quelque chose : **50 000 steps**.
+
+**Benchmarks** :
+- Smoke 1000 steps : r=311/308 (lazy policy confirmée avant fix).
+- FPS CARLA-to-SB3 : ~15 FPS sur PC fixe (WSL + CARLA Windows, CPU only). Pour un training 500k : ~9h.
+
+**Prochaine étape** :
+1. Lancer training 50k–200k steps avec la pénalité stall → vérifier que la reward monte.
+2. Analyser la courbe reward : si stagnation, investiguer l'observation (vitesse toujours nulle ? commande nav toujours LANE_FOLLOW ?).
+3. Training long 500k steps si 50k converge.

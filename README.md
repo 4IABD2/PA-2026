@@ -171,8 +171,12 @@ PA-2026/
 │   ├── interfaces/              ← ★ Contrats partagés entre modules
 │   ├── orchestration/           ← Boucle temps réel CARLA
 │   └── tools/                   ← Utilitaires partagés
+├── scripts/
+│   └── run_rl_training.py       ← Lance le training Phase 1 (CARLA + PPO + artifacts)
+├── runs/                        ← Artifacts d'entraînement horodatés (gitignored)
+│   └── YYYY-MM-DD_HH-MM_tag/   ← params.json, model.zip, reward_curve.png, demo.mp4
 ├── data/                        ← Datasets (gitignored)
-├── checkpoints/                 ← Modèles entraînés (gitignored)
+├── checkpoints/                 ← Modèles Phase 0 (gitignored)
 ├── benchmarks/                  ← Validation contrats (smoke) + mesures de perf (mAP, RMSE, FPS)
 ├── docs/
 │   ├── Description_Sujet.md     ← Sujet original du projet
@@ -496,9 +500,23 @@ Télécharger l'archive depuis [github.com/carla-simulator/carla/releases](https
 
 ### Lancer le projet
 
+**Phase 0 (archivé) :**
 ```bash
 uv run main.py
 ```
+
+**Phase 1 — training RL (CARLA requis) :**
+```bash
+# Smoke test (vérif pipeline, ~2 min)
+uv run python3 scripts/run_rl_training.py --timesteps 1000 --tag smoke --host <ip-carla>
+
+# Training réel (résultats visibles à partir de 50k steps)
+uv run python3 scripts/run_rl_training.py --timesteps 500000 --tag ppo_v1 --host <ip-carla>
+```
+
+> **WSL** : CARLA tourne sur Windows, l'IP à utiliser est celle du host Windows. La trouver avec `cat /etc/resolv.conf | grep nameserver`.
+
+Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` (voir [src/ai/README.md](src/ai/README.md) pour le détail).
 
 ### Validation et benchmarks
 

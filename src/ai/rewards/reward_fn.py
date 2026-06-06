@@ -9,6 +9,7 @@ _W_CENTER = 0.3
 _W_ALIVE = 0.01
 _P_OFFROAD = -0.5
 _P_COLLISION = -1.0
+_P_STALL = -0.05       # penalises staying still; breaks the lazy-policy attractor
 
 
 def compute_reward(
@@ -24,5 +25,6 @@ def compute_reward(
     r_speed = (speed_kmh / max_speed_kmh) * _W_SPEED
     r_center = (1.0 - abs(center_offset)) * _W_CENTER
     r_offroad = 0.0 if is_on_road else _P_OFFROAD
+    r_stall = _P_STALL if speed_kmh < 1.0 else 0.0
 
-    return r_speed + r_center + _W_ALIVE + r_offroad, False
+    return r_speed + r_center + _W_ALIVE + r_offroad + r_stall, False

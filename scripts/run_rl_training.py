@@ -30,6 +30,26 @@ import argparse
 import sys
 from pathlib import Path
 
+
+class _StdoutFilter:
+    """Drops single-line debug prints from third-party code during training."""
+
+    _BLOCKED = ("newt command:", "next command:")
+
+    def __init__(self, stream):
+        self._out = stream
+        self._buf = ""
+
+    def write(self, text: str) -> None:
+        self._buf += text
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if not any(pat in line for pat in self._BLOCKED):
+                self._out.write(line + "\n")
+
+    def flush(self) -> None:
+        self._out.flush()
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import matplotlib
@@ -195,7 +215,11 @@ def main() -> None:
         ]
 
         print(f"Training PPO for {args.timesteps:,} steps …")
-        model.learn(total_timesteps=args.timesteps, callback=callbacks)
+        sys.stdout = _StdoutFilter(sys.stdout)
+        try:
+            model.learn(total_timesteps=args.timesteps, callback=callbacks)
+        finally:
+            sys.stdout = sys.stdout._out  # restore
         model.save(str(run_dir / "model_final"))
         print("Training done.")
 

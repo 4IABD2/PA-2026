@@ -62,6 +62,7 @@ CARLA World (sync mode, 20 FPS)
          ├─ r_speed    = (speed_kmh / MAX_SPEED) × 0.5       → avance
          ├─ r_center   = (1 − |center_offset|) × 0.3         → reste centré
          ├─ r_alive    = +0.01                                → survie
+         ├─ r_stall    = −0.05 si speed < 1 km/h             → pénalise l'immobilisme
          ├─ r_offroad  = −0.5 si hors route                  → pénalité
          └─ r_collision = −1.0 + done=True                   → épisode terminé
 ```
@@ -96,13 +97,14 @@ src/ai/
 ├── training/
 │   ├── data_loader.py         ← Phase 0 — archivé
 │   ├── train.py               ← Phase 0 — archivé
-│   ├── rl_env.py              ← Phase 1 — CarlaEnv (gym.Env) à implémenter
-│   └── rl_train.py            ← Phase 1 — PPO training loop SB3 à implémenter
+│   ├── rl_env.py              ← Phase 1 — CarlaEnv (gym.Env)
+│   ├── rl_train.py            ← Phase 1 — make_model() + train() PPO SB3
+│   └── run_manager.py         ← Phase 1 — dossier de run horodaté, CSV, courbe reward
 ├── inference/
 │   ├── carla_demo.py          ← Phase 0 — archivé
-│   └── rl_demo.py             ← Phase 1 — démo RL à implémenter
+│   └── rl_demo.py             ← Phase 1 — run_episode() + record_episode() avec HUD
 └── rewards/
-    └── reward_fn.py           ← Phase 1 — reward function à implémenter
+    └── reward_fn.py           ← Phase 1 — compute_reward() (fonction pure)
 ```
 
 ---
@@ -135,24 +137,47 @@ uv run -m src.ai.inference.carla_demo \
 
 ---
 
-## Phase 1 — Lancer le training RL (à venir)
+## Phase 1 — Lancer le training RL
 
 ```bash
-# Une fois rl_env.py et rl_train.py implémentés :
-uv run -m src.ai.training.rl_train \
-  --town Town01 --weather ClearNoon \
+# Depuis la racine du projet, CARLA actif sur le bon host :
+uv run python3 scripts/run_rl_training.py \
   --timesteps 500000 \
-  --output checkpoints/ppo_v1/
+  --tag ppo_v1 \
+  --host <ip-carla>          # localhost si CARLA sur la même machine, sinon IP WSL host
+
+# Smoke test rapide (vérifie juste que le pipeline tourne) :
+uv run python3 scripts/run_rl_training.py --timesteps 1000 --tag smoke --host <ip-carla>
 ```
+
+Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` :
+
+| Fichier | Contenu |
+|---|---|
+| `params.json` | hyperparamètres + config de la run |
+| `model_best.zip` | meilleur checkpoint (EvalCallback) |
+| `model_final.zip` | poids à la fin du training |
+| `training_log.monitor.csv` | reward / longueur par épisode (format Monitor SB3) |
+| `reward_curve.png` | courbe reward brute + moyenne mobile |
+| `demo.mp4` | vidéo d'inférence avec HUD (params + step + reward + action) |
 
 ---
 
 ## Validation et benchmarks
 
-Dans [benchmarks/ai/](../../benchmarks/ai/) :
+```bash
+uv run pytest benchmarks/ai/ -v
+```
 
-- **`smoke.py`** — 4 tests pytest Phase 0 (shapes PilotNet, trainability, data loader, split determinism). Lancer : `uv run pytest benchmarks/ai/smoke.py -v`
-- **Benchmark Phase 1** (à définir) : reward moyen par épisode, distance parcourue sans collision, taux de succès de suivi de route sur N épisodes.
+| Fichier | Couverture |
+|---|---|
+| `smoke.py` | reward_fn (8 tests) + stubs GT (7 tests) |
+| `test_rl_env.py` | CarlaEnv — spaces, reset, step, observation, render (20 tests) |
+| `test_rl_train.py` | make_model, train (4 tests) |
+| `test_rl_demo.py` | run_episode, _add_hud, record_episode, load_model (11 tests) |
+| `test_run_manager.py` | make_run_dir, save_params, plot_reward_curve (8 tests) |
+
+Tous les tests tournent **sans CARLA** (Mocks). Les tests Phase 0 sont dans `benchmarks/ai/phase0/`.
 
 ---
 

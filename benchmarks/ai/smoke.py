@@ -87,6 +87,17 @@ def test_collision_overrides_other_components():
     assert done is True
 
 
+def test_stall_penalises_zero_speed():
+    """Rester à l'arrêt doit être moins bien récompensé qu'avancer."""
+    reward_still, _ = compute_reward(
+        speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    reward_moving, _ = compute_reward(
+        speed_kmh=5.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    assert reward_moving > reward_still
+
+
 # ---------------------------------------------------------------------------
 # CarlaGTDepthEstimator
 # ---------------------------------------------------------------------------

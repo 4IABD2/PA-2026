@@ -25,6 +25,10 @@ dev = [
     "pytest>=9.0.3",
 ]
 
+[tool.pytest.ini_options]
+python_files = ["test_*.py", "smoke.py"]
+pythonpath = ["."]
+
 [tool.black]
 line-length = 88
 target-version = ["py310"]
