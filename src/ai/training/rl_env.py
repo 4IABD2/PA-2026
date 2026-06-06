@@ -155,4 +155,4 @@ class CarlaEnv(gym.Env):
         arr = np.frombuffer(raw_image.raw_data, dtype=np.uint8).reshape(
             raw_image.height, raw_image.width, 4
         )
-        self._last_image = arr[:, :, :3]
+        self._last_image = arr[:, :, [2, 1, 0]]  # BGRA → RGB

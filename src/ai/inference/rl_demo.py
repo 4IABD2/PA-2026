@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 import gymnasium as gym
 import numpy as np
 from stable_baselines3 import PPO
@@ -77,16 +79,26 @@ def record_episode(
     hud_params: dict | None = None,
     max_steps: int = 1000,
     n_episodes: int = 1,
+    render_size: tuple[int, int] | None = None,
+    render_fn: Callable[[], np.ndarray | None] | None = None,
 ) -> None:
-    """Record n_episodes of inference to an MP4 with HUD overlay."""
+    """Record n_episodes of inference to an MP4 with HUD overlay.
+
+    render_fn: optional callable that returns the current frame (overrides env.render()).
+               Use to plug in a separate high-res camera.
+    render_size: (width, height) to upscale frames — only used when render_fn is None.
+    """
     import cv2
 
+    _get_frame = render_fn if render_fn is not None else env.render
+
     obs, _ = env.reset()
-    sample_frame = env.render()
-    h, w = sample_frame.shape[:2] if sample_frame is not None else (88, 200)
+    sample_frame = _get_frame()
+    src_h, src_w = sample_frame.shape[:2] if sample_frame is not None else (88, 200)
+    out_w, out_h = render_size if (render_size and render_fn is None) else (src_w, src_h)
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+    writer = cv2.VideoWriter(output_path, fourcc, fps, (out_w, out_h))
 
     episode = 0
     total_reward = 0.0
@@ -99,7 +111,7 @@ def record_episode(
             total_reward += float(reward)
             step += 1
 
-            frame = env.render()
+            frame = _get_frame()
             if frame is not None:
                 info = {
                     "episode": episode + 1,

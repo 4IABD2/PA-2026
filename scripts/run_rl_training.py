@@ -57,6 +57,7 @@ matplotlib.use("Agg")  # must be before any other matplotlib / pyplot import
 
 import carla
 
+from src.dataset.encodings import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
 from src.interfaces.navigation_types import HighLevelCommand, Route, Waypoint
 from src.interfaces.stubs import CarlaGTDepthEstimator, CarlaGTLaneDetector
 from src.navigation.navigation import Navigation
@@ -101,7 +102,13 @@ class _NavAdapter:
 
 _CAM_W = 200
 _CAM_H = 88
-_CAM_TRANSFORM = carla.Transform(carla.Location(x=0.30, y=0.0, z=1.50))
+_CAM_TRANSFORM = carla.Transform(
+    carla.Location(x=CAMERA_LOCATION[0], y=CAMERA_LOCATION[1], z=CAMERA_LOCATION[2]),
+    carla.Rotation(pitch=CAMERA_ROTATION_PITCH),
+)
+
+_DEMO_CAM_W = 1280
+_DEMO_CAM_H = 720
 
 
 def _setup_sync(world: carla.World, fps: int = 20) -> None:
@@ -218,32 +225,51 @@ def main() -> None:
         sys.stdout = _StdoutFilter(sys.stdout)
         try:
             model.learn(total_timesteps=args.timesteps, callback=callbacks)
+            model.save(str(run_dir / "model_final"))
+            print("Training done.")
+
+            # reward curve
+            plot_reward_curve(Path(str(monitor_base) + ".monitor.csv"), run_dir / "reward_curve.png")
+            print(f"Reward curve → {run_dir / 'reward_curve.png'}")
+
+            # demo video — swap to high-res camera for recording
+            if args.demo_eps > 0:
+                hud_params = {
+                    "lr":    params["learning_rate"],
+                    "γ":     params["gamma"],
+                    "steps": f"{args.timesteps // 1000}k",
+                }
+                demo_path = str(run_dir / "demo.mp4")
+
+                demo_frame: list = [None]
+                demo_cam = _spawn_sensor(
+                    world, ego, "sensor.camera.rgb",
+                    image_size_x=_DEMO_CAM_W, image_size_y=_DEMO_CAM_H,
+                )
+                def _on_demo_frame(raw):
+                    arr = __import__("numpy").frombuffer(raw.raw_data, dtype="uint8").reshape(raw.height, raw.width, 4)
+                    demo_frame[0] = arr[:, :, [2, 1, 0]]  # BGRA → RGB
+                demo_cam.listen(_on_demo_frame)
+                for _ in range(5):
+                    world.tick()
+
+                try:
+                    record_episode(
+                        model, env,
+                        output_path=demo_path,
+                        fps=20,
+                        hud_params=hud_params,
+                        max_steps=args.max_episode_steps,
+                        n_episodes=args.demo_eps,
+                        render_fn=lambda: demo_frame[0],
+                    )
+                finally:
+                    demo_cam.stop()
+                    demo_cam.destroy()
+
+                print(f"Demo video → {demo_path}")
         finally:
             sys.stdout = sys.stdout._out  # restore
-        model.save(str(run_dir / "model_final"))
-        print("Training done.")
-
-        # reward curve
-        plot_reward_curve(Path(str(monitor_base) + ".monitor.csv"), run_dir / "reward_curve.png")
-        print(f"Reward curve → {run_dir / 'reward_curve.png'}")
-
-        # demo video
-        if args.demo_eps > 0:
-            hud_params = {
-                "lr":    params["learning_rate"],
-                "γ":     params["gamma"],
-                "steps": f"{args.timesteps // 1000}k",
-            }
-            demo_path = str(run_dir / "demo.mp4")
-            record_episode(
-                model, env,
-                output_path=demo_path,
-                fps=20,
-                hud_params=hud_params,
-                max_steps=args.max_episode_steps,
-                n_episodes=args.demo_eps,
-            )
-            print(f"Demo video → {demo_path}")
 
         print(f"\nAll artifacts in: {run_dir}/")
 

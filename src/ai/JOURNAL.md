@@ -296,3 +296,28 @@
 1. Lancer training 50k–200k steps avec la pénalité stall → vérifier que la reward monte.
 2. Analyser la courbe reward : si stagnation, investiguer l'observation (vitesse toujours nulle ? commande nav toujours LANE_FOLLOW ?).
 3. Training long 500k steps si 50k converge.
+
+---
+
+## 2026-06-06 (suite) — Connexion Tailscale, correctifs vidéo, revue de cohérence
+
+**Avancement** :
+- Connexion CARLA via Tailscale validée : PC fixe Windows (100.97.91.60) joignable depuis le WSL du taff (100.70.57.54), ports 2000/2001/2002 ouverts, ~12 ms de latence, ~19 FPS en training.
+- Vidéo de démo corrigée sur deux points : canaux couleurs inversés (BGRA → `arr[:,:,[2,1,0]]` → RGB correct dans `_on_camera`) et caméra d'entraînement trop petite (200×88) utilisée pour le record. Solution retenue : caméra d'entraînement reste à 200×88 (pour la bande passante Tailscale), une caméra séparée 1280×720 est spawnée uniquement pendant `record_episode` via `render_fn`. La démo se joue maintenant dans la POV équipe correcte.
+- Correction de la POV caméra dans `run_rl_training.py` : j'avais mis `Location(x=0.5, y=-0.3, z=1.2)` (une valeur draft du journal jamais retenue) au lieu de la POV canonique définie dans `src/dataset/encodings.py` (`CAMERA_LOCATION = (0.30, 0.0, 1.50)`, `CAMERA_ROTATION_PITCH = -5.0`). Le script importe maintenant directement ces constantes.
+- Correction d'une incohérence sur `MAX_SPEED_KMH` : `reward_fn.py` avait 50.0 alors que `rl_env.py`, `rl_demo.py` et le README utilisaient 90.0. Unifié à **90.0** partout (valeur documentée dans le README depuis le début). Le test `test_reward_components_sum_at_max` mis à jour pour appeler avec `speed_kmh=90.0`.
+- README racine mis à jour : note WSL précise maintenant que Tailscale est la méthode préférée (IP stable, pas de recalcul à chaque boot) avec le nameserver comme fallback.
+- README `src/ai/` corrigé : le fichier `config.py` listé dans l'arborescence n'existait pas (c'est `phase0/config.py`). Arborescence corrigée.
+
+**Décisions** :
+- **Observation 7 scalaires maintenue pour l'instant.** Le plan initial prévoyait d'ajouter l'image une fois la boucle scalaire validée. On y reviendra dès que la reward converge sur 50k steps. L'approche retenue sera `MultiInputPolicy` SB3 avec un `Dict` observation space (`"image"`: (H, W, 3) cropé/resizé, `"scalars"`: (7,)) — SB3 instancie automatiquement un CNN + MLP concaténés.
+- **RL image-only techniquement possible mais écarté** : transmettre 1280×720 frames à chaque step over Tailscale ramène le FPS de ~19 à ~3 (53× plus de données réseau). Même en local, le RL end-to-end sur pixels nécessite des millions de steps. Non retenu pour ce PA.
+- **Encodage one-hot des commandes nav (3 floats, pas 1 entier)** : `[cmd_left, cmd_right, cmd_straight]` plutôt qu'une valeur scalaire 0/1/2/3. Un entier imposerait une relation ordinale fictive (LEFT=1 « proche » de RIGHT=2) que le réseau devrait corriger par lui-même en gradient. Avec le one-hot, chaque commande a son neurone d'entrée dédié — les directions sont indépendantes dans l'espace d'entrée. La valeur `[0, 0, 0]` représente naturellement `LANE_FOLLOW` sans valeur spéciale à réserver.
+- **`next_command()` appelé à chaque step (pas seulement aux intersections)** : la fonction de Victor incrémente `index_way` à chaque appel — elle est conçue pour avancer d'un waypoint à la fois. Dans notre env à 20 FPS, les waypoints sont consommés rapidement (une route de 200 wp ≈ 10 s). Le `_NavAdapter` gère l'épuisement de la route (`IndexError`) en retournant `LANE_FOLLOW` et remet `index_way` à 0 au `reset()`. Conséquence pratique : la commande nav change fréquemment (à chaque waypoint), ce qui donne à l'agent plus d'information directionnelle qu'un appel par intersection. Contrepartie : l'agent peut voir des transitions LEFT→STRAIGHT→RIGHT rapides même sur une ligne droite (bruit inhérent à la granularité des waypoints).
+
+**Benchmarks** : smoke 1000 steps, ~19 FPS, vidéo 1280×720 @ 20fps générée proprement.
+
+**Prochaine étape** :
+1. Training 50k steps → vérifier que la reward progresse au-delà de la lazy policy (r ~260 à 1k steps).
+2. Si converge → 500k steps sur noyse (GPU A6000, pas de Tailscale overhead).
+3. Swap observation → ajouter l'image (MultiInputPolicy SB3) une fois la baseline scalaire établie.

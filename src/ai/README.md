@@ -91,20 +91,19 @@ Pendant l'entraînement, les métriques de perception viennent des capteurs GT C
 
 ```
 src/ai/
-├── config.py                  ← constantes Phase 0 + Phase 1 (MAX_SPEED, reward weights, etc.)
-├── models/
-│   └── v1_pilotnet_speed.py   ← Phase 0 — archivé, ne pas toucher
+├── phase0/                    ← Phase 0 archivée (CIL/PilotNet), ne pas modifier
+│   ├── config.py              ← constantes Phase 0 (IMAGE_RAW_HEIGHT, etc.)
+│   ├── models/
+│   ├── training/
+│   └── inference/
 ├── training/
-│   ├── data_loader.py         ← Phase 0 — archivé
-│   ├── train.py               ← Phase 0 — archivé
 │   ├── rl_env.py              ← Phase 1 — CarlaEnv (gym.Env)
 │   ├── rl_train.py            ← Phase 1 — make_model() + train() PPO SB3
 │   └── run_manager.py         ← Phase 1 — dossier de run horodaté, CSV, courbe reward
 ├── inference/
-│   ├── carla_demo.py          ← Phase 0 — archivé
 │   └── rl_demo.py             ← Phase 1 — run_episode() + record_episode() avec HUD
 └── rewards/
-    └── reward_fn.py           ← Phase 1 — compute_reward() (fonction pure)
+    └── reward_fn.py           ← Phase 1 — compute_reward() (fonction pure, MAX_SPEED=90 km/h)
 ```
 
 ---

@@ -70,9 +70,9 @@ def test_alive_bonus_always_present():
 
 
 def test_reward_components_sum_at_max():
-    """À vitesse max, offset 0, en route, sans collision : r = 0.5 + 0.3 + 0.01."""
+    """À vitesse max (90 km/h), offset 0, en route, sans collision : r = 0.5 + 0.3 + 0.01."""
     reward, done = compute_reward(
-        speed_kmh=50.0, center_offset=0.0, is_on_road=True, collision=False
+        speed_kmh=90.0, center_offset=0.0, is_on_road=True, collision=False
     )
     assert done is False
     assert reward == pytest.approx(0.5 + 0.3 + 0.01)

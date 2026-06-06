@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-MAX_SPEED_KMH = 50.0
+MAX_SPEED_KMH = 90.0
 
 _W_SPEED = 0.5
 _W_CENTER = 0.3

@@ -514,7 +514,7 @@ uv run python3 scripts/run_rl_training.py --timesteps 1000 --tag smoke --host <i
 uv run python3 scripts/run_rl_training.py --timesteps 500000 --tag ppo_v1 --host <ip-carla>
 ```
 
-> **WSL** : CARLA tourne sur Windows, l'IP à utiliser est celle du host Windows. La trouver avec `cat /etc/resolv.conf | grep nameserver`.
+> **WSL** : CARLA tourne sur Windows. Si Tailscale est installé, utiliser directement l'IP Tailscale de la machine Windows (`tailscale status` pour la voir). Sinon, l'IP du host Windows se trouve avec `cat /etc/resolv.conf | grep nameserver`.
 
 Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` (voir [src/ai/README.md](src/ai/README.md) pour le détail).
 
