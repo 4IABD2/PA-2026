@@ -13,6 +13,7 @@ dependencies = [
     "fiftyone>=1.0.0",
     "ultralytics>=8.4.51",
     "easyocr>=1.7.2",
+    "transformers>=5.9.0",
 ]
 
 [project.optional-dependencies]
