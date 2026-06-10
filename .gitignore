@@ -20,3 +20,6 @@ docs/superpowers/
 docs/ai/
 
 runs/
+**/.idea
+**/build/
+web/servor/external
