@@ -1,11 +1,12 @@
-cmake_minimum_required (VERSION 3.13)
-
-project ("client" VERSION 1.0)
+cmake_minimum_required(VERSION 3.15)
+project(client LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(pybind11 REQUIRED)
 
-
-# Main target: create executable with its source file(s) directly
-add_executable(application "main.cpp")
+pybind11_add_module(client_bindings
+        pybind_module.cpp
+        request_client.cpp
+)

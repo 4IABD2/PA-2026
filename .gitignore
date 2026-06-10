@@ -23,3 +23,4 @@ runs/
 **/.idea
 **/build/
 web/servor/external
+web/client/build_py/
