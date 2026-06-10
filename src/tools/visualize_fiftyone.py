@@ -37,7 +37,9 @@ RAW_CLASSES = [
 ]
 
 
-def _parse_yolo_line(line: str, img_w: int, img_h: int, class_names: list[str]) -> dict | None:
+def _parse_yolo_line(
+    line: str, img_w: int, img_h: int, class_names: list[str]
+) -> dict | None:
     parts = line.strip().split()
     if len(parts) < 5:
         return None
@@ -53,7 +55,9 @@ def _parse_yolo_line(line: str, img_w: int, img_h: int, class_names: list[str]) 
     )
 
 
-def load_run(run_dir: Path, labels_dir_name: str = "labels_yolo_enriched") -> fo.Dataset:
+def load_run(
+    run_dir: Path, labels_dir_name: str = "labels_yolo_enriched"
+) -> fo.Dataset:
     images_dir = run_dir / "images"
     labels_dir = run_dir / labels_dir_name
 
@@ -101,10 +105,22 @@ def load_run(run_dir: Path, labels_dir_name: str = "labels_yolo_enriched") -> fo
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Visualize a CARLA dataset run with FiftyOne")
-    parser.add_argument("--run", required=True, help="Path to a run directory (e.g. data/runs/2026-05-20_town01_clearnoon)")
-    parser.add_argument("--labels", default="labels_yolo_enriched", help="Labels subdirectory to use (default: labels_yolo_enriched)")
-    parser.add_argument("--port", type=int, default=5151, help="FiftyOne app port (default: 5151)")
+    parser = argparse.ArgumentParser(
+        description="Visualize a CARLA dataset run with FiftyOne"
+    )
+    parser.add_argument(
+        "--run",
+        required=True,
+        help="Path to a run directory (e.g. data/runs/2026-05-20_town01_clearnoon)",
+    )
+    parser.add_argument(
+        "--labels",
+        default="labels_yolo_enriched",
+        help="Labels subdirectory to use (default: labels_yolo_enriched)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=5151, help="FiftyOne app port (default: 5151)"
+    )
     args = parser.parse_args()
 
     run_dir = Path(args.run)
@@ -113,7 +129,9 @@ def main() -> None:
 
     print(f"Loading {run_dir.name} with labels from {args.labels}...")
     dataset = load_run(run_dir, args.labels)
-    print(f"Loaded {len(dataset)} samples ({dataset.count('ground_truth.detections')} detections)")
+    print(
+        f"Loaded {len(dataset)} samples ({dataset.count('ground_truth.detections')} detections)"
+    )
 
     session = fo.launch_app(dataset, port=args.port)
     print(f"FiftyOne app running at http://localhost:{args.port}")

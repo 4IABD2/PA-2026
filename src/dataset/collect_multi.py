@@ -22,7 +22,6 @@ from pathlib import Path
 from src.dataset.collector import DatasetCollector
 from src.dataset.enrich_labels import process_run as enrich_run
 
-
 _DEFAULT_CAPTURE_EVERY_N_TICKS = 40
 _CARLA_FPS = 20
 
@@ -127,8 +126,10 @@ def main() -> None:
                     )
 
     print()
-    print(f"Termine : {len(maps) * len(weathers) - len(failures)} runs OK"
-          f"{', ' + str(len(failures)) + ' echecs' if failures else ''}.")
+    print(
+        f"Termine : {len(maps) * len(weathers) - len(failures)} runs OK"
+        f"{', ' + str(len(failures)) + ' echecs' if failures else ''}."
+    )
     for t, w, err in failures:
         print(f"  echec {t}/{w}: {err}")
 

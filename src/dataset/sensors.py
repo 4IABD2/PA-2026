@@ -152,8 +152,8 @@ def write_instance(rgb: np.ndarray, run_dir: Path, frame_id: int) -> None:
 
 # Spec déclarative pour le collector : (key, blueprint, writer).
 SENSOR_SPECS: list[tuple[str, str, Writer]] = [
-    ("rgb",      "sensor.camera.rgb",                   write_rgb),
-    ("depth",    "sensor.camera.depth",                 write_depth),
+    ("rgb", "sensor.camera.rgb", write_rgb),
+    ("depth", "sensor.camera.depth", write_depth),
     ("semantic", "sensor.camera.semantic_segmentation", write_semantic),
     ("instance", "sensor.camera.instance_segmentation", write_instance),
 ]

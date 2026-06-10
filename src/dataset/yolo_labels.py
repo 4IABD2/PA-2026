@@ -32,7 +32,7 @@ YOLO_CLASS_MAPPING: dict[str, int] = {
 # se comporte comme un véhicule du point de vue de la conduite (trajectoire,
 # vitesse, respect des feux).
 _CARLA_TO_YOLO: dict[int, int] = {
-    7: 2,   # TrafficLight (couleur résolue offline par colorize_traffic_lights)
+    7: 2,  # TrafficLight (couleur résolue offline par colorize_traffic_lights)
     12: 1,  # Pedestrian → walker
     13: 0,  # Rider      → vehicle
     14: 0,  # Car
