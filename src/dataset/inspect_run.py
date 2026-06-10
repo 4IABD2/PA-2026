@@ -96,7 +96,9 @@ def _summarize_run(run_dir: Path) -> None:
 
     print(f"Run: {run_dir}")
     print(f"  Frames:                {n_frames}")
-    print(f"  Labels raw generated:  {n_labels_raw} ({100 * n_labels_raw / max(1, n_frames):.0f}%)")
+    print(
+        f"  Labels raw generated:  {n_labels_raw} ({100 * n_labels_raw / max(1, n_frames):.0f}%)"
+    )
     print(
         f"  Labels raw non-empty:  {non_empty_raw} "
         f"({100 * non_empty_raw / max(1, n_frames):.0f}%)"
@@ -110,7 +112,10 @@ def _summarize_run(run_dir: Path) -> None:
         source = labels_color
         print(f"  Compteurs par classe ({labels_color.name}/) :")
     elif labels_raw.is_dir():
-        names = [_RAW_CLASS_NAMES.get(i, f"cls_{i}") for i in range(max(_RAW_CLASS_NAMES) + 1)]
+        names = [
+            _RAW_CLASS_NAMES.get(i, f"cls_{i}")
+            for i in range(max(_RAW_CLASS_NAMES) + 1)
+        ]
         source = labels_raw
         print(f"  Compteurs par classe ({labels_raw.name}/, raw 4 classes) :")
     else:
@@ -141,8 +146,17 @@ def _summarize_run(run_dir: Path) -> None:
     print()
 
     print("  Disque :")
-    subdirs = ["images", "depth", "instance", "semantic", "viz", "labels_yolo",
-               "labels_yolo_color", "debug_dropped_tl", "debug_dropped_signs"]
+    subdirs = [
+        "images",
+        "depth",
+        "instance",
+        "semantic",
+        "viz",
+        "labels_yolo",
+        "labels_yolo_color",
+        "debug_dropped_tl",
+        "debug_dropped_signs",
+    ]
     total = 0
     for sub in subdirs:
         size = _dir_size_bytes(run_dir / sub)

@@ -31,7 +31,9 @@ def main() -> None:
     )
     parser.add_argument("--town", default="Town01", help="CARLA map (default: Town01)")
     parser.add_argument(
-        "--weather", default="ClearNoon", help="CARLA weather preset (default: ClearNoon)"
+        "--weather",
+        default="ClearNoon",
+        help="CARLA weather preset (default: ClearNoon)",
     )
     parser.add_argument(
         "--duration", type=int, default=30, help="Duration in seconds (default: 30)"
