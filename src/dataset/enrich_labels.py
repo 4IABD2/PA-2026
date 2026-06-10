@@ -38,18 +38,18 @@ RAW_TRAFFIC_LIGHT = 2
 RAW_TRAFFIC_SIGN = 3
 
 FINAL_CLASSES = [
-    "vehicle",       # 0 (passe-through depuis raw 0)
-    "walker",        # 1 (passe-through depuis raw 1)
-    "red_light",     # 2
+    "vehicle",  # 0 (passe-through depuis raw 0)
+    "walker",  # 1 (passe-through depuis raw 1)
+    "red_light",  # 2
     "yellow_light",  # 3
-    "green_light",   # 4
-    "speed_30",      # 5
-    "speed_40",      # 6
-    "speed_50",      # 7
-    "speed_60",      # 8
-    "speed_70",      # 9
-    "speed_80",      # 10
-    "speed_90",      # 11
+    "green_light",  # 4
+    "speed_30",  # 5
+    "speed_40",  # 6
+    "speed_50",  # 7
+    "speed_60",  # 8
+    "speed_70",  # 9
+    "speed_80",  # 10
+    "speed_90",  # 11
 ]
 
 # ----------------------------------------------------------------------------
@@ -92,12 +92,15 @@ def _classify_sign_ocr(bgr_crop: np.ndarray, debug: bool = False) -> int | None:
     global _ocr_reader
     if _ocr_reader is None:
         import easyocr
+
         _ocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
 
     h, w = bgr_crop.shape[:2]
     if max(h, w) < 150:
         scale = 150 / max(h, w)
-        bgr_crop = cv2.resize(bgr_crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        bgr_crop = cv2.resize(
+            bgr_crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC
+        )
     results = _ocr_reader.readtext(bgr_crop, detail=1, allowlist="0123456789")
     if debug and results:
         for bbox, text, conf in results:
@@ -333,7 +336,9 @@ def process_run(run_dir: Path, debug_drops: bool = False) -> dict[str, int]:
 
             if cls == RAW_TRAFFIC_SIGN:
                 stats["sign_in"] += 1
-                print(f"  [{label_path.stem}] bbox#{bbox_idx} sign crop={crop.shape[:2]}")
+                print(
+                    f"  [{label_path.stem}] bbox#{bbox_idx} sign crop={crop.shape[:2]}"
+                )
                 new_cls, scores = classify_speed_sign(crop)
                 if new_cls is None:
                     stats["sign_dropped"] += 1

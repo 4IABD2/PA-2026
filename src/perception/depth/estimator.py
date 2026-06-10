@@ -75,5 +75,7 @@ class DepthEstimator:
         self._scale, self._shift = float(result[0][0]), float(result[0][1])
 
         residuals = gt_flat - (self._scale * inv_flat + self._shift)
-        rmse = float(np.sqrt(np.mean(residuals ** 2)))
-        print(f"Calibrated: scale={self._scale:.4f}, shift={self._shift:.4f}, RMSE={rmse:.2f}m")
+        rmse = float(np.sqrt(np.mean(residuals**2)))
+        print(
+            f"Calibrated: scale={self._scale:.4f}, shift={self._shift:.4f}, RMSE={rmse:.2f}m"
+        )

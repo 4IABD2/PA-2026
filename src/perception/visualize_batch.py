@@ -54,7 +54,9 @@ def _draw_detections(
 
         (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.rectangle(img, (x1, y1 - th - 6), (x1 + tw, y1), color, -1)
-        cv2.putText(img, text, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        cv2.putText(
+            img, text, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1
+        )
 
     return img
 
@@ -63,7 +65,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--images", required=True, help="Images directory")
     parser.add_argument("--yolo-weights", default="src/perception/yolo/weights/best.pt")
-    parser.add_argument("--depth-gt", default=None, help="Depth GT dir (for calibration)")
+    parser.add_argument(
+        "--depth-gt", default=None, help="Depth GT dir (for calibration)"
+    )
     parser.add_argument("--device", default="mps")
     parser.add_argument("--output", default="batch_demo.jpg")
     parser.add_argument("--n", type=int, default=9, help="Number of images in the grid")
@@ -114,7 +118,9 @@ def main() -> None:
         grid = np.zeros((rows * th, cols * tw, 3), dtype=np.uint8)
         for i, panel in enumerate(panels):
             r, c = divmod(i, cols)
-            grid[r * th : (r + 1) * th, c * tw : (c + 1) * tw] = cv2.resize(panel, (tw, th))
+            grid[r * th : (r + 1) * th, c * tw : (c + 1) * tw] = cv2.resize(
+                panel, (tw, th)
+            )
         return grid
 
     det_grid = _make_grid(det_panels)

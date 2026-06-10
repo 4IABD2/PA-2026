@@ -13,9 +13,15 @@ from pathlib import Path
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--runs", nargs="+", required=True, help="Chemins vers les runs")
-    parser.add_argument("--output", default="data/yolo_dataset", help="Dossier de sortie")
-    parser.add_argument("--split", type=float, default=0.8, help="Ratio train (défaut 0.8)")
+    parser.add_argument(
+        "--runs", nargs="+", required=True, help="Chemins vers les runs"
+    )
+    parser.add_argument(
+        "--output", default="data/yolo_dataset", help="Dossier de sortie"
+    )
+    parser.add_argument(
+        "--split", type=float, default=0.8, help="Ratio train (défaut 0.8)"
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
