@@ -321,3 +321,150 @@
 1. Training 50k steps → vérifier que la reward progresse au-delà de la lazy policy (r ~260 à 1k steps).
 2. Si converge → 500k steps sur noyse (GPU A6000, pas de Tailscale overhead).
 3. Swap observation → ajouter l'image (MultiInputPolicy SB3) une fois la baseline scalaire établie.
+
+---
+
+## 2026-06-06 (suite) — Premier training 50k steps : convergence confirmée
+
+**Avancement** :
+- Run `ppo_v1_50k` 50 000 steps exécutée complète (~17 min à 50 FPS). Artefacts dans `runs/2026-06-06_20-15_ppo_v1_50k_50k/`.
+
+**Benchmarks** :
+
+| steps eval | mean_reward | ep_len_mean |
+|-----------|-------------|-------------|
+| 27 500 | 68 | 165 |
+| 32 500 | 40 | 155 |
+| 40 000 | 139 | 358 |
+| 45 000 | 217 | 550 |
+| 47 500 | 288 | 717 |
+| **50 000** | **338** | **731** |
+
+- Reward eval : 68 → **338** sur 50k steps. Convergence claire dans la deuxième moitié de la run.
+- `ep_len_mean` eval : 165 → **731 steps** (≈36 s) — la voiture survit de plus en plus longtemps sans collision.
+- Estimation conduite à 50k : ~20-30 km/h de moyenne, relativement centré. Pas encore performant mais l'agent a appris à avancer sans crasher.
+- FPS : 50 FPS (meilleur qu'attendu — probablement run locale ou chemin réseau plus rapide que Tailscale).
+
+**Points de vigilance** :
+- `rollout/ep_rew_mean` descend (173 → 130) pendant que eval monte. Artefact normal : rollout = actions échantillonnées (std≈1, très bruitées), eval = actions déterministes (moyenne de la Gaussienne). Seul le `eval/mean_reward` est représentatif de la vraie policy.
+- `std` reste autour de 0.97-1.0 jusqu'à la fin : la policy est encore très exploratoire, pas encore convergée. 50k steps c'est le début. La convergence réelle se joue à 500k+.
+- `value_loss` augmente (0.14 → 4.46) en deuxième moitié : la value function peine à suivre les nouvelles situations explorées. Normal en phase d'expansion des comportements.
+
+**Prochaine étape** :
+1. **Training 500k steps sur noyse** (GPU A6000) : `python scripts/run_rl_training.py --timesteps 500000 --tag ppo_v1_500k --host 100.97.91.60`. Durée estimée : ~9h à 15 FPS (Tailscale noyse→PC fixe), beaucoup moins si le FPS reste à 50.
+2. Observer la courbe reward autour de 200k steps — si stagnation, investiguer les hyperparams (lr, n_steps) ou la reward function.
+3. Une fois la baseline 500k solide : ajouter l'image dans l'observation (`MultiInputPolicy`, `Dict` obs space).
+
+---
+
+## 2026-06-06 (suite) — Système de highlights + progression vidéo
+
+**Avancement** :
+- Ajout d'un système de highlights automatiques dans `src/ai/inference/rl_demo.py` : `HighlightSpec` (dataclass déclarative), `HighlightRecorder` (buffer tournant + déclenchement sur événement), `DEFAULT_HIGHLIGHT_SPECS` (6 specs par défaut).
+- `record_episode()` accepte maintenant `highlight_specs` + `highlight_dir` — optionnels, zéro impact sur les tests existants (62/62 passés).
+- Ajout du `CheckpointCallback` SB3 dans `run_rl_training.py` : sauvegarde un modèle tous les `timesteps/10` steps dans `checkpoints/`.
+- Après training, le script enregistre une vidéo courte (200 steps) pour chaque checkpoint (`progress_XXXXk.mp4`), puis la démo finale avec highlights.
+
+**Structure du dossier de run :**
+```
+runs/YYYY-MM-DD_HH-MM_<tag>/
+  model_best.zip / model_final.zip
+  checkpoints/rl_model_*_steps.zip   ← ~10 snapshots
+  progress_0050k.mp4 … progress_500k.mp4  ← progression learning
+  demo.mp4                            ← best model, épisode complet, HUD
+  highlights/
+    turn_left_001.mp4    (2s pre + 4s post, cooldown 20s)
+    turn_right_001.mp4
+    near_obstacle_001.mp4  (obstacle < 7.5 m)
+    collision_001.mp4    (3s pre + 1s post)
+    high_speed_001.mp4   (> 58 km/h)
+    lane_drift_001.mp4   (dérive > 60% voie)
+```
+
+**Décisions** :
+- **Highlights déclaratifs** : ajouter un use-case = une ligne dans `DEFAULT_HIGHLIGHT_SPECS`. Ex futur : `red_light_stop` (obs[7] = is_red_light quand les feux seront branchés), `npc_near_miss` (obs[5] < 0.1 avec NPCs).
+- **Buffer rolling** : le recorder garde toujours les `pre_s` dernières secondes en mémoire, sans overhead d'écriture — le clip n'est écrit que si l'événement se déclenche.
+- **Progress clips sans highlights** : les clips des checkpoints intermédiaires (200 steps) n'ont pas de highlights — trop courts et l'agent est encore en exploration, les événements n'auraient pas de sens.
+- **Pourquoi les résultats à 50k semblent bons** : les observations sont Ground Truth pur (API CARLA directe). `heading_error` = angle entre la voiture et la direction de la route voisine → signal quasi-GPS. `center_offset` = géométrie CARLA exacte. Avec ces signaux parfaits, le modèle n'a pas besoin de "voir" la route, il doit juste apprendre à maintenir ces deux erreurs à zéro. C'est le comportement attendu pour Phase 1 (validation de la boucle RL). La difficulté réelle viendra quand on branchera les vrais modèles de perception (Franck/Karim) et les NPCs.
+
+**Prochaine étape** :
+1. Lancer un training intermédiaire pour valider le système de highlights et les progress clips.
+2. Ajouter des NPCs dans la scène (Traffic Manager CARLA) — change radicalement la difficulté.
+3. Brancher l'état des feux de signalisation comme 8ème scalaire dans l'observation.
+
+---
+
+## 2026-06-12 — Pipeline d'évaluation définitive + corrections benchmark
+
+**Avancement** :
+- **Fix NPC spawn dans le décor** : `_spawn_vehicle` dans `benchmark.py` spawnait au Z du waypoint surface route, le NPC se retrouvait à moitié enfoncé dans l'asphalte (visible dans le scénario `npc_follow`). Fix : `carla.Location(z=loc.z + 0.5)` dans `_spawn_vehicle`.
+- **GPS route par scénario (`dest_spawn_idx`)** : pour les scénarios de jonction, la nav Victor donnait la mauvaise commande directionnelle parce que la route planifiée vers `spawn_pts[-1]` passait par le mauvais bras de carrefour. Ajout du champ `dest_spawn_idx` dans la dataclass `Scenario` — à chaque reset, la route est replanifiée vers ce spawn spécifique, ce qui force une commande nav correcte et reproductible. C'est l'équivalent d'un GPS prédéfini par scénario de test.
+- **Script `find_dest_spawns.py`** : outil pour identifier les `dest_spawn_idx` corrects. Utilise l'API waypoint CARLA directement (sans `nav.plan()`) pour suivre les branches de carrefour à 40m et trouver le spawn le plus proche dans chaque direction. Résultats sur Town10HD_Opt :
+  - `turn_left` (spawn 0) → `dest_spawn_idx=140` (snap 0.9m, 69.7m de distance)
+  - `turn_right` (spawn 70) → `dest_spawn_idx=68` (snap 9.7m, 58.3m)
+  - `junction_straight` (spawn 31) → `dest_spawn_idx=119` (snap 3.1m, 71.6m)
+- **Pénalité off-route** : `_P_OFF_ROUTE = -0.5` dans `reward_fn.py`. La détection se fait dans `_is_off_route()` de `rl_env.py` via une fenêtre glissante ±60 waypoints autour de `_route_idx` (O(1) amorti). Seuil : 15m du waypoint le plus proche.
+- **Critère de succès renforcé** : `_success_no_crash` et `_success_straight` requièrent désormais `max_dist_from_start >= 25m` en plus de `not terminated`. Sans ça, un modèle immobile "réussissait" tous les scénarios de phase 1.
+- **Métriques riches dans `eval_model`** : refonte complète de la boucle d'évaluation. Collecte par step : trajectoire `[[x, y, yaw]]`, séries temporelles (steer, throttle, brake, heading, obstacle, nav_cmd), stats numpy (mean, std, max, pct_moving, pct_braking, off_route_pct), tracking `max_dist_from_start`, `reached_dest`, `collision_step`. Le JSON résultant permet d'analyser le comportement du modèle sans avoir à rejouer les épisodes.
+- **Panel OBS sur la vidéo** : `_draw_obs_panel` dans `rl_demo.py` affiche les 7 scalaires d'entrée de la policy (speed, nav cmd, center_offset, obstacle, heading) + action courante (steer, throttle, brake) en overlay translucide en haut à droite de chaque frame de démo.
+- **Sauvegarde JSON systématique** : `run_rl_training.py` sauvegarde `evals/results.json` (tous les checkpoints + best model). `run_eval.py` sauvegarde `eval_<model_stem>.json` en plus de la vidéo.
+- **Corrections bugs pipeline** :
+  - NameError `all_results` : variable définie à l'intérieur du bloc `if ckpt_files:` mais référencée après → déplacée avant le bloc.
+  - KeyError dans `run_eval.py` : prints utilisaient `r['avg_center_offset']` et `r['avg_speed_kmh']` (anciens champs pré-refonte) → corrigés en `r['center_offset']['mean_abs']` et `r['speed']['mean']`.
+- Training 300K lancé avec `--tag ppo_v5_gps` sur le PC fixe (100.97.91.60).
+
+**Difficultés** :
+- **`find_dest_spawns.py` v1 : freeze complet**. La première version appelait `nav.plan()` pour chaque point de spawn (155 appels). La fonction de Victor fait un calcul graphique complet (BFS sur le graphe de routes) à chaque invocation et bloquait la boucle pendant 20+ min. Version V2 : utilise uniquement l'API waypoint CARLA (`wp.next()`, `wp.is_junction`, `wp.road_id`) sans aucun appel à `nav.plan()`. Temps d'exécution : ~2 min.
+- **Mauvaise commande nav pour turn_left** : l'overlay vidéo affichait RIGHT alors que le scénario demande un virage à gauche. Root cause : `dest_spawn_idx=None` → route vers `spawn_pts[-1]` → passage par le bras droit du carrefour → commande RIGHT dans l'obs → le modèle tournait à droite systématiquement. Fix : `dest_spawn_idx=140` force un plan vers un spawn uniquement atteignable par la gauche.
+- **Faux positifs de succès** : un modèle immobile toute la durée du scénario passait `_success_no_crash` (pas de collision = succès). Constaté sur les logs de validation 100K où tous les scénarios "passaient" alors que la vidéo montrait la voiture statique. Corrigé avec le critère `max_dist_from_start >= 25m`.
+- **Confusion `carla.Waypoint` vs notre dataclass `Waypoint`** : les deux coexistent avec le même nom court. `carla.Waypoint` (objet API CARLA) a `.transform`, `.is_junction`, `.next()` ; notre `Waypoint` de `navigation_types.py` a `.x`, `.y`, `.z`, `.yaw_deg`. Les erreurs de type sont silencieuses (duck typing Python) et difficiles à tracer dans la pile.
+
+**Décisions** :
+- **`dest_spawn_idx` dans `Scenario`** : on ne change pas le training (reset aléatoire sur toute la map), mais pour le benchmark on replanne vers un spawn cible spécifique après le reset. C'est un GPS prédéfini pour les tests, pas une contrainte de training. Le modèle ne sait pas à l'avance où il va — il suit juste les commandes nav que ça génère.
+- **Seuil off-route à 15m** : tolère les écarts normaux dans les virages (rayon de braquage Tesla ~5m, waypoints ~2m d'espacement) sans déclencher de faux positifs, mais assez strict pour détecter une vraie sortie de route.
+- **Fenêtre glissante ±60 waypoints** : couvre ~120m de route. Assez large pour les jonctions où la voiture peut "sauter" plusieurs waypoints en un seul step.
+- **Métriques riches sans overhead** : toutes les collections sont des `append` Python → une seule passe numpy à la fin du scénario. Overhead mesuré : négligeable (<2ms) vs les 300 steps à 50ms chacun.
+
+**Benchmarks** :
+- Training 300K `ppo_v5_gps` en cours sur PC fixe. Résultats attendus à l'analyse du `evals/results.json`.
+
+**Prochaine étape** :
+1. Analyser `evals/results.json` du training 300K : identifier les scénarios qui échouent (off_route_pct élevé, nav_commands incorrects, trajectoire déviante).
+2. Remplir `dest_spawn_idx` pour `npc_follow` et `npc_crossing` si l'analyse montre des commandes nav incorrectes.
+3. Préparer la démo finale : best model sur les 13 scénarios, vidéo annotée + JSON d'analyse complet.
+
+---
+
+## 2026-06-12 (suite) — Enrichissement métriques eval_model
+
+**Avancement** :
+- Ajout de **6 nouvelles séries temporelles** dans le JSON de `eval_model` (`rl_demo.py`) :
+  - `throttle_series`, `brake_series` — déjà collectés en mémoire mais non exportés. Permettent de tracer les patterns d'accélération/freinage step-by-step et de détecter les oscillations.
+  - `heading_series` (degrés) — erreur d'orientation par step. Permet de voir si le modèle converge vers le cap correct ou oscille.
+  - `obstacle_series` (mètres) — distance obstacle par step. Corrélable avec `brake_series` pour vérifier que le modèle freine bien quand un obstacle approche.
+  - `off_route_series` — liste binaire `[0/1]` : 1 si la voiture était off-route à ce step. Permet de localiser exactement les points de la trajectoire où la déviation se produit.
+  - `dist_series` — distance au spawn d'origine en mètres. Permet de voir si le modèle progresse vers sa destination ou tourne en rond.
+- Ajout de **5 stats supplémentaires** :
+  - `center_offset.pct_centered` — % du temps à |offset| < 0.2 (bien centré dans la voie).
+  - `heading.std_deg` — écart-type du heading error (élevé = oscillation, faible = convergence propre).
+  - `steer.mean` signé — détecte un biais systématique gauche ou droite dans le steering.
+  - `throttle.std` — élevé = throttle instable / oscillant.
+  - `brake.max` — valeur de freinage de pointe, utile pour `emergency_stop`.
+- Ajout du tracking `off_route_series` par step via delta de `env.off_route_count` entre chaque step (pas d'appel supplémentaire à `_is_off_route`, coût nul).
+- Docstring de `compute_reward` dans `reward_fn.py` complétée : description de chaque composant de reward, plages de valeurs, justification du `r_stall` et `r_off_route`.
+- `src/ai/README.md` mis à jour : diagramme de la reward function avec `r_off_route`, structure des fichiers avec `benchmark.py` et les scripts, section complète "Pipeline d'évaluation benchmark" avec table des champs JSON et critères de succès par scénario, commandes utilitaires spawn.
+
+**Difficultés** :
+- Aucune — les 6 séries étaient déjà collectées en mémoire pendant la boucle. Il suffisait de les inclure dans le dict de retour. Overhead nul.
+
+**Décisions** :
+- **Séries brutes exportées** : on les inclut toutes car on ne sait pas encore lesquelles seront utiles pour l'analyse post-training 300K. Le JSON reste <1MB par run — acceptable.
+- **`off_route_series` via delta de `off_route_count`** : plus simple que de ré-appeler `_is_off_route()` directement depuis `eval_model` (qui ne devrait pas connaître les internals de `CarlaEnv`). Le delta donne exactement la même information sans couplage additionnel.
+- **`steer.mean` signé conservé en plus de `steer.mean_abs`** : un biais de `mean = -0.05` (légèrement gauche systématiquement) ne serait pas visible avec seulement `mean_abs = 0.05`.
+
+**Benchmarks** :
+- Training 300K `ppo_v5_gps` en cours. Le JSON enrichi sera disponible dès la fin du run.
+
+**Prochaine étape** :
+1. Analyser `evals/results.json` du training 300K avec les nouvelles séries : tracer trajectoire 2D, corrélation obstacle/brake, off_route_series superposé à la trajectoire.
+2. Identifier les scénarios qui échouent et les causes (biais steering, off_route concentré à un endroit précis, heading qui n'oscille pas assez vite dans les virages).

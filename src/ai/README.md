@@ -38,33 +38,35 @@ CARLA World (sync mode, 20 FPS)
          └─ Collision sensor ──────────► collision (bool, épisode terminé)
 
 [Navigation — Victor]
-         ├─ plan(start, dest) → Route          ← au départ de chaque épisode
-         └─ next_command(pos, route) → HighLevelCommand  ← toutes les ~2s
+         ├─ plan(start, dest) → Route          ← au reset de chaque épisode
+         └─ next_command(pos, route) → HighLevelCommand  ← à chaque step
 
-[Observation vector] — 7 scalaires
-         ├─ speed_norm          = speed_kmh / 90.0               ∈ [0, 1]
-         ├─ cmd_left            = 1.0 si LEFT else 0.0
-         ├─ cmd_right           = 1.0 si RIGHT else 0.0
-         ├─ cmd_straight        = 1.0 si STRAIGHT else 0.0
-         ├─ center_offset       = déviation voie normalisée       ∈ [-1, 1]
-         ├─ nearest_obstacle_m  = min(dist, 50m) / 50.0          ∈ [0, 1]
-         └─ heading_error       = delta_yaw vers prochain wp / 180.0 ∈ [-1, 1]
+[Observation vector] — 7 scalaires normalisés  ∈ [-1, 1] ou [0, 1]
+         ├─ [0] speed_norm     = speed_kmh / 90.0               ∈ [0, 1]
+         ├─ [1] cmd_left       = 1.0 si LEFT else 0.0
+         ├─ [2] cmd_right      = 1.0 si RIGHT else 0.0
+         ├─ [3] cmd_straight   = 1.0 si STRAIGHT else 0.0
+         │       [0,0,0] = LANE_FOLLOW (pas d'intersection)
+         ├─ [4] center_offset  = déviation latérale voie         ∈ [-1, 1]
+         ├─ [5] obstacle_norm  = min(dist_obstacle, 50m) / 50m  ∈ [0, 1]
+         └─ [6] heading_norm   = delta_yaw / 180.0              ∈ [-1, 1]
 
 [PPO Policy] — Stable-Baselines3 MlpPolicy
-         │   2 couches Dense 128, activation tanh
+         │   2 couches Dense 64, activation tanh
          ▼
 [Action] — espace continu Box(3,)
          ├─ steer    ∈ [-1, 1]
          ├─ throttle ∈ [0, 1]
          └─ brake    ∈ [0, 1]
 
-[Reward function — par step]
-         ├─ r_speed    = (speed_kmh / MAX_SPEED) × 0.5       → avance
-         ├─ r_center   = (1 − |center_offset|) × 0.3         → reste centré
-         ├─ r_alive    = +0.01                                → survie
-         ├─ r_stall    = −0.05 si speed < 1 km/h             → pénalise l'immobilisme
-         ├─ r_offroad  = −0.5 si hors route                  → pénalité
-         └─ r_collision = −1.0 + done=True                   → épisode terminé
+[Reward function — par step]   src/ai/rewards/reward_fn.py
+         ├─ r_speed     = (speed_kmh / 90.0) × 0.5     → encourage la vitesse
+         ├─ r_center    = (1 − |center_offset|) × 0.3  → encourage le centrage
+         ├─ r_alive     = +0.01                         → survie (anti-crash passif)
+         ├─ r_stall     = −0.05 si speed < 1 km/h      → pénalise l'immobilisme
+         ├─ r_offroad   = −0.5  si hors chaussée       → pénalité hors route (Karim)
+         ├─ r_off_route = −0.5  si > 15m de la route   → pénalise la déviation GPS
+         └─ r_collision = −1.0 + done=True              → épisode terminé
 ```
 
 ### Espace d'observation — pourquoi des scalaires et pas des pixels
@@ -81,9 +83,18 @@ Pendant l'entraînement, les métriques de perception viennent des capteurs GT C
 ### Intégration navigation Victor
 
 - Au `reset()` de chaque épisode : `nav.plan(spawn_point, destination)` → Route
-- À chaque step ou toutes les N secondes : `nav.next_command(vehicle_pos, route)` → `HighLevelCommand`
-- La commande est encodée en one-hot dans le vecteur d'observation (3 floats : left/right/straight)
-- `LANE_FOLLOW` (pas d'intersection à venir) = `[0, 0, 0]`
+- À chaque step : `nav.next_command(vehicle_pos, route)` → `HighLevelCommand`
+- La commande est encodée en one-hot dans l'observation (3 floats : left/right/straight)
+- `LANE_FOLLOW` (hors intersection) = `[0, 0, 0]`
+
+**Benchmark — GPS route par scénario (`dest_spawn_idx`)** : pour les scénarios de jonction,
+la route est replanifiée vers un spawn cible spécifique après le reset, ce qui garantit que
+la nav donne la bonne commande directionnelle (LEFT / RIGHT / STRAIGHT). Les `dest_spawn_idx`
+ont été identifiés via `scripts/find_dest_spawns.py` (API waypoint CARLA pure, sans nav.plan).
+
+**Pénalité off-route** : `CarlaEnv._is_off_route()` détecte si l'ego est à plus de 15m du
+waypoint de route le plus proche via une fenêtre glissante (O(1) amorti). La pénalité
+`−0.5/step` est appliquée dans `compute_reward(off_route=True)`.
 
 ---
 
@@ -92,18 +103,25 @@ Pendant l'entraînement, les métriques de perception viennent des capteurs GT C
 ```
 src/ai/
 ├── phase0/                    ← Phase 0 archivée (CIL/PilotNet), ne pas modifier
-│   ├── config.py              ← constantes Phase 0 (IMAGE_RAW_HEIGHT, etc.)
+│   ├── config.py
 │   ├── models/
 │   ├── training/
 │   └── inference/
 ├── training/
-│   ├── rl_env.py              ← Phase 1 — CarlaEnv (gym.Env)
-│   ├── rl_train.py            ← Phase 1 — make_model() + train() PPO SB3
-│   └── run_manager.py         ← Phase 1 — dossier de run horodaté, CSV, courbe reward
+│   ├── rl_env.py              ← CarlaEnv (gym.Env) : spaces, reset, step, _is_off_route
+│   ├── rl_train.py            ← make_model() + train() PPO SB3
+│   └── run_manager.py         ← dossier de run horodaté, CSV, courbe reward
 ├── inference/
-│   └── rl_demo.py             ← Phase 1 — run_episode() + record_episode() avec HUD
+│   ├── rl_demo.py             ← run_episode, record_episode, eval_model (benchmark complet)
+│   └── benchmark.py           ← BENCHMARK_SCENARIOS (13 scénarios fixes) + success_fn
 └── rewards/
-    └── reward_fn.py           ← Phase 1 — compute_reward() (fonction pure, MAX_SPEED=90 km/h)
+    └── reward_fn.py           ← compute_reward() — fonction pure, sans CARLA
+
+scripts/
+├── run_rl_training.py         ← Pipeline complète : training + eval checkpoints + vidéos
+├── run_eval.py                ← Évaluation standalone d'un modèle → vidéo + JSON
+├── explore_spawns.py          ← Explore et classe les spawn points par catégorie
+└── find_dest_spawns.py        ← Trouve les dest_spawn_idx par direction de carrefour
 ```
 
 ---
@@ -139,26 +157,108 @@ uv run -m src.ai.inference.carla_demo \
 ## Phase 1 — Lancer le training RL
 
 ```bash
-# Depuis la racine du projet, CARLA actif sur le bon host :
+# Training complet (génère aussi les evals et les vidéos automatiquement) :
 uv run python3 scripts/run_rl_training.py \
-  --timesteps 500000 \
+  --timesteps 300000 \
   --tag ppo_v1 \
-  --host <ip-carla>          # localhost si CARLA sur la même machine, sinon IP WSL host
+  --host <ip-carla>
 
-# Smoke test rapide (vérifie juste que le pipeline tourne) :
+# Smoke test (vérifie que le pipeline tourne, ~2 min) :
 uv run python3 scripts/run_rl_training.py --timesteps 1000 --tag smoke --host <ip-carla>
 ```
 
 Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` :
 
-| Fichier | Contenu |
+| Fichier / Dossier | Contenu |
 |---|---|
 | `params.json` | hyperparamètres + config de la run |
-| `model_best.zip` | meilleur checkpoint (EvalCallback) |
+| `model_best.zip` | meilleur checkpoint (EvalCallback SB3) |
 | `model_final.zip` | poids à la fin du training |
-| `training_log.monitor.csv` | reward / longueur par épisode (format Monitor SB3) |
+| `training_log.monitor.csv` | reward / longueur par épisode (Monitor SB3) |
 | `reward_curve.png` | courbe reward brute + moyenne mobile |
-| `demo.mp4` | vidéo d'inférence avec HUD (params + step + reward + action) |
+| `demo.mp4` | vidéo d'inférence avec HUD (best model, spawn fixe) |
+| `evals/checkpoint_XXXXk.mp4` | vidéo 13 scénarios par checkpoint |
+| `evals/best_model.mp4` | vidéo 13 scénarios du best model |
+| `evals/results.json` | métriques complètes (tous checkpoints + best model) |
+
+## Phase 1 — Évaluation d'un modèle existant
+
+```bash
+# Évalue un modèle sur les 13 scénarios → vidéo annotée + JSON métriques
+uv run python3 scripts/run_eval.py \
+  --model runs/<dir>/best_model.zip \
+  --host <ip-carla>
+# Sortie : eval_best_model.mp4 + eval_best_model.json dans le même dossier que le modèle
+```
+
+### Structure du JSON de résultats
+
+Chaque scénario dans `results.json` contient :
+
+```
+{
+  "straight": {
+    # Résultat
+    "success": true,            # bool (Phase 1) ou null (Phase 2)
+    "terminated": false,        # collision détectée
+    "collision_step": null,     # step de la collision (ou null)
+    "reached_dest": false,      # a atteint dest_spawn_idx (scénarios GPS)
+    "steps": 287,
+    "max_dist_from_start": 54.3,
+    "total_reward": 43.2,
+
+    # Stats vitesse (km/h)
+    "speed": {"mean": 28.4, "max": 51.2, "min": 0.0, "std": 12.1, "pct_moving": 0.94},
+
+    # Stats centrage voie
+    "center_offset": {"mean_abs": 0.08, "max_abs": 0.31, "std": 0.06, "pct_centered": 0.87},
+
+    # Stats orientation
+    "heading": {"mean_abs_deg": 4.2, "max_abs_deg": 18.7, "std_deg": 3.1},
+
+    # Stats obstacle (metres)
+    "obstacle": {"mean_m": 38.1, "min_m": 7.4},
+
+    # Stats actions
+    "steer":    {"mean_abs": 0.04, "mean": -0.003, "std": 0.06},  # mean signé → biais L/R
+    "throttle": {"mean": 0.41, "std": 0.12},                       # std élevé → oscillation
+    "brake":    {"mean": 0.03, "max": 0.88, "pct_braking": 0.08},
+
+    # Commandes nav reçues (step counts)
+    "nav_commands": {"LANE_FOLLOW": 250, "LEFT": 0, "RIGHT": 0, "STRAIGHT": 37},
+
+    # Off-route
+    "off_route_steps": 2,
+    "off_route_pct": 0.007,
+
+    # Séries temporelles (une valeur par step, pour tracer des courbes)
+    "trajectory":      [[x, y, yaw], ...],   # position GPS
+    "rewards_series":  [...],
+    "speed_series":    [...],
+    "center_series":   [...],
+    "steer_series":    [...],
+    "throttle_series": [...],
+    "brake_series":    [...],
+    "heading_series":  [...],                 # degrés
+    "obstacle_series": [...],                 # mètres
+    "nav_series":      [...],                 # 0=FOLLOW 1=LEFT 2=RIGHT 3=STRAIGHT
+    "off_route_series": [...],               # 0/1 par step
+    "dist_series":     [...]                 # distance au spawn (m)
+  }
+}
+```
+
+## Phase 1 — Utilitaires spawn
+
+```bash
+# Explorer et classifier les spawn points de la map (utile pour choisir les spawn_idx)
+uv run python3 scripts/explore_spawns.py --host <ip-carla>
+
+# Identifier les dest_spawn_idx pour les scénarios de jonction
+# (utilise l'API waypoint CARLA directement — aucun appel à nav.plan())
+uv run python3 scripts/find_dest_spawns.py --host <ip-carla>
+# → affiche les candidats left/right/straight + la valeur à coller dans benchmark.py
+```
 
 ---
 
@@ -171,12 +271,27 @@ uv run pytest benchmarks/ai/ -v
 | Fichier | Couverture |
 |---|---|
 | `smoke.py` | reward_fn (8 tests) + stubs GT (7 tests) |
-| `test_rl_env.py` | CarlaEnv — spaces, reset, step, observation, render (20 tests) |
+| `test_rl_env.py` | CarlaEnv — spaces, reset, step, observation, render, off_route (20 tests) |
 | `test_rl_train.py` | make_model, train (4 tests) |
 | `test_rl_demo.py` | run_episode, _add_hud, record_episode, load_model (11 tests) |
 | `test_run_manager.py` | make_run_dir, save_params, plot_reward_curve (8 tests) |
 
 Tous les tests tournent **sans CARLA** (Mocks). Les tests Phase 0 sont dans `benchmarks/ai/phase0/`.
+
+### Benchmark 13 scénarios — critères de succès Phase 1
+
+| Scénario | spawn_idx | dest_spawn_idx | Critère de succès |
+|---|---|---|---|
+| `straight` | 6 | — | pas de collision + ≥ 25m parcourus + offset moyen < 0.3 |
+| `curve_left` | 8 | — | pas de collision + ≥ 25m parcourus |
+| `curve_right` | 32 | — | pas de collision + ≥ 25m parcourus |
+| `turn_left` | 0 | 140 | atteindre dest (rayon 15m) sans collision |
+| `turn_right` | 70 | 68 | atteindre dest (rayon 15m) sans collision |
+| `junction_straight` | 31 | 119 | atteindre dest (rayon 15m) sans collision |
+| `npc_follow` | 6 | — | pas de collision + ≥ 25m parcourus |
+| `npc_crossing` | 0 | — | pas de collision + ≥ 25m parcourus |
+
+Phase 2 (enregistré sans critère) : `red_light`, `speed_zone`, `pedestrian`, `emergency_stop`, `lane_change`.
 
 ---
 

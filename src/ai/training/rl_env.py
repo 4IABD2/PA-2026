@@ -23,7 +23,8 @@ _OBS_HIGH = np.array([1.0, 1.0, 1.0, 1.0,  1.0, 1.0,  1.0], dtype=np.float32)
 
 _MAX_SPEED_KMH = 90.0
 _MAX_OBSTACLE_M = 50.0
-_WARMUP_TICKS = 5  # ticks after teleport so physics settles and sensors fill
+_WARMUP_TICKS = 5     # ticks after teleport so physics settles and sensors fill
+_OFF_ROUTE_M = 15.0   # metres from nearest route waypoint before off_route penalty fires
 
 
 class CarlaEnv(gym.Env):
@@ -57,17 +58,30 @@ class CarlaEnv(gym.Env):
         self._collision_flag: bool = False
         self._last_image: np.ndarray | None = None
         self._step_count: int = 0
+        self._route_idx: int = 0       # sliding pointer into route.waypoints for efficient off-route check
+        self.off_route_count: int = 0  # steps spent off-route this episode (readable by eval_model)
 
         collision_sensor.listen(lambda _: setattr(self, "_collision_flag", True))
         camera.listen(self._on_camera)
 
     def reset(self, *, seed: int | None = None, options: dict | None = None) -> tuple[np.ndarray, dict]:
         super().reset(seed=seed)
-        self._teleport_to_spawn()
+        spawn_idx = (options or {}).get("spawn_idx")
+        self._teleport_to_spawn(spawn_idx)
         if hasattr(self.nav, 'index_way'):
             self.nav.index_way = 0
+        # Replan route from new position so nav commands are correct at every spawn.
+        if spawn_idx is not None and hasattr(self.nav, 'plan'):
+            try:
+                spawn_pts = self.world.get_map().get_spawn_points()
+                dest = spawn_pts[-1].location
+                self.route = self.nav.plan(self.ego.get_transform().location, dest)
+            except Exception:
+                pass
         self._collision_flag = False
         self._step_count = 0
+        self._route_idx = 0
+        self.off_route_count = 0
         self._last_image = None
         for _ in range(_WARMUP_TICKS):
             self.world.tick()
@@ -84,11 +98,15 @@ class CarlaEnv(gym.Env):
         obs = self._get_obs()
         speed_kmh = self._speed_kmh()
         # is_on_road: replaced by semantic segmentation when Karim's model is ready
+        off_route = self._is_off_route()
+        if off_route:
+            self.off_route_count += 1
         reward, terminated = compute_reward(
             speed_kmh=speed_kmh,
             center_offset=float(obs[4]),
             is_on_road=True,
             collision=self._collision_flag,
+            off_route=off_route,
         )
         truncated = self._step_count >= self.max_episode_steps
         return obs, reward, terminated, truncated, {}
@@ -127,11 +145,15 @@ class CarlaEnv(gym.Env):
     def render(self) -> np.ndarray | None:
         return self._last_image
 
-    def _teleport_to_spawn(self) -> None:
+    def _teleport_to_spawn(self, spawn_idx: int | None = None) -> None:
         spawn_points = self.world.get_map().get_spawn_points()
         if not spawn_points:
             return
-        spawn = spawn_points[int(self.np_random.integers(len(spawn_points)))]
+        if spawn_idx is not None:
+            idx = int(spawn_idx) % len(spawn_points)
+        else:
+            idx = int(self.np_random.integers(len(spawn_points)))
+        spawn = spawn_points[idx]
         self.ego.set_transform(spawn)
         try:
             from carla import Vector3D  # noqa: PLC0415
@@ -150,6 +172,30 @@ class CarlaEnv(gym.Env):
     def _speed_kmh(self) -> float:
         v = self.ego.get_velocity()
         return math.sqrt(v.x**2 + v.y**2 + v.z**2) * 3.6
+
+    def _is_off_route(self) -> bool:
+        """True if ego is more than _OFF_ROUTE_M metres from the nearest route waypoint.
+
+        Uses a sliding window around _route_idx for O(1) amortised cost instead of
+        scanning the whole route each step.
+        """
+        if not (self.route and self.route.waypoints):
+            return False
+        wps = self.route.waypoints
+        n = len(wps)
+        start = max(0, self._route_idx - 5)
+        end = min(n, self._route_idx + 60)
+        ego = self.ego.get_transform().location
+        min_dist_sq = float("inf")
+        min_idx = self._route_idx
+        for i in range(start, end):
+            wp = wps[i]
+            d_sq = (ego.x - wp.x) ** 2 + (ego.y - wp.y) ** 2
+            if d_sq < min_dist_sq:
+                min_dist_sq = d_sq
+                min_idx = i
+        self._route_idx = min_idx
+        return min_dist_sq > _OFF_ROUTE_M ** 2
 
     def _on_camera(self, raw_image) -> None:
         arr = np.frombuffer(raw_image.raw_data, dtype=np.uint8).reshape(
