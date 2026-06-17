@@ -12,8 +12,8 @@ from typing import Any
 
 import pandas as pd
 
-from src.dataset.command_planner import HighLevelCommand
-from src.dataset.expert_driver import ExpertControls
+from src.dataset.collection.command_planner import HighLevelCommand
+from src.dataset.collection.expert_driver import ExpertControls
 
 CSV_COLUMNS = [
     "frame_id",
