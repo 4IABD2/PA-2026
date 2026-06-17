@@ -1,9 +1,17 @@
 """FiftyOne visualizer for CARLA dataset runs.
 
+Accepte une ou plusieurs runs, ou un dossier de session (tous ses sous-dossiers
+de runs sont chargés dans un même dataset, avec un champ ``run`` pour filtrer).
+
 Usage:
-    uv run -m src.tools.visualize_fiftyone --run data/runs/<RUN>
-    uv run -m src.tools.visualize_fiftyone --run data/runs/<RUN> --labels labels_yolo
-    uv run -m src.tools.visualize_fiftyone --run data/runs/<RUN> --port 5152
+    # Une run
+    uv run -m src.tools.visualize_fiftyone --run data/runs/<SESSION>/<town_weather>
+    # Toute une session de collecte (charge toutes les runs d'un coup)
+    uv run -m src.tools.visualize_fiftyone --run data/runs/<SESSION>
+    # Plusieurs chemins explicites
+    uv run -m src.tools.visualize_fiftyone --run data/runs/<A> data/runs/<B>
+    # Labels bruts au lieu des enrichis, port custom
+    uv run -m src.tools.visualize_fiftyone --run data/runs/<SESSION> --labels labels_yolo --port 5152
 """
 
 from __future__ import annotations
@@ -22,18 +30,27 @@ FINAL_CLASSES = [
     "green_light",
     "speed_30",
     "speed_40",
-    "speed_50",
     "speed_60",
-    "speed_70",
-    "speed_80",
     "speed_90",
+    "stop",
+    "yield",
 ]
 
+# Labels bruts (labels_yolo/) : 0/1/2 = vehicle/walker/traffic_light écrits par
+# le collector ; 5..10 = panneaux labellisés en ground-truth direct.
+# Les index 3/4 ne sont plus émis — placeholders pour garder l'alignement.
 RAW_CLASSES = [
     "vehicle",
     "walker",
     "traffic_light",
     "traffic_sign",
+    "(raw4)",
+    "speed_30",
+    "speed_40",
+    "speed_60",
+    "speed_90",
+    "stop",
+    "yield",
 ]
 
 
@@ -47,11 +64,9 @@ def _parse_yolo_line(
     if cls_id >= len(class_names):
         return None
     cx, cy, w, h = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
-    x = cx - w / 2
-    y = cy - h / 2
     return fo.Detection(
         label=class_names[cls_id],
-        bounding_box=[x, y, w, h],
+        bounding_box=[cx - w / 2, cy - h / 2, w, h],
     )
 
 
@@ -60,47 +75,51 @@ def load_run(
 ) -> fo.Dataset:
     images_dir = run_dir / "images"
     labels_dir = run_dir / labels_dir_name
-
-    if not images_dir.is_dir():
-        sys.exit(f"Images directory not found: {images_dir}")
     if not labels_dir.is_dir():
-        sys.exit(f"Labels directory not found: {labels_dir}")
+        print(f"  ⚠ {run_dir.name}: pas de {labels_dir_name}/, labels ignorés")
 
+    image_paths = sorted(images_dir.glob("*.jpg")) or sorted(images_dir.glob("*.png"))
+    if not image_paths:
+        print(f"  ⚠ {run_dir.name}: aucune image, run ignorée")
+        return []
+
+    samples = []
+    for img_path in image_paths:
+        sample = fo.Sample(filepath=str(img_path))
+        sample["run"] = run_dir.name
+
+        detections = []
+        label_path = labels_dir / f"{img_path.stem}.txt"
+        if label_path.exists() and label_path.stat().st_size > 0:
+            for line in label_path.read_text().strip().splitlines():
+                det = _parse_yolo_line(line, class_names)
+                if det is not None:
+                    detections.append(det)
+        sample["ground_truth"] = fo.Detections(detections=detections)
+        samples.append(sample)
+    return samples
+
+
+def build_dataset(
+    run_dirs: list[Path], labels_dir_name: str = "labels_yolo_enriched"
+) -> fo.Dataset:
     class_names = FINAL_CLASSES if "enriched" in labels_dir_name else RAW_CLASSES
 
-    image_paths = sorted(images_dir.glob("*.jpg"))
-    if not image_paths:
-        image_paths = sorted(images_dir.glob("*.png"))
-    if not image_paths:
-        sys.exit(f"No images found in {images_dir}")
-
-    dataset_name = f"carla_{run_dir.name}_{labels_dir_name}"
+    if len(run_dirs) == 1:
+        dataset_name = f"carla_{run_dirs[0].name}_{labels_dir_name}"
+    else:
+        dataset_name = f"carla_{run_dirs[0].parent.name}_{labels_dir_name}"
     if fo.dataset_exists(dataset_name):
         fo.delete_dataset(dataset_name)
 
     dataset = fo.Dataset(name=dataset_name)
     dataset.persistent = False
 
-    samples = []
-    for img_path in image_paths:
-        label_path = labels_dir / f"{img_path.stem}.txt"
-        sample = fo.Sample(filepath=str(img_path))
-
-        detections = []
-        if label_path.exists() and label_path.stat().st_size > 0:
-            from PIL import Image
-
-            img = Image.open(img_path)
-            img_w, img_h = img.size
-            for line in label_path.read_text().strip().splitlines():
-                det = _parse_yolo_line(line, img_w, img_h, class_names)
-                if det is not None:
-                    detections.append(det)
-
-        sample["ground_truth"] = fo.Detections(detections=detections)
-        samples.append(sample)
-
-    dataset.add_samples(samples)
+    for run_dir in run_dirs:
+        print(f"Chargement {run_dir.name} ({labels_dir_name})...")
+        samples = _samples_for_run(run_dir, labels_dir_name, class_names)
+        if samples:
+            dataset.add_samples(samples)
     return dataset
 
 
@@ -123,9 +142,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    run_dir = Path(args.run)
-    if not run_dir.is_dir():
-        sys.exit(f"Run directory not found: {run_dir}")
+    run_dirs = discover_runs([Path(p) for p in args.run])
+    print(f"{len(run_dirs)} run(s) à charger.")
 
     print(f"Loading {run_dir.name} with labels from {args.labels}...")
     dataset = load_run(run_dir, args.labels)
@@ -134,7 +152,8 @@ def main() -> None:
     )
 
     session = fo.launch_app(dataset, port=args.port)
-    print(f"FiftyOne app running at http://localhost:{args.port}")
+    print(f"FiftyOne app: http://localhost:{args.port}")
+    print("Astuce : filtre par le champ 'run' pour isoler une map/météo.")
     session.wait()
 
 

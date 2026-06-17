@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-from src.dataset.enrich_labels import classify_tl_color
+from src.dataset.labeling.enrich_labels import classify_tl_color
 from src.interfaces.perception_types import DetectedObject, ObjectClass
 
 _YOLO_TO_OBJECTCLASS: dict[int, ObjectClass] = {
@@ -15,11 +15,10 @@ _YOLO_TO_OBJECTCLASS: dict[int, ObjectClass] = {
     4: ObjectClass.GREEN_LIGHT,
     5: ObjectClass.SPEED_30,
     6: ObjectClass.SPEED_40,
-    7: ObjectClass.SPEED_50,
-    8: ObjectClass.SPEED_60,
-    9: ObjectClass.SPEED_70,
-    10: ObjectClass.SPEED_80,
-    11: ObjectClass.SPEED_90,
+    7: ObjectClass.SPEED_60,
+    8: ObjectClass.SPEED_90,
+    9: ObjectClass.STOP,
+    10: ObjectClass.YIELD,
 }
 
 _LIGHT_IDS = {2, 3, 4}

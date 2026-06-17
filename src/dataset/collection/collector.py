@@ -12,18 +12,12 @@ from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.dataset.camera_capture import (
-    CAMERA_LOCATION,
-    CAMERA_ROTATION_PITCH,
-    CameraCapture,
-)
-from src.dataset.command_planner import CommandPlanner, HighLevelCommand
-from src.dataset.depth_capture import DepthCapture
-from src.dataset.expert_driver import ExpertDriver
-from src.dataset.instance_capture import InstanceCapture
-from src.dataset.manifest_writer import ManifestWriter
-from src.dataset.semantic_capture import SemanticCapture
-from src.dataset.yolo_labels import YoloLabeler
+from src.dataset.collection.command_planner import CommandPlanner, HighLevelCommand
+from src.dataset.collection.expert_driver import ExpertDriver
+from src.dataset.collection.manifest_writer import ManifestWriter
+from src.dataset.collection.sensors import CameraSensor, SENSOR_SPECS
+from src.dataset.encodings import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
+from src.dataset.labeling.yolo_labels import YoloLabeler
 
 if TYPE_CHECKING:
     import carla  # noqa: F401
@@ -35,18 +29,6 @@ COLLISION_LOOKBACK_FRAMES = 5
 
 def _log(msg: str) -> None:
     print(f"[collector] {msg}", flush=True)
-
-
-# Subdirectories created under output_dir for every run.
-OUTPUT_SUBDIRS = [
-    "images",
-    "depth",
-    "labels_yolo",
-    "semantic",
-    "semantic_viz",
-    "instance",
-    "instance_viz",
-]
 
 
 class DatasetCollector:
@@ -67,6 +49,7 @@ class DatasetCollector:
         image_width: int = 1280,
         image_height: int = 720,
         fov: int = 90,
+        timeout_sec: float = 60.0,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.town = town
@@ -81,19 +64,21 @@ class DatasetCollector:
         self.image_width = image_width
         self.image_height = image_height
         self.fov = fov
+        # Timeout client CARLA. Le défaut historique (10s) suffit pour Town01/03
+        # mais les grosses maps (Town05 urbain dense) mettent >10s à charger →
+        # time-out. 60s couvre le chargement de toutes les maps.
+        self.timeout_sec = timeout_sec
 
         self._validate_output_dir()
 
-        # Internal state set up in setup()
+        # Internal state set up in _setup()
         self._client: "carla.Client | None" = None
         self._world: "carla.World | None" = None
         self._traffic_manager: "carla.TrafficManager | None" = None
         self._ego: "carla.Vehicle | None" = None
         self._npc_actors: list = []
-        self._camera: CameraCapture | None = None
-        self._depth: DepthCapture | None = None
-        self._semantic: SemanticCapture | None = None
-        self._instance: InstanceCapture | None = None
+        # Dict keyed by sensor name ("rgb", "depth", "semantic", "instance")
+        self._sensors: dict[str, CameraSensor] = {}
         self._yolo_labeler: YoloLabeler | None = None
         self._command_planner: CommandPlanner | None = None
         self._expert: ExpertDriver | None = None
@@ -121,7 +106,7 @@ class DatasetCollector:
 
         _log(f"connecting to {self.host}:{self.port}")
         self._client = carla.Client(self.host, self.port)
-        self._client.set_timeout(10.0)
+        self._client.set_timeout(self.timeout_sec)
         _log(f"loading {self.town}")
         self._world = self._client.load_world(self.town)
 
@@ -145,23 +130,17 @@ class DatasetCollector:
         self._npc_actors = self._spawn_npcs()
         _log(f"spawned ego + {len(self._npc_actors)}/{self.n_npc_vehicles} NPCs")
 
-        self._camera = CameraCapture(
-            self._world,
-            self._ego,
-            width=self.image_width,
-            height=self.image_height,
-            fov=self.fov,
-        )
         self._sensors_attach()
         _log("sensors attached, warming up")
 
         self._yolo_labeler = YoloLabeler(
             self._world,
             self._ego,
-            self._camera._sensor,
-            self._instance,
+            self._sensors["rgb"]._sensor,
+            self._sensors["instance"],
             image_w=self.image_width,
             image_h=self.image_height,
+            fov=self.fov,
         )
         self._command_planner = CommandPlanner(self._world, self._ego)
         self._expert = ExpertDriver(self._ego, self._traffic_manager)
@@ -170,8 +149,6 @@ class DatasetCollector:
             self._world.tick()
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        for subdir in OUTPUT_SUBDIRS:
-            (self.output_dir / subdir).mkdir(exist_ok=True)
         self._manifest = ManifestWriter(self.output_dir, self.town, self.weather)
         _log(f"ready, writing to {self.output_dir}")
 
@@ -186,7 +163,7 @@ class DatasetCollector:
         return ego
 
     def _spawn_npcs(self) -> list:
-        """Spawn N NPC vehicles + walkers (best effort, may spawn fewer if no room).
+        """Spawn N NPC vehicles (best effort, may spawn fewer if no room).
 
         TODO: full walker implementation requires WalkerAIController which is
         more complex. For the MVP skeleton, we spawn only NPC vehicles.
@@ -197,7 +174,6 @@ class DatasetCollector:
         vehicle_bps = bp_lib.filter("vehicle.*")
         spawn_points = self._world.get_map().get_spawn_points()
 
-        # NPC vehicles
         for i in range(min(self.n_npc_vehicles, len(spawn_points) - 1)):
             bp = random.choice(vehicle_bps)
             try:
@@ -208,40 +184,24 @@ class DatasetCollector:
             except Exception:
                 continue
 
-        # TODO walkers (Franck) — not in MVP skeleton
         return npcs
 
     def _sensors_attach(self) -> None:
-        """Attach camera + depth + collision sensors."""
+        """Create and attach all camera sensors + collision sensor."""
         import carla
 
-        self._camera.attach()
-        self._depth = DepthCapture(
-            self._world,
-            self._ego,
-            width=self.image_width,
-            height=self.image_height,
-            fov=self.fov,
-        )
-        self._depth.attach()
-
-        self._semantic = SemanticCapture(
-            self._world,
-            self._ego,
-            width=self.image_width,
-            height=self.image_height,
-            fov=self.fov,
-        )
-        self._semantic.attach()
-
-        self._instance = InstanceCapture(
-            self._world,
-            self._ego,
-            width=self.image_width,
-            height=self.image_height,
-            fov=self.fov,
-        )
-        self._instance.attach()
+        for key, blueprint, writer in SENSOR_SPECS:
+            sensor = CameraSensor(
+                self._world,
+                self._ego,
+                blueprint=blueprint,
+                writer=writer,
+                width=self.image_width,
+                height=self.image_height,
+                fov=self.fov,
+            )
+            sensor.attach()
+            self._sensors[key] = sensor
 
         # Collision sensor on ego (for is_collision in manifest)
         bp = self._world.get_blueprint_library().find("sensor.other.collision")
@@ -253,9 +213,6 @@ class DatasetCollector:
 
     def _on_collision(self, event) -> None:
         """Mark the current frame as having a collision."""
-        # Push 1 into the recent-frames window
-        # (the main loop pushes 0 on each captured frame to advance the window;
-        # the 1 will overwrite the latest 0)
         if self._collision_events_recent:
             self._collision_events_recent[-1] = 1
 
@@ -263,25 +220,16 @@ class DatasetCollector:
         """Release CARLA actors and restore settings.
 
         Order: stop listeners → batch-destroy synchronously → null Python refs.
-        Sequential destroy crashes the C++ runtime if a callback is in flight; nulling
-        Python refs before the server confirms destruction triggers
-        "sensor object went out of the scope" warnings.
         """
         import carla
 
         if self._client is not None:
             _log("cleanup: stopping listeners")
-            sensor_wrappers = [
-                self._camera,
-                self._depth,
-                self._semantic,
-                self._instance,
-            ]
 
-            for w in sensor_wrappers:
-                if w is not None and w._sensor is not None:
+            for sensor in self._sensors.values():
+                if sensor._sensor is not None:
                     try:
-                        w._sensor.stop()
+                        sensor._sensor.stop()
                     except Exception:
                         pass
             if self._collision_sensor is not None:
@@ -293,9 +241,9 @@ class DatasetCollector:
             destroy_cmds = []
             if self._collision_sensor is not None:
                 destroy_cmds.append(carla.command.DestroyActor(self._collision_sensor))
-            for w in sensor_wrappers:
-                if w is not None and w._sensor is not None:
-                    destroy_cmds.append(carla.command.DestroyActor(w._sensor))
+            for sensor in self._sensors.values():
+                if sensor._sensor is not None:
+                    destroy_cmds.append(carla.command.DestroyActor(sensor._sensor))
             for npc in self._npc_actors:
                 destroy_cmds.append(carla.command.DestroyActor(npc))
             if self._ego is not None:
@@ -304,9 +252,8 @@ class DatasetCollector:
                 _log(f"cleanup: destroying {len(destroy_cmds)} actors")
                 self._client.apply_batch_sync(destroy_cmds, True)
 
-            for w in sensor_wrappers:
-                if w is not None:
-                    w._sensor = None
+            for sensor in self._sensors.values():
+                sensor._sensor = None
             self._collision_sensor = None
 
         if self._world is not None and self._original_settings is not None:
@@ -320,6 +267,22 @@ class DatasetCollector:
             except Exception:
                 pass
         _log("cleanup done")
+
+    def _wait_for_sensors(self, frame: int, timeout_s: float = 2.0) -> bool:
+        """Bloque jusqu'à ce que tous les capteurs aient bufferisé ``frame``.
+
+        Les callbacks ``listen`` des capteurs sont asynchrones : après
+        ``world.tick()`` les données arrivent avec un léger délai. On attend que
+        chaque capteur ait livré la frame attendue pour garantir que toutes les
+        modalités (rgb / depth / semantic / instance) sont parfaitement alignées.
+        ``time.sleep`` relâche le GIL pour laisser les callbacks s'exécuter.
+        """
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            if all(s.has_frame(frame) for s in self._sensors.values()):
+                return True
+            time.sleep(0.001)
+        return False
 
     def run(self) -> None:
         """Setup -> tick loop -> cleanup. Blocking.
@@ -342,7 +305,7 @@ class DatasetCollector:
             _log(f"capture loop: target {target_frames} frames ({target_ticks} ticks)")
 
             while tick_count < target_ticks:
-                self._world.tick()
+                world_frame = self._world.tick()
                 tick_count += 1
 
                 if tick_count % 200 == 0:
@@ -355,33 +318,28 @@ class DatasetCollector:
                 if tick_count % self.capture_every_n_ticks != 0:
                     continue
 
-                # Advance the collision window (push 0 by default; the
-                # collision callback will overwrite to 1 if event on this frame)
+                # Advance the collision window
                 self._collision_events_recent.append(0)
 
-                img_rel = f"images/{frame_id:06d}.jpg"
-                depth_rel = f"depth/{frame_id:06d}.npy"
-                label_rel = f"labels_yolo/{frame_id:06d}.txt"
-                sem_rel = f"semantic/{frame_id:06d}.npy"
-                sem_viz_rel = f"semantic_viz/{frame_id:06d}.png"
-                inst_rel = f"instance/{frame_id:06d}.npy"
-                inst_viz_rel = f"instance_viz/{frame_id:06d}.png"
+                # Attendre que TOUS les capteurs aient livré la frame courante
+                # avant de sauver : les callbacks sont asynchrones, sinon le mask
+                # d'instance et l'image RGB peuvent venir de frames différentes
+                # → bbox décalées quand l'ego bouge.
+                if not self._wait_for_sensors(world_frame):
+                    _log(f"WARN frame {frame_id}: capteurs désynchronisés, skip")
+                    continue
 
-                self._camera.save_last_frame(self.output_dir / img_rel)
-                self._depth.save_last_frame(self.output_dir / depth_rel)
-                self._semantic.save_last_frame(
-                    self.output_dir / sem_rel, self.output_dir / sem_viz_rel
-                )
-                self._instance.save_last_frame(
-                    self.output_dir / inst_rel, self.output_dir / inst_viz_rel
-                )
+                # Save all sensor modalities (rgb, depth, semantic, instance)
+                for sensor in self._sensors.values():
+                    sensor.save(self.output_dir, frame_id)
 
-                # YOLO labels: best-effort, NotImplementedError expected in MVP
+                # YOLO labels: best-effort
+                label_path = self.output_dir / "labels_yolo" / f"{frame_id:06d}.txt"
                 try:
-                    self._yolo_labeler.save(self.output_dir / label_rel)
+                    self._yolo_labeler.save(label_path)
                 except NotImplementedError:
-                    # Write an empty file to stay consistent with the rest
-                    (self.output_dir / label_rel).write_text("")
+                    label_path.parent.mkdir(parents=True, exist_ok=True)
+                    label_path.write_text("")
 
                 expert_controls = self._expert.read_controls()
                 command = self._command_planner.current_command()
@@ -390,7 +348,7 @@ class DatasetCollector:
 
                 self._manifest.append_row(
                     frame_id=frame_id,
-                    image_path=img_rel,
+                    image_path=f"images/{frame_id:06d}.jpg",
                     timestamp=ts,
                     command=command,
                     expert=expert_controls,
@@ -411,7 +369,7 @@ class DatasetCollector:
                 capture_every_n_ticks=self.capture_every_n_ticks,
                 n_frames=frame_id,
                 n_npc_vehicles=len(self._npc_actors),
-                n_npc_walkers=0,  # walkers not in MVP
+                n_npc_walkers=0,
                 duration_sec_target=self.duration_sec,
                 duration_sec_actual=round(run_end - run_start, 2),
                 camera_pov={

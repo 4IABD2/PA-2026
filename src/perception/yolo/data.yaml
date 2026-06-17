@@ -10,8 +10,7 @@ names:
   4: green_light
   5: speed_30
   6: speed_40
-  7: speed_50
-  8: speed_60
-  9: speed_70
-  10: speed_80
-  11: speed_90
+  7: speed_60
+  8: speed_90
+  9: stop
+  10: yield
