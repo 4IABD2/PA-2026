@@ -21,7 +21,7 @@ import numpy as np
 class ObjectClass(str, Enum):
     """Classes d'objets reconnues par le système.
 
-    Aligné sur les 12 classes du dataset CARLA enrichi (enrich_labels.py).
+    Aligné sur les 14 classes du dataset CARLA enrichi (enrich_labels.py).
     """
 
     VEHICLE = "vehicle"
@@ -31,11 +31,10 @@ class ObjectClass(str, Enum):
     GREEN_LIGHT = "green_light"
     SPEED_30 = "speed_30"
     SPEED_40 = "speed_40"
-    SPEED_50 = "speed_50"
     SPEED_60 = "speed_60"
-    SPEED_70 = "speed_70"
-    SPEED_80 = "speed_80"
     SPEED_90 = "speed_90"
+    STOP = "stop"
+    YIELD = "yield"
     UNKNOWN = "unknown"
 
 

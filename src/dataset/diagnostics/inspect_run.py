@@ -8,8 +8,8 @@ classes sont présentes, combien d'instances par classe, taille pixel des
 clusters. Utile pour debugger pourquoi un objet visible n'est pas labellisé.
 
 Usage :
-    uv run -m src.dataset.inspect_run --run data/runs/<run>
-    uv run -m src.dataset.inspect_run --run data/runs/<run> --frame 17
+    uv run -m src.dataset inspect-run --run data/runs/<session>/<run>
+    uv run -m src.dataset inspect-run --run data/runs/<session>/<run> --frame 17
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.dataset.enrich_labels import FINAL_CLASSES
-from src.dataset.yolo_labels import (
+from src.dataset.labeling.enrich_labels import FINAL_CLASSES
+from src.dataset.labeling.yolo_labels import (
     YOLO_CLASS_MAPPING,
     _MIN_BBOX_SIDE_PX,
     _MIN_SIGN_BBOX_SIDE_PX,
@@ -80,7 +80,7 @@ def _format_size(n_bytes: int) -> str:
 
 def _summarize_run(run_dir: Path) -> None:
     labels_raw = run_dir / "labels_yolo"
-    labels_color = run_dir / "labels_yolo_color"
+    labels_enriched = run_dir / "labels_yolo_enriched"
     images = run_dir / "images"
 
     if not images.is_dir():
@@ -105,19 +105,19 @@ def _summarize_run(run_dir: Path) -> None:
     )
     print()
 
-    # Compteurs par classe — préfère labels_yolo_color s'il existe (12 classes),
-    # sinon labels_yolo (4 classes raw).
-    if labels_color.is_dir():
+    # Compteurs par classe — préfère labels_yolo_enriched s'il existe
+    # (11 classes finales), sinon labels_yolo (classes brutes du collector).
+    if labels_enriched.is_dir():
         names = FINAL_CLASSES
-        source = labels_color
-        print(f"  Compteurs par classe ({labels_color.name}/) :")
+        source = labels_enriched
+        print(f"  Compteurs par classe ({labels_enriched.name}/) :")
     elif labels_raw.is_dir():
         names = [
             _RAW_CLASS_NAMES.get(i, f"cls_{i}")
             for i in range(max(_RAW_CLASS_NAMES) + 1)
         ]
         source = labels_raw
-        print(f"  Compteurs par classe ({labels_raw.name}/, raw 4 classes) :")
+        print(f"  Compteurs par classe ({labels_raw.name}/, raw) :")
     else:
         names = []
         source = None
