@@ -153,9 +153,8 @@ def _summarize_run(run_dir: Path) -> None:
         "semantic",
         "viz",
         "labels_yolo",
-        "labels_yolo_color",
+        "labels_yolo_enriched",
         "debug_dropped_tl",
-        "debug_dropped_signs",
     ]
     total = 0
     for sub in subdirs:
