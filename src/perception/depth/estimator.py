@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import cv2
 import numpy as np
-import torch
 from PIL import Image
 from transformers import pipeline
 
@@ -19,7 +21,9 @@ class DepthEstimator:
         model_name: str = "depth-anything/Depth-Anything-V2-Small-hf",
         device: str = "cpu",
         max_depth_m: float = 100.0,
+        calibration_path: str | Path | None = None,
     ) -> None:
+        self.model_name = model_name
         self.device = device
         self.max_depth_m = max_depth_m
         self._pipe = pipeline(
@@ -29,6 +33,8 @@ class DepthEstimator:
         )
         self._scale: float | None = None
         self._shift: float | None = None
+        if calibration_path is not None:
+            self.load_calibration(calibration_path)
 
     def _raw_disparity(self, image: np.ndarray) -> np.ndarray:
         h, w = image.shape[:2]
@@ -79,3 +85,31 @@ class DepthEstimator:
         print(
             f"Calibrated: scale={self._scale:.4f}, shift={self._shift:.4f}, RMSE={rmse:.2f}m"
         )
+
+    @property
+    def is_calibrated(self) -> bool:
+        return self._scale is not None
+
+    def save_calibration(self, path: str | Path) -> None:
+        """Persiste scale/shift en JSON (évite de recalibrer à chaque démarrage)."""
+        if self._scale is None:
+            raise RuntimeError("Rien à sauvegarder : le modèle n'est pas calibré.")
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "scale": self._scale,
+                    "shift": self._shift,
+                    "max_depth_m": self.max_depth_m,
+                    "model_name": self.model_name,
+                },
+                indent=2,
+            )
+        )
+
+    def load_calibration(self, path: str | Path) -> None:
+        """Charge scale/shift depuis un JSON produit par ``save_calibration``."""
+        data = json.loads(Path(path).read_text())
+        self._scale = float(data["scale"])
+        self._shift = float(data["shift"])

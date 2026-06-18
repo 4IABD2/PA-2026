@@ -1,0 +1,6 @@
+{
+  "scale": 391.0171813964844,
+  "shift": 0.16536188125610352,
+  "max_depth_m": 100.0,
+  "model_name": "depth-anything/Depth-Anything-V2-Small-hf"
+}
