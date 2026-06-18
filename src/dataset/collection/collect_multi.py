@@ -21,8 +21,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from src.dataset.collector import DatasetCollector
-from src.dataset.enrich_labels import process_run as enrich_run
+from src.dataset.collection.collector import DatasetCollector
+from src.dataset.labeling.enrich_labels import process_run as enrich_run
 
 _DEFAULT_CAPTURE_EVERY_N_TICKS = 40
 _CARLA_FPS = 20
