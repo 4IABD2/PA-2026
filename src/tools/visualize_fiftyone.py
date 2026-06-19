@@ -54,9 +54,7 @@ RAW_CLASSES = [
 ]
 
 
-def _parse_yolo_line(
-    line: str, img_w: int, img_h: int, class_names: list[str]
-) -> dict | None:
+def _parse_yolo_line(line: str, class_names: list[str]) -> fo.Detection | None:
     parts = line.strip().split()
     if len(parts) < 5:
         return None
@@ -70,9 +68,28 @@ def _parse_yolo_line(
     )
 
 
-def load_run(
-    run_dir: Path, labels_dir_name: str = "labels_yolo_enriched"
-) -> fo.Dataset:
+def discover_runs(paths: list[Path]) -> list[Path]:
+    """Étend chaque chemin en liste de runs.
+
+    Un chemin qui contient un sous-dossier ``images/`` est une run. Sinon, on le
+    traite comme un dossier de session et on prend tous ses sous-dossiers qui
+    sont des runs.
+    """
+    runs: list[Path] = []
+    for path in paths:
+        if not path.is_dir():
+            sys.exit(f"Run directory not found: {path}")
+        if (path / "images").is_dir():
+            runs.append(path)
+            continue
+        children = [c for c in sorted(path.iterdir()) if (c / "images").is_dir()]
+        if not children:
+            sys.exit(f"Aucune run (dossier avec images/) trouvée sous {path}")
+        runs.extend(children)
+    return runs
+
+
+def _samples_for_run(run_dir: Path, labels_dir_name: str, class_names: list[str]):
     images_dir = run_dir / "images"
     labels_dir = run_dir / labels_dir_name
     if not labels_dir.is_dir():
@@ -125,30 +142,32 @@ def build_dataset(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Visualize a CARLA dataset run with FiftyOne"
+        description="Visualize one or more CARLA dataset runs with FiftyOne"
     )
     parser.add_argument(
         "--run",
         required=True,
-        help="Path to a run directory (e.g. data/runs/2026-05-20_town01_clearnoon)",
+        nargs="+",
+        help="Une ou plusieurs runs, ou un dossier de session (toutes ses runs)",
     )
     parser.add_argument(
         "--labels",
         default="labels_yolo_enriched",
-        help="Labels subdirectory to use (default: labels_yolo_enriched)",
+        help="Sous-dossier de labels (defaut: labels_yolo_enriched)",
     )
     parser.add_argument(
-        "--port", type=int, default=5151, help="FiftyOne app port (default: 5151)"
+        "--port", type=int, default=5151, help="Port de l'app FiftyOne (defaut: 5151)"
     )
     args = parser.parse_args()
 
     run_dirs = discover_runs([Path(p) for p in args.run])
     print(f"{len(run_dirs)} run(s) à charger.")
 
-    print(f"Loading {run_dir.name} with labels from {args.labels}...")
-    dataset = load_run(run_dir, args.labels)
+    dataset = build_dataset(run_dirs, args.labels)
     print(
-        f"Loaded {len(dataset)} samples ({dataset.count('ground_truth.detections')} detections)"
+        f"Chargé {len(dataset)} samples "
+        f"({dataset.count('ground_truth.detections')} détections) "
+        f"depuis {len(run_dirs)} run(s)."
     )
 
     session = fo.launch_app(dataset, port=args.port)

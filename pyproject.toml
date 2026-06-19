@@ -15,6 +15,7 @@ dependencies = [
     "transformers>=5.9.0",
     "torch>=2.7",
     "torchvision>=0.22",
+    "pygame>=2.5",
 ]
 
 [project.optional-dependencies]
