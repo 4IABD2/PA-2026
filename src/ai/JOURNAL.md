@@ -468,3 +468,67 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Prochaine étape** :
 1. Analyser `evals/results.json` du training 300K avec les nouvelles séries : tracer trajectoire 2D, corrélation obstacle/brake, off_route_series superposé à la trajectoire.
 2. Identifier les scénarios qui échouent et les causes (biais steering, off_route concentré à un endroit précis, heading qui n'oscille pas assez vite dans les virages).
+
+---
+
+## 2026-06-12 (suite) — Analyse v1, fixes reward, préparation v2
+
+**Avancement** :
+- Analyse complète de la run `ppo_v1_100k` (100k steps, baseline) :
+  - Tendance d'apprentissage confirmée : reward moyen −159→−20 sur 100k steps (7× amélioration).
+  - Best model sélectionné à 80k par EvalCallback (+24 sur 3 épisodes eval).
+  - Succès benchmark : **0/8** scénarios Phase 1 réussis — attendu pour une baseline 100k.
+- Deux bugs structurels identifiés à l'analyse :
+  1. **Stall attractor** : `p_stall = −0.05` insuffisant. À 10k, la policy converge vers l'immobilisme car `r_center + r_alive − p_stall = +0.26/step > 0`. Confirmé par le benchmark (speed=0.3–0.6km/h, reward ~+78 à 10k sur les scénarios sans off-route).
+  2. **Off-route immédiat au reset** : 3 scénarios sur 8 (straight, npc_follow, npc_crossing) sont à 100% off-route dès le step 1. Cause : `nav.plan(spawn, spawn_pts[-1])` retourne des waypoints dont le 1er est à >15m du spawn pour ces spawn_idx.
+- Mise en place de `runs/EXPERIMENTS.md` (index transversal par run) et `ANALYSIS.md` par run.
+- Corrections apportées pour v2 :
+  - `reward_fn.py` : `_P_STALL` −0.05 → **−0.20** — le stall devient moins rentable que bouger (`+0.11/step` vs `+0.50/step` à pleine vitesse).
+  - `rl_env.py` : ajout `_ROUTE_GRACE_STEPS = 20` — les 20 premiers steps après reset ne déclenchent pas la pénalité off-route, le temps que la voiture rejoigne la route.
+  - `run_rl_training.py` : `_ROUTE_GRACE_STEPS` ajouté dans `params.json` pour traçabilité.
+
+**Difficultés** :
+- Le bug off-route sur `straight` avait été classé à tort comme "stall" dans l'analyse initiale (speed=4.1km/h ≠ stall). Corrigé après revérification des données brutes.
+- `p_offroad = −0.5` n'a jamais été actif (is_on_road hardcodé True, Karim non branché) — non visible dans les métriques avant l'audit.
+
+**Décisions** :
+- **`_ROUTE_GRACE_STEPS = 20`** plutôt qu'augmenter `_OFF_ROUTE_M` : plus propre, n'affecte pas la détection pendant l'épisode, facilement ajustable. 20 steps = 1 seconde à 20 FPS — suffisant pour rejoindre la route sans ouvrir une fenêtre trop large.
+- **Un seul changement à la fois** : v2 = p_stall + grace period seulement. Tous les autres hyperparamètres identiques pour isoler l'effet.
+- `p_offroad` reste inactif en v2 (Karim non branché) — décision documentée dans ANALYSIS.md.
+
+**Benchmarks** :
+- `ppo_v1_100k` : 0/8 succès P1, reward −20 moy, best model 80k. Voir `runs/2026-06-12_09-20_ppo_v1_100k/ANALYSIS.md`.
+- 62 tests passent après les modifications (`uv run pytest benchmarks/ai/ -q`).
+
+**Prochaine étape** :
+- Lancer `ppo_v2_300k` avec les deux fixes, analyser l'impact sur la stall phase et sur les 3 scénarios off-route.
+- Commande : `uv run python3 scripts/run_rl_training.py --timesteps 300000 --tag ppo_v2 --host 100.97.91.60`
+
+---
+
+## 2026-06-12 (suite) — Run v2, analyse, identification speed attractor
+
+**Avancement** :
+- Run `ppo_v2_300k` (300k steps, ~2h CPU) lancée et analysée.
+- **Fix stall confirmé** : à 30k, le modèle roule à 8–11 km/h (vs 0.3 km/h en v1 au même stade). p_stall=−0.20 a effectivement cassé l'attracteur immobilisme.
+- **Fix grace period confirmé** : les 3 scénarios off-route dès le step 1 (straight, npc_follow, npc_crossing) fonctionnent. La distance parcourue passe de ~1m à 8–75m.
+- **3/8 succès dès 30k** — première fois dans le projet qu'on passe des scénarios Phase 1.
+- Reward moyen : −70 → **+17** sur 300k. 56% d'épisodes positifs (vs 22% en v1). Best model EvalCallback à 195k (+66.2, ep_len=396).
+- Identification d'un **nouveau problème** : speed attractor. À partir de 120k, la vitesse monte à 30–44 km/h et le modèle crashe en 20–90 steps sur presque tout. La policy a échangé l'immobilisme contre la vitesse excessive.
+- Mise en place du format d'analyse par run : `runs/EXPERIMENTS.md` (index transversal) + `ANALYSIS.md` par run.
+
+**Difficultés** :
+- La bonne policy trouvée à 195k (ep_len=396, +66.2) a été oubliée par PPO après 210k — instabilité classique avec clip_range=0.2 et lr=3e-4. La policy "survivre" est bien plus rentable (+126 vs +28 pour "fonce et crashe") mais PPO ne la maintient pas.
+- Le best_model SB3 (195k, critère EvalCallback) donne 0/8 sur le benchmark — les 3 épisodes d'eval ne représentent pas bien la vraie qualité. Le checkpoint 30k (3/8) est en réalité plus fiable sur le benchmark.
+
+**Décisions** :
+- **Diagnostic speed attractor** : `p_collision = −1.0` trop faible — 50 steps à 50km/h avant crash = +28 net, ce qui est rentable. Porter à `−5.0` rendra le crash coûteux (net +24), et surtout très inférieur à survivre 300 steps (+126).
+- **Ne pas toucher aux autres paramètres en v3** : stall et off-route sont réglés, on n'isole que l'effet de p_collision.
+- **Enregistrement du checkpoint 30k** : à noter dans les futures analyses, la policy la plus saine est souvent dans les premiers checkpoints avant que le speed attractor s'installe.
+
+**Benchmarks** :
+- `ppo_v2_300k` : 0/8 best model, **3/8 @30k**, reward +17 moy, speed attractor ~120k. Voir `runs/2026-06-12_11-09_ppo_v2_300k/ANALYSIS.md`.
+
+**Prochaine étape** :
+- v3 : `p_collision` −1.0 → **−5.0**, 300k steps.
+- Commande : `uv run python3 scripts/run_rl_training.py --timesteps 300000 --tag ppo_v3 --host 100.97.91.60`

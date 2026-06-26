@@ -25,6 +25,7 @@ _MAX_SPEED_KMH = 90.0
 _MAX_OBSTACLE_M = 50.0
 _WARMUP_TICKS = 5     # ticks after teleport so physics settles and sensors fill
 _OFF_ROUTE_M = 15.0   # metres from nearest route waypoint before off_route penalty fires
+_ROUTE_GRACE_STEPS = 20  # steps after reset where off-route is not penalised (car joins route)
 
 
 class CarlaEnv(gym.Env):
@@ -98,7 +99,7 @@ class CarlaEnv(gym.Env):
         obs = self._get_obs()
         speed_kmh = self._speed_kmh()
         # is_on_road: replaced by semantic segmentation when Karim's model is ready
-        off_route = self._is_off_route()
+        off_route = self._is_off_route() if self._step_count > _ROUTE_GRACE_STEPS else False
         if off_route:
             self.off_route_count += 1
         reward, terminated = compute_reward(

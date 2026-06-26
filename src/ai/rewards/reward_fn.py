@@ -9,7 +9,7 @@ _W_CENTER = 0.3
 _W_ALIVE = 0.01
 _P_OFFROAD = -0.5
 _P_COLLISION = -1.0
-_P_STALL = -0.05       # breaks the lazy-policy attractor (staying still = 0 risk)
+_P_STALL = -0.20       # breaks the lazy-policy attractor (staying still = 0 risk)
 _P_OFF_ROUTE = -0.5    # leaving the planned GPS route is penalised as hard as going off-road
 
 
@@ -43,7 +43,7 @@ def compute_reward(
         r_speed     = (speed_kmh / max_speed_kmh) × 0.5    →  [0,   0.5 ]
         r_center    = (1 − |center_offset|) × 0.3           →  [0,   0.3 ]
         r_alive     = +0.01 / step                          →  fixed
-        r_stall     = −0.05 if speed < 1 km/h              →  breaks lazy policy
+        r_stall     = −0.20 if speed < 1 km/h              →  breaks lazy policy
         r_offroad   = −0.5  if not is_on_road              →  off-road penalty
         r_off_route = −0.5  if off_route                   →  GPS deviation penalty
         r_collision = −1.0 + done=True                     →  terminal

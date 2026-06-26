@@ -65,10 +65,15 @@ from src.dataset.encodings import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
 from src.interfaces.navigation_types import HighLevelCommand, Route, Waypoint
 from src.interfaces.stubs import CarlaGTDepthEstimator, CarlaGTLaneDetector
 from src.navigation.navigation import Navigation
-from src.ai.training.rl_env import CarlaEnv
+from src.ai.training.rl_env import CarlaEnv, _OFF_ROUTE_M, _MAX_OBSTACLE_M, _WARMUP_TICKS, _ROUTE_GRACE_STEPS
 from src.ai.training.rl_train import make_model, train, _PPO_DEFAULTS
 from src.ai.training.run_manager import make_run_dir, save_params, plot_reward_curve
 from src.ai.inference.rl_demo import load_model, record_episode, eval_model, Scenario
+from src.ai.inference.benchmark import _MIN_DIST_M
+from src.ai.rewards.reward_fn import (
+    MAX_SPEED_KMH, _W_SPEED, _W_CENTER, _W_ALIVE,
+    _P_OFFROAD, _P_COLLISION, _P_STALL, _P_OFF_ROUTE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +187,23 @@ def main() -> None:
         "max_episode_steps": args.max_episode_steps,
         "host":              args.host,
         "obs":               "7-scalars-GT",
+        "reward": {
+            "max_speed_kmh": MAX_SPEED_KMH,
+            "w_speed":       _W_SPEED,
+            "w_center":      _W_CENTER,
+            "w_alive":       _W_ALIVE,
+            "p_offroad":     _P_OFFROAD,
+            "p_collision":   _P_COLLISION,
+            "p_stall":       _P_STALL,
+            "p_off_route":   _P_OFF_ROUTE,
+        },
+        "env": {
+            "off_route_m":          _OFF_ROUTE_M,
+            "route_grace_steps":    _ROUTE_GRACE_STEPS,
+            "max_obstacle_m":       _MAX_OBSTACLE_M,
+            "warmup_ticks":         _WARMUP_TICKS,
+            "min_dist_m":           _MIN_DIST_M,
+        },
     }
     save_params(run_dir, params)
 
