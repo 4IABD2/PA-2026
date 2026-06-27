@@ -4,7 +4,6 @@ from utils import FPS, IMAGE_WIDTH, IMAGE_HEIGHT
 
 
 def setup_world(client):
-
     world = client.get_world()
 
     settings = world.get_settings()
@@ -34,26 +33,14 @@ def spawn_vehicle(world):
 
 
 def spawn_camera(world, vehicle):
-    blueprint_library = world.get_blueprint_library()
-
-    camera_bp = blueprint_library.find("sensor.camera.rgb")
+    camera_bp = world.get_blueprint_library().find("sensor.camera.rgb")
     camera_bp.set_attribute("image_size_x", str(IMAGE_WIDTH))
     camera_bp.set_attribute("image_size_y", str(IMAGE_HEIGHT))
     camera_bp.set_attribute("fov", "90")
     camera_bp.set_attribute("sensor_tick", str(1.0 / FPS))
 
-    camera_transform = carla.Transform(
-        carla.Location(x=1.5, z=2.4),
-        carla.Rotation(pitch=0.0)
-    )
-
-    camera = world.spawn_actor(
-        camera_bp,
-        camera_transform,
-        attach_to=vehicle
-    )
-
-    return camera
+    transform = carla.Transform(carla.Location(x=1.5, z=2.4), carla.Rotation(pitch=0.0))
+    return world.spawn_actor(camera_bp, transform, attach_to=vehicle)
 
 
 def cleanup_actors(world, camera, vehicle, original_settings):
