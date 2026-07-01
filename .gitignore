@@ -21,3 +21,7 @@ docs/ai/
 
 runs/
 logs/
+**/.idea
+**/build/
+web/servor/external
+web/client/build_py/

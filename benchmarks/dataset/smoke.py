@@ -2,33 +2,32 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
 
 def test_high_level_command_enum_values():
     """HighLevelCommand exposes the 4 values documented in the root README."""
-    from src.dataset.command_planner import HighLevelCommand
+    from src.dataset.collection.command_planner import HighLevelCommand
 
     assert HighLevelCommand.LEFT == "left"
     assert HighLevelCommand.RIGHT == "right"
     assert HighLevelCommand.STRAIGHT == "straight"
     assert HighLevelCommand.LANE_FOLLOW == "lane_follow"
 
-    # All values are strings (StrEnum-like)
     for member in HighLevelCommand:
         assert isinstance(member.value, str)
 
 
-import json
-from pathlib import Path
-
-import pandas as pd
-import pytest
-
-
 def test_manifest_csv_columns(tmp_path: Path):
     """ManifestWriter.flush_csv produces the 11 ordered columns from the root README."""
-    from src.dataset.command_planner import HighLevelCommand
-    from src.dataset.expert_driver import ExpertControls
-    from src.dataset.manifest_writer import ManifestWriter
+    from src.dataset.collection.command_planner import HighLevelCommand
+    from src.dataset.collection.expert_driver import ExpertControls
+    from src.dataset.collection.manifest_writer import ManifestWriter
 
     writer = ManifestWriter(tmp_path, town="Town01", weather="ClearNoon")
     writer.append_row(
@@ -74,7 +73,7 @@ def test_manifest_csv_columns(tmp_path: Path):
 
 def test_metadata_json_schema(tmp_path: Path):
     """ManifestWriter.write_metadata produces a JSON with the minimal required fields."""
-    from src.dataset.manifest_writer import ManifestWriter
+    from src.dataset.collection.manifest_writer import ManifestWriter
 
     writer = ManifestWriter(tmp_path, town="Town01", weather="ClearNoon")
     writer.write_metadata(
@@ -113,14 +112,12 @@ def test_metadata_json_schema(tmp_path: Path):
 
 
 def test_yolo_label_format(tmp_path: Path):
-    """YoloLabeler.save writes a file in '<class> <x_c> <y_c> <w> <h>' normalized [0,1] format."""
-    from src.dataset.yolo_labels import YOLO_CLASS_MAPPING, YoloLabeler
+    """YoloLabeler.write_labels_to_file writes '<class> <x_c> <y_c> <w> <h>' normalized."""
+    from src.dataset.labeling.yolo_labels import YOLO_CLASS_MAPPING, YoloLabeler
 
-    # Mapping has the 3 documented classes
+    # Raw scheme written by the collector: vehicle/walker/traffic_light.
     assert YOLO_CLASS_MAPPING == {"vehicle": 0, "walker": 1, "traffic_light": 2}
 
-    # Test only the save() method with given input labels
-    # (compute_labels() raises NotImplementedError in the skeleton)
     label_path = tmp_path / "000000.txt"
     fake_labels = [
         (0, 0.5, 0.5, 0.2, 0.3),  # vehicle at center
@@ -134,57 +131,60 @@ def test_yolo_label_format(tmp_path: Path):
     parts = content[1].split()
     assert parts[0] == "1"
     for v in parts[1:]:
-        f = float(v)
-        assert 0.0 <= f <= 1.0
+        assert 0.0 <= float(v) <= 1.0
 
 
-import numpy as np
+def test_final_classes_scheme():
+    """FINAL_CLASSES is the 11-class training scheme aligned with the detector."""
+    from src.dataset.labeling.enrich_labels import FINAL_CLASSES
+    from src.perception.yolo.detector import _YOLO_TO_OBJECTCLASS
+
+    assert len(FINAL_CLASSES) == 11
+    assert FINAL_CLASSES[2] == "red_light"
+    assert FINAL_CLASSES[5] == "speed_30"
+    assert FINAL_CLASSES[9] == "stop"
+    assert FINAL_CLASSES[10] == "yield"
+    for i, name in enumerate(FINAL_CLASSES):
+        assert _YOLO_TO_OBJECTCLASS[i].value == name
 
 
 def test_depth_decoding_carla_format():
     """decode_carla_depth(R, G, B) returns depth in meters following the CARLA formula."""
-    from src.dataset.depth_capture import decode_carla_depth
+    from src.dataset.encodings import decode_carla_depth
 
-    # Pixel (R=0, G=0, B=0) -> 0 m (very close)
     depth = decode_carla_depth(np.array([[[0, 0, 0]]], dtype=np.uint8))
     assert depth.shape == (1, 1)
     assert depth[0, 0] == 0.0
 
-    # Pixel (R=255, G=255, B=255) -> 1000 m (max), clipped to 100 by default
     depth = decode_carla_depth(
         np.array([[[255, 255, 255]]], dtype=np.uint8), max_depth_m=100.0
     )
     assert depth[0, 0] == 100.0
 
-    # Arbitrary pixel (1, 0, 0) -> 1 / (256^3-1) * 1000 m ~= 0.0596 micrometers
     depth = decode_carla_depth(np.array([[[1, 0, 0]]], dtype=np.uint8))
-    assert 0.0 < depth[0, 0] < 0.001  # micrometer order
-
-    # dtype = float32
+    assert 0.0 < depth[0, 0] < 0.001
     assert depth.dtype == np.float32
 
 
 def test_collector_init_refuses_existing_non_empty_dir(tmp_path: Path):
     """DatasetCollector raises ValueError if output_dir already contains files."""
-    from src.dataset.collector import DatasetCollector
+    from src.dataset.collection.collector import DatasetCollector
 
-    # Create a file in tmp_path -> non empty
     (tmp_path / "manifest.csv").write_text("dummy")
 
     with pytest.raises(ValueError, match="not empty"):
         DatasetCollector(
             output_dir=tmp_path,
             duration_sec=1,
-            host="dummy-no-connect",  # not reached, we test early init
+            host="dummy-no-connect",
         )
 
 
 def test_collector_init_accepts_empty_dir(tmp_path: Path):
     """DatasetCollector accepts an empty or non-existing output_dir."""
-    from src.dataset.collector import DatasetCollector
+    from src.dataset.collection.collector import DatasetCollector
 
     new_dir = tmp_path / "fresh_run"
-    # Must instantiate without a CARLA connection (validation only, no connect)
     collector = DatasetCollector(
         output_dir=new_dir,
         duration_sec=1,
@@ -195,7 +195,7 @@ def test_collector_init_accepts_empty_dir(tmp_path: Path):
 
 def test_semantic_decode_carla_format():
     """decode_semantic_carla extracts class IDs from CARLA's R channel."""
-    from src.dataset.semantic_capture import decode_semantic_carla
+    from src.dataset.encodings import decode_semantic_carla
 
     rgb = np.array(
         [
@@ -215,8 +215,8 @@ def test_semantic_decode_carla_format():
 
 
 def test_semantic_palette_colorize():
-    """CITYSCAPE_PALETTE has 29 entries and colorize_semantic maps class IDs to documented RGB."""
-    from src.dataset.semantic_capture import CITYSCAPE_PALETTE, colorize_semantic
+    """CITYSCAPE_PALETTE has 29 entries and colorize_semantic maps IDs to documented RGB."""
+    from src.dataset.encodings import CITYSCAPE_PALETTE, colorize_semantic
 
     assert CITYSCAPE_PALETTE.shape == (29, 3)
     assert CITYSCAPE_PALETTE.dtype == np.uint8
@@ -236,7 +236,7 @@ def test_semantic_palette_colorize():
 
 def test_instance_packing_format():
     """pack_instance_carla packs (R, G, B) into uint32 (class_id<<16 | G<<8 | B)."""
-    from src.dataset.instance_capture import pack_instance_carla
+    from src.dataset.encodings import pack_instance_carla
 
     rgb = np.array([[[10, 0x12, 0x34]]], dtype=np.uint8)
     packed = pack_instance_carla(rgb)
@@ -253,7 +253,7 @@ def test_instance_packing_format():
 
 def test_instance_viz_color_is_deterministic():
     """colorize_instance maps an instance_id to a fixed RGB across frames; id=0 stays black."""
-    from src.dataset.instance_capture import colorize_instance, pack_instance_carla
+    from src.dataset.encodings import colorize_instance, pack_instance_carla
 
     frame1 = np.array([[[10, 0x12, 0x34]]], dtype=np.uint8)
     frame2 = np.array([[[10, 0x12, 0x34]]], dtype=np.uint8)
@@ -273,18 +273,9 @@ def test_instance_viz_color_is_deterministic():
     assert tuple(colorize_instance(p1)[0, 0]) != tuple(colorize_instance(p2)[0, 0])
 
 
-def test_collector_output_subdirs_includes_segmentation():
-    """OUTPUT_SUBDIRS lists the 7 expected dataset subdirectories with no duplicates."""
-    from src.dataset.collector import OUTPUT_SUBDIRS
+def test_sensor_specs_cover_all_modalities():
+    """SENSOR_SPECS declares the 4 capture modalities used by the collector."""
+    from src.dataset.collection.sensors import SENSOR_SPECS
 
-    expected = {
-        "images",
-        "depth",
-        "labels_yolo",
-        "semantic",
-        "semantic_viz",
-        "instance",
-        "instance_viz",
-    }
-    assert set(OUTPUT_SUBDIRS) == expected
-    assert len(OUTPUT_SUBDIRS) == len(expected)
+    keys = {key for key, _bp, _writer in SENSOR_SPECS}
+    assert keys == {"rgb", "depth", "semantic", "instance"}

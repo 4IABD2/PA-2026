@@ -41,7 +41,7 @@ from src.ai.phase0.config import (
     IMAGE_WIDTH,
     SPEED_NORM_DIVISOR,
 )
-from src.dataset.camera_capture import CameraCapture
+from src.dataset.collection.sensors import CameraSensor, write_rgb
 
 if TYPE_CHECKING:
     import carla  # noqa: F401
@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def spawn_episode():
         e = world.spawn_actor(bp, random.choice(spawn_points))
-        c = CameraCapture(world, e)
+        c = CameraSensor(world, e, "sensor.camera.rgb", write_rgb)
         c.attach()
         cs = world.spawn_actor(collision_bp, carla.Transform(), attach_to=e)
         flag = {"hit": False}
