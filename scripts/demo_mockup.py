@@ -30,8 +30,9 @@ import carla
 
 from src.dataset.encodings import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
 from src.interfaces.navigation_types import HighLevelCommand, Route, Waypoint
-from src.interfaces.stubs import CarlaGTDepthEstimator, CarlaGTLaneDetector
 from src.navigation.navigation import Navigation
+from src.perception.pipeline import PerceptionPipeline
+from src.lane_detection.lane_perception import estimate as lane_estimate
 from src.ai.training.rl_env import CarlaEnv
 from src.ai.inference.rl_demo import record_episode, Scenario
 
@@ -47,7 +48,7 @@ DEMO_SCENARIOS = [
     Scenario("traffic_light", spawn_idx=129, max_steps=500),
 ]
 
-_CAM_W, _CAM_H = 200, 88
+_CAM_W, _CAM_H = 1280, 720
 _DEMO_CAM_W, _DEMO_CAM_H = 1280, 720
 _CAM_TRANSFORM = carla.Transform(
     carla.Location(x=CAMERA_LOCATION[0], y=CAMERA_LOCATION[1], z=CAMERA_LOCATION[2]),
@@ -70,21 +71,21 @@ class StraightPolicy:
 
 
 class RouteFollowPolicy:
-    """P-controller on heading_norm + center_offset — roughly follows the road.
+    """P-controller on lane_angle_norm + lane_offset_norm — roughly follows the road.
 
-    obs[6] = heading_norm  (angle to nearest road direction / 180)
-    obs[4] = center_offset (lateral deviation from lane centre)
-    obs[0] = speed_norm    (speed / 90 km/h)
+    obs[4] = lane_angle_norm  (lane heading angle / 90)
+    obs[5] = lane_offset_norm (lateral deviation from lane centre)
+    obs[0] = speed_norm       (speed / 90 km/h)
     """
 
     name = "route_follow"
 
     def predict(self, obs: np.ndarray, deterministic: bool = True):
-        heading_norm  = float(obs[6])
-        center_offset = float(obs[4])
-        speed_norm    = float(obs[0])
+        lane_angle_norm  = float(obs[4])
+        lane_offset_norm = float(obs[5])
+        speed_norm       = float(obs[0])
 
-        steer    = float(np.clip(-heading_norm * 1.0 - center_offset * 0.25, -1.0, 1.0))
+        steer    = float(np.clip(-lane_angle_norm * 1.0 - lane_offset_norm * 0.25, -1.0, 1.0))
         throttle = 0.45 if speed_norm < 0.25 else 0.3
         brake    = 0.0
         return np.array([steer, throttle, brake], dtype=np.float32), None
@@ -188,15 +189,16 @@ def main() -> None:
         bp = world.get_blueprint_library().find("vehicle.tesla.model3")
         ego = world.spawn_actor(bp, world.get_map().get_spawn_points()[0])
 
-        camera      = _spawn_sensor(world, ego, "sensor.camera.rgb",
-                                    image_size_x=_CAM_W, image_size_y=_CAM_H)
-        depth_sensor= _spawn_sensor(world, ego, "sensor.camera.depth",
-                                    image_size_x=_CAM_W, image_size_y=_CAM_H)
-        col_sensor  = _spawn_sensor(world, ego, "sensor.other.collision")
-        sensors = [camera, depth_sensor, col_sensor]
+        camera     = _spawn_sensor(world, ego, "sensor.camera.rgb",
+                                   image_size_x=_CAM_W, image_size_y=_CAM_H)
+        col_sensor = _spawn_sensor(world, ego, "sensor.other.collision")
+        sensors = [camera, col_sensor]
 
         for _ in range(10):
             world.tick()
+
+        print("Loading perception models …")
+        perception = PerceptionPipeline()
 
         # spawn NPCs — exclude the 4 scenario spawn indices
         scenario_spawns = {sc.spawn_idx for sc in DEMO_SCENARIOS}
@@ -212,8 +214,7 @@ def main() -> None:
 
         env = CarlaEnv(
             world=world, ego_vehicle=ego, nav=nav, route=route,
-            depth_estimator=CarlaGTDepthEstimator(depth_sensor),
-            lane_detector=CarlaGTLaneDetector(world, ego),
+            perception=perception, lane_estimate_fn=lane_estimate,
             camera=camera, collision_sensor=col_sensor,
             max_episode_steps=500,
         )

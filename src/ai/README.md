@@ -1,7 +1,7 @@
 # `src/ai/` — IA centrale (décision)
 
 > **Owner** : Frédéric Huang
-> **Contrats** : produit [`ControlOutput`](../interfaces/ai_types.py) à partir de [`SceneState`](../interfaces/ai_types.py) + [`HighLevelCommand`](../interfaces/navigation_types.py)
+> **Contrats (Phase 1 réel)** : `CarlaEnv` (`gym.Env`) consomme directement `PerceptionPipeline.perceive()` (Franck), `lane_perception.estimate()` (Karim) et `Navigation.next_command()` (Victor) → `HighLevelCommand` ; produit une observation `Box(10,)` et consomme une action `Box(3,)` (steer, throttle, brake). Les dataclasses `SceneState`/`ControlOutput` de [`ai_types.py`](../interfaces/ai_types.py) faisaient partie du design initial mais ne sont plus utilisées : PPO/Stable-Baselines3 impose un espace d'observation/action `numpy` plat, pas des objets structurés.
 
 ---
 
@@ -32,24 +32,35 @@ L'IA apprend **seule** via PPO (Stable-Baselines3). Elle n'imite plus un expert 
 ```
 CARLA World (sync mode, 20 FPS)
          │
-         ├─ RGB camera
-         ├─ GT depth sensor ──────────► nearest_obstacle_m (float)
-         ├─ GT semantic segmentation ──► is_on_road (bool)
+         ├─ RGB camera (1280×720 — résolution d'entraînement YOLO de Franck)
          └─ Collision sensor ──────────► collision (bool, épisode terminé)
+
+[PerceptionPipeline — Franck]   src/perception/pipeline.py
+         │   YOLO11s (détection, 11 classes) + Depth Anything v2 (profondeur monoculaire calibrée)
+         ▼
+         liste d'objets détectés + distance_m ──► nearest_vehicle_norm, has_red_light, speed_limit_norm
+
+[lane_perception.estimate() — Karim]   src/lane_detection/lane_perception.py
+         │   YOLOPv2 (segmentation zone roulable + lignes) + géométrie (lane_geometry.py)
+         ▼
+         (direction, angle, offset) ──► lane_angle_norm, lane_offset_norm, is_on_road
 
 [Navigation — Victor]
          ├─ plan(start, dest) → Route          ← au reset de chaque épisode
          └─ next_command(pos, route) → HighLevelCommand  ← à chaque step
 
-[Observation vector] — 7 scalaires normalisés  ∈ [-1, 1] ou [0, 1]
-         ├─ [0] speed_norm     = speed_kmh / 90.0               ∈ [0, 1]
-         ├─ [1] cmd_left       = 1.0 si LEFT else 0.0
-         ├─ [2] cmd_right      = 1.0 si RIGHT else 0.0
-         ├─ [3] cmd_straight   = 1.0 si STRAIGHT else 0.0
+[Observation vector] — 10 scalaires normalisés  ∈ [-1, 1] ou [0, 1]
+         ├─ [0] speed_norm            = speed_kmh / 90.0                    ∈ [0, 1]
+         ├─ [1] cmd_left              = 1.0 si LEFT else 0.0
+         ├─ [2] cmd_right             = 1.0 si RIGHT else 0.0
+         ├─ [3] cmd_straight          = 1.0 si STRAIGHT else 0.0
          │       [0,0,0] = LANE_FOLLOW (pas d'intersection)
-         ├─ [4] center_offset  = déviation latérale voie         ∈ [-1, 1]
-         ├─ [5] obstacle_norm  = min(dist_obstacle, 50m) / 50m  ∈ [0, 1]
-         └─ [6] heading_norm   = delta_yaw / 180.0              ∈ [-1, 1]
+         ├─ [4] lane_angle_norm       = angle de cap vers la voie / 90.0    ∈ [-1, 1]  (Karim)
+         ├─ [5] lane_offset_norm      = déviation latérale voie             ∈ [-1, 1]  (Karim)
+         ├─ [6] is_on_road            = 1.0 si voie détectée else 0.0                  (Karim)
+         ├─ [7] nearest_vehicle_norm  = min(dist_véhicule, 50m) / 50m       ∈ [0, 1]  (Franck)
+         ├─ [8] has_red_light         = 1.0 si feu rouge détecté else 0.0              (Franck)
+         └─ [9] speed_limit_norm      = limite de vitesse mémorisée / 90.0  ∈ [0, 1]  (Franck)
 
 [PPO Policy] — Stable-Baselines3 MlpPolicy
          │   2 couches Dense 64, activation tanh
@@ -60,25 +71,30 @@ CARLA World (sync mode, 20 FPS)
          └─ brake    ∈ [0, 1]
 
 [Reward function — par step]   src/ai/rewards/reward_fn.py
-         ├─ r_speed     = (speed_kmh / 90.0) × 0.5     → encourage la vitesse
-         ├─ r_center    = (1 − |center_offset|) × 0.3  → encourage le centrage
-         ├─ r_alive     = +0.01                         → survie (anti-crash passif)
-         ├─ r_stall     = −0.05 si speed < 1 km/h      → pénalise l'immobilisme
-         ├─ r_offroad   = −0.5  si hors chaussée       → pénalité hors route (Karim)
-         ├─ r_off_route = −0.5  si > 15m de la route   → pénalise la déviation GPS
-         └─ r_collision = −1.0 + done=True              → épisode terminé
+         ├─ r_speed     = (speed_kmh / 90.0) × 0.5          → encourage la vitesse
+         ├─ r_center    = (1 − |lane_offset_norm|) × 0.3    → encourage le centrage
+         ├─ r_alive     = +0.01                              → survie (anti-crash passif)
+         ├─ r_stall     = −0.20 si speed < 1 km/h           → pénalise l'immobilisme
+         ├─ r_offroad   = −0.5  si is_on_road=False         → pénalité hors route (Karim)
+         ├─ r_off_route = −0.5  si > 15m de la route GPS    → pénalise la déviation GPS
+         └─ r_collision = −1.0 + done=True                   → épisode terminé
 ```
 
 ### Espace d'observation — pourquoi des scalaires et pas des pixels
 
 Le RL pur sur pixels (end-to-end) nécessite des dizaines de millions de steps et des semaines de compute. Les observations compactes convergent en quelques heures car :
-- L'espace d'état est petit (7 floats vs 200×88×3 pixels)
+- L'espace d'état est petit (10 floats) — même si la caméra tourne à 1280×720 (résolution imposée par le modèle YOLO de Franck), la policy PPO ne voit **jamais** l'image brute, seulement les scalaires extraits par les modules de perception
 - Chaque feature est directement exploitable (le réseau n'a pas à apprendre à extraire la distance depuis les pixels)
 - La variance de l'estimation de gradient (PPO) est beaucoup plus faible
 
-### Stratégie GT → vrais modèles
+### Perception réelle (Franck + Karim)
 
-Pendant l'entraînement, les métriques de perception viennent des capteurs GT CARLA (via `src/interfaces/stubs.py`). Une fois les modèles de Franck (depth, YOLO) et Karim (lanes) prêts, on substitue les stubs — le code de l'IA centrale **ne change pas** car tout passe par les protocoles de `src/interfaces/`.
+Les scalaires de perception viennent des vrais modèles d'IA, pas de capteurs GT CARLA :
+
+- **Franck** — `PerceptionPipeline` (`src/perception/pipeline.py`) : YOLO11s (détection d'objets, 1280×720) + Depth Anything v2 (profondeur monoculaire, calibrée via `calibration.json`) fusionnés en une liste d'objets avec `distance_m`. Alimente `nearest_vehicle_norm`, `has_red_light`, `speed_limit_norm` (mémorisé entre frames car le panneau n'est pas toujours visible dans le champ de vision).
+- **Karim** — `lane_perception.estimate()` (`src/lane_detection/lane_perception.py`) : YOLOPv2 (segmentation zone roulable + lignes, resize interne 640×480) + géométrie (`lane_geometry.py`, clustering des lignes + suivi + polyfit) → `(direction, angle, offset)`. Alimente `lane_angle_norm` (cap vers la voie), `lane_offset_norm` (position latérale), `is_on_road` (`direction != "NONE"`).
+
+Les anciens stubs GT CARLA (`src/interfaces/stubs.py`, `CarlaGTDepthEstimator`/`CarlaGTLaneDetector`) ne sont plus utilisés dans le pipeline d'entraînement — le code de l'IA centrale n'a pas eu besoin de changer au moment du swap, tout passait déjà par les protocoles de `src/interfaces/`.
 
 ### Intégration navigation Victor
 
@@ -270,8 +286,8 @@ uv run pytest benchmarks/ai/ -v
 
 | Fichier | Couverture |
 |---|---|
-| `smoke.py` | reward_fn (8 tests) + stubs GT (7 tests) |
-| `test_rl_env.py` | CarlaEnv — spaces, reset, step, observation, render, off_route (20 tests) |
+| `smoke.py` | reward_fn (8 tests) + stubs GT — `src/interfaces/stubs.py`, non utilisés en prod depuis le branchement Franck/Karim (7 tests) |
+| `test_rl_env.py` | CarlaEnv — spaces, reset, step, observation (10 scalaires), reward, render, off_route (28 tests) |
 | `test_rl_train.py` | make_model, train (4 tests) |
 | `test_rl_demo.py` | run_episode, _add_hud, record_episode, load_model (11 tests) |
 | `test_run_manager.py` | make_run_dir, save_params, plot_reward_curve (8 tests) |

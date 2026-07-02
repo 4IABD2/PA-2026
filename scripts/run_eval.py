@@ -29,8 +29,9 @@ import carla
 
 from src.dataset.encodings import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
 from src.interfaces.navigation_types import HighLevelCommand, Route, Waypoint
-from src.interfaces.stubs import CarlaGTDepthEstimator, CarlaGTLaneDetector
 from src.navigation.navigation import Navigation
+from src.perception.pipeline import PerceptionPipeline
+from src.lane_detection.lane_perception import estimate as lane_estimate
 from src.ai.training.rl_env import CarlaEnv
 from src.ai.inference.rl_demo import load_model, eval_model
 
@@ -62,7 +63,7 @@ class _NavAdapter:
             return HighLevelCommand.LANE_FOLLOW
 
 
-_CAM_W, _CAM_H = 200, 88
+_CAM_W, _CAM_H = 1280, 720
 _DEMO_CAM_W, _DEMO_CAM_H = 1280, 720
 _CAM_TRANSFORM = carla.Transform(
     carla.Location(x=CAMERA_LOCATION[0], y=CAMERA_LOCATION[1], z=CAMERA_LOCATION[2]),
@@ -132,15 +133,16 @@ def main() -> None:
         bp = world.get_blueprint_library().find("vehicle.tesla.model3")
         ego = world.spawn_actor(bp, world.get_map().get_spawn_points()[0])
 
-        camera       = _spawn_sensor(world, ego, "sensor.camera.rgb",
-                                     image_size_x=_CAM_W, image_size_y=_CAM_H)
-        depth_sensor = _spawn_sensor(world, ego, "sensor.camera.depth",
-                                     image_size_x=_CAM_W, image_size_y=_CAM_H)
-        col_sensor   = _spawn_sensor(world, ego, "sensor.other.collision")
-        sensors = [camera, depth_sensor, col_sensor]
+        camera     = _spawn_sensor(world, ego, "sensor.camera.rgb",
+                                   image_size_x=_CAM_W, image_size_y=_CAM_H)
+        col_sensor = _spawn_sensor(world, ego, "sensor.other.collision")
+        sensors = [camera, col_sensor]
 
         for _ in range(10):
             world.tick()
+
+        print("Loading perception models …")
+        perception = PerceptionPipeline()
 
         carla_map = world.get_map()
         nav       = _NavAdapter(Navigation(ego, carla_map))
@@ -149,8 +151,7 @@ def main() -> None:
 
         env = CarlaEnv(
             world=world, ego_vehicle=ego, nav=nav, route=route,
-            depth_estimator=CarlaGTDepthEstimator(depth_sensor),
-            lane_detector=CarlaGTLaneDetector(world, ego),
+            perception=perception, lane_estimate_fn=lane_estimate,
             camera=camera, collision_sensor=col_sensor,
             max_episode_steps=500,
         )

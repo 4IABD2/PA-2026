@@ -8,6 +8,7 @@ Usage:
     --timesteps   total PPO training steps (default: 500 000)
     --tag         short label added to the run folder name
     --demo-eps    number of demo episodes to record after training (default: 3)
+    --yolo-weights  path to YOLO best.pt (default: src/perception/yolo/weights/best.pt)
 
 Output — one timestamped folder under runs/ :
     runs/YYYY-MM-DD_HH-MM_<tag>/
@@ -17,15 +18,12 @@ Output — one timestamped folder under runs/ :
         checkpoints/             periodic snapshots (every timesteps/10 steps)
         training_log.csv         per-episode reward / length (Monitor format)
         reward_curve.png         matplotlib reward plot
-        progress_XXXXK.mp4       short clips (200 steps) for each checkpoint
         demo.mp4                 full inference with HUD overlay (best model)
-        highlights/              one clip per checkpoint on the same fixed route
-        demo.mp4                 best model, same fixed route, full episode with HUD
+        evals/                   benchmark eval per checkpoint + best model
 
-Known limitations (replaced as team modules land):
-    - is_on_road = True hardcoded (Karim's semantic seg not yet plugged)
-    - CarlaGTDepthEstimator / CarlaGTLaneDetector = GT stubs
-    - Victor's Navigation.plan() calls MatplotVisualizer — silenced via Agg backend
+Obs (10 scalars): speed | cmd_left | cmd_right | cmd_straight |
+                  lane_angle | lane_offset | is_on_road | nearest_vehicle | has_red_light | speed_limit
+Perception: Franck's PerceptionPipeline (YOLO11s + Depth Anything v2) + Karim's YOLOPv2 lane detection.
 """
 
 from __future__ import annotations
@@ -63,9 +61,10 @@ import carla
 
 from src.dataset.encodings import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
 from src.interfaces.navigation_types import HighLevelCommand, Route, Waypoint
-from src.interfaces.stubs import CarlaGTDepthEstimator, CarlaGTLaneDetector
 from src.navigation.navigation import Navigation
-from src.ai.training.rl_env import CarlaEnv, _OFF_ROUTE_M, _MAX_OBSTACLE_M, _WARMUP_TICKS, _ROUTE_GRACE_STEPS
+from src.perception.pipeline import PerceptionPipeline
+from src.lane_detection.lane_perception import estimate as lane_estimate
+from src.ai.training.rl_env import CarlaEnv, _OFF_ROUTE_M, _MAX_OBSTACLE_M, _WARMUP_TICKS, _ROUTE_GRACE_STEPS, _DEFAULT_SPEED_LIMIT_KMH
 from src.ai.training.rl_train import make_model, train, _PPO_DEFAULTS
 from src.ai.training.run_manager import make_run_dir, save_params, plot_reward_curve
 from src.ai.inference.rl_demo import load_model, record_episode, eval_model, Scenario
@@ -109,8 +108,8 @@ class _NavAdapter:
 # CARLA helpers
 # ---------------------------------------------------------------------------
 
-_CAM_W = 200
-_CAM_H = 88
+_CAM_W = 1280
+_CAM_H = 720
 _CAM_TRANSFORM = carla.Transform(
     carla.Location(x=CAMERA_LOCATION[0], y=CAMERA_LOCATION[1], z=CAMERA_LOCATION[2]),
     carla.Rotation(pitch=CAMERA_ROTATION_PITCH),
@@ -176,6 +175,9 @@ def main() -> None:
     parser.add_argument("--max-episode-steps", type=int, default=1000)
     parser.add_argument("--tag",               default="ppo")
     parser.add_argument("--demo-eps",          type=int, default=3)
+    parser.add_argument("--yolo-weights",      default="src/perception/yolo/weights/best.pt")
+    parser.add_argument("--depth-model",       default="depth-anything/Depth-Anything-V2-Small-hf",
+                        help="HuggingFace model ID ou chemin local vers le modele depth")
     args = parser.parse_args()
 
     run_dir = make_run_dir(tag=f"{args.tag}_{args.timesteps // 1000}k")
@@ -186,7 +188,7 @@ def main() -> None:
         "timesteps":         args.timesteps,
         "max_episode_steps": args.max_episode_steps,
         "host":              args.host,
-        "obs":               "7-scalars-GT",
+        "obs":               "10-scalars-perception",
         "reward": {
             "max_speed_kmh": MAX_SPEED_KMH,
             "w_speed":       _W_SPEED,
@@ -198,11 +200,12 @@ def main() -> None:
             "p_off_route":   _P_OFF_ROUTE,
         },
         "env": {
-            "off_route_m":          _OFF_ROUTE_M,
-            "route_grace_steps":    _ROUTE_GRACE_STEPS,
-            "max_obstacle_m":       _MAX_OBSTACLE_M,
-            "warmup_ticks":         _WARMUP_TICKS,
-            "min_dist_m":           _MIN_DIST_M,
+            "off_route_m":             _OFF_ROUTE_M,
+            "route_grace_steps":       _ROUTE_GRACE_STEPS,
+            "max_obstacle_m":          _MAX_OBSTACLE_M,
+            "warmup_ticks":            _WARMUP_TICKS,
+            "min_dist_m":              _MIN_DIST_M,
+            "default_speed_limit_kmh": _DEFAULT_SPEED_LIMIT_KMH,
         },
     }
     save_params(run_dir, params)
@@ -215,29 +218,31 @@ def main() -> None:
 
     ego, sensors = None, []
     try:
-        ego          = _spawn_ego(world)
-        camera       = _spawn_sensor(world, ego, "sensor.camera.rgb",
-                                     image_size_x=_CAM_W, image_size_y=_CAM_H)
-        depth_sensor = _spawn_sensor(world, ego, "sensor.camera.depth",
-                                     image_size_x=_CAM_W, image_size_y=_CAM_H)
-        col_sensor   = _spawn_sensor(world, ego, "sensor.other.collision")
-        sensors = [camera, depth_sensor, col_sensor]
+        ego        = _spawn_ego(world)
+        camera     = _spawn_sensor(world, ego, "sensor.camera.rgb",
+                                   image_size_x=_CAM_W, image_size_y=_CAM_H)
+        col_sensor = _spawn_sensor(world, ego, "sensor.other.collision")
+        sensors = [camera, col_sensor]
 
         for _ in range(10):          # warm-up: let sensors produce first frames
             world.tick()
 
-        depth_estimator = CarlaGTDepthEstimator(depth_sensor)
-        lane_detector   = CarlaGTLaneDetector(world, ego)
+        print("Loading perception models (YOLO + Depth Anything + YOLOPv2) …")
+        perception = PerceptionPipeline(
+            yolo_weights=args.yolo_weights,
+            depth_model_name=args.depth_model,
+        )
+        # lane_estimate is a module-level singleton — loaded on first call
 
-        carla_map   = world.get_map()
-        nav         = _NavAdapter(Navigation(ego, carla_map))
-        spawn_pts   = carla_map.get_spawn_points()
-        route       = nav.plan(ego.get_transform().location, spawn_pts[-1].location)
+        carla_map = world.get_map()
+        nav       = _NavAdapter(Navigation(ego, carla_map))
+        spawn_pts = carla_map.get_spawn_points()
+        route     = nav.plan(ego.get_transform().location, spawn_pts[-1].location)
 
         monitor_base = run_dir / "training_log"   # Monitor appends .monitor.csv itself
         env = CarlaEnv(
             world=world, ego_vehicle=ego, nav=nav, route=route,
-            depth_estimator=depth_estimator, lane_detector=lane_detector,
+            perception=perception, lane_estimate_fn=lane_estimate,
             camera=camera, collision_sensor=col_sensor,
             max_episode_steps=args.max_episode_steps,
         )

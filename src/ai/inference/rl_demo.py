@@ -50,14 +50,17 @@ class HighlightSpec:
 
     detect(obs, action, reward, terminated, truncated) -> bool
 
-    Obs layout (7 scalars):
-        [0] speed_norm       = speed_kmh / 90            ∈ [0, 1]
-        [1] cmd_left         = 1 if nav says LEFT        ∈ {0, 1}
-        [2] cmd_right        = 1 if nav says RIGHT       ∈ {0, 1}
-        [3] cmd_straight     = 1 if nav says STRAIGHT    ∈ {0, 1}
-        [4] center_offset    = lateral deviation          ∈ [-1, 1]
-        [5] obstacle_norm    = nearest_obstacle / 50m    ∈ [0, 1]
-        [6] heading_norm     = heading error / 180       ∈ [-1, 1]
+    Obs layout (10 scalars):
+        [0] speed_norm         = speed_kmh / 90              ∈ [0, 1]
+        [1] cmd_left           = 1 if nav says LEFT          ∈ {0, 1}
+        [2] cmd_right          = 1 if nav says RIGHT         ∈ {0, 1}
+        [3] cmd_straight       = 1 if nav says STRAIGHT      ∈ {0, 1}
+        [4] lane_angle_norm    = lane heading angle / 90     ∈ [-1, 1]
+        [5] lane_offset_norm   = lateral lane offset         ∈ [-1, 1]
+        [6] is_on_road         = 1 if lane detected          ∈ {0, 1}
+        [7] nearest_vehicle_norm = nearest_vehicle / 50m     ∈ [0, 1]
+        [8] has_red_light      = 1 if red light detected     ∈ {0, 1}
+        [9] speed_limit_norm   = current speed limit / 90    ∈ [0, 1]
     """
 
     name: str
@@ -80,7 +83,7 @@ DEFAULT_HIGHLIGHT_SPECS: list[HighlightSpec] = [
     ),
     HighlightSpec(
         name="near_obstacle",
-        detect=lambda obs, act, r, done, trunc: bool(obs[5] < 0.15),
+        detect=lambda obs, act, r, done, trunc: bool(obs[7] < 0.15),
         pre_s=2.0, post_s=3.0, cooldown_s=10.0,
     ),
     HighlightSpec(
@@ -95,7 +98,7 @@ DEFAULT_HIGHLIGHT_SPECS: list[HighlightSpec] = [
     ),
     HighlightSpec(
         name="lane_drift",
-        detect=lambda obs, act, r, done, trunc: bool(abs(obs[4]) > 0.6),
+        detect=lambda obs, act, r, done, trunc: bool(abs(obs[5]) > 0.6),
         pre_s=1.5, post_s=2.5, cooldown_s=15.0,
     ),
 ]
@@ -319,7 +322,7 @@ def _draw_obs_panel(
     if w <= 400:
         return
 
-    PW, PH = 215, 142
+    PW, PH = 215, 170
     PAD = 6
     x0 = w - PW - 6
     y0 = 18
@@ -348,14 +351,19 @@ def _draw_obs_panel(
 
     VAL_X = x0 + PAD + 88  # x position for value column
 
+    on_road = obs[6] > 0.5
+    red_light = obs[8] > 0.5
+
     rows = [
         # (label, value_str, value_colour)
         ("OBS SPACE", None,                       HDR),
         ("speed",     f"{obs[0] * 90:5.1f} km/h", VAL),
         ("nav",       nav_cmd,                    nav_col),
-        ("offset",    f"{obs[4]:+.3f}",           VAL),
-        ("obstacle",  f"{obs[5] * 50:5.1f} m",    VAL),
-        ("heading",   f"{obs[6] * 180:+.1f} deg", VAL),
+        ("lane angle", f"{obs[4] * 90:+.1f} deg", VAL),
+        ("lane offset", f"{obs[5]:+.3f}",         VAL),
+        ("on road",   "YES" if on_road else "NO", (60, 220, 80) if on_road else (60, 60, 220)),
+        ("obstacle",  f"{obs[7] * 50:5.1f} m",    VAL),
+        ("red light", "YES" if red_light else "NO", (60, 60, 220) if red_light else VAL),
         ("ACTION",    None,                       HDR),
         ("steer",     f"{action[0]:+.3f}",        VAL),
         ("throttle",  f"{action[1]:.3f}",         VAL),
@@ -697,7 +705,7 @@ def eval_model(
                 total_reward += float(reward)
 
                 speed_kmh = float(obs[0]) * 90.0
-                metrics["center_offsets"].append(float(obs[4]))
+                metrics["center_offsets"].append(float(obs[5]))
                 metrics["speeds"].append(speed_kmh)
                 metrics["rewards"].append(float(reward))
                 metrics["steps"] = step + 1
@@ -713,8 +721,8 @@ def eval_model(
                 steer_series.append(round(float(action[0]), 4))
                 throttle_series.append(round(float(action[1]), 4))
                 brake_series.append(round(float(action[2]), 4))
-                heading_series.append(round(float(obs[6]) * 180.0, 2))
-                obstacle_series.append(round(float(obs[5]) * 50.0, 2))
+                heading_series.append(round(float(obs[4]) * 90.0, 2))
+                obstacle_series.append(round(float(obs[7]) * 50.0, 2))
                 # nav command encoding
                 if obs[1] > 0.5:   nav_series.append(1)
                 elif obs[2] > 0.5: nav_series.append(2)

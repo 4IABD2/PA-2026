@@ -531,4 +531,129 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 
 **Prochaine étape** :
 - v3 : `p_collision` −1.0 → **−5.0**, 300k steps.
+
+---
+
+## 2026-07-01 (suite) — Branchement perception réelle (Franck + Karim)
+
+**Avancement** :
+- Remplacement complet des GT stubs (`CarlaGTDepthEstimator`, `CarlaGTLaneDetector`) par les vrais modèles.
+- `rl_env.py` : espace d'observation étendu de 7 → 9 scalaires. Nouveau contrat :
+  - `lane_angle_norm` (Karim / YOLOPv2) : angle de déviation de voie normalisé, remplace `center_offset` et `heading_norm` (CARLA GT supprimé).
+  - `is_on_road` (Karim) : 1.0 si voie détectée, 0.0 si `NONE` — `p_offroad` (−0.5/step) actif pour la première fois.
+  - `nearest_vehicle_norm` (Franck / YOLO11s + Depth Anything v2) : distance normalisée du véhicule le plus proche.
+  - `has_red_light` (Franck) : booléen 0/1, feu rouge détecté dans le frame courant.
+  - `speed_limit_norm` (Franck, mémorisé) : dernière limite de vitesse détectée (SPEED\_30/40/60/90), 50 km/h par défaut. Mémorisée entre frames car le panneau n'est pas toujours visible.
+- Caméra RL : 200×88 → **1280×720** pour respecter la résolution d'entraînement YOLO de Franck. Karim (YOLOPv2) resize en interne, pas de contrainte.
+- `src/lane_detection/` promu en package Python (`__init__.py` créé, import relatif corrigé dans `lane_perception.py`) pour permettre l'import depuis le repo root.
+- `run_rl_training.py`, `run_eval.py`, `demo_mockup.py` : suppression du depth sensor CARLA, init `PerceptionPipeline` + `lane_estimate` au démarrage.
+- 80 tests verts (24 tests rl_env réécrits pour la nouvelle interface, 56 autres inchangés).
+
+**Difficultés** :
+- `lane_perception.py` utilisait `from lane_geometry import lane_geometry` (import local, cassé hors du dossier `src/lane_detection/`). Résolu avec un try/except qui tente d'abord `src.lane_detection.lane_geometry` puis tombe sur l'import local — aucun script standalone de Karim cassé.
+- Mode synchrone CARLA : l'env s'arrête le temps de traiter chaque tick. Avec YOLO + Depth Anything + YOLOPv2 par step, le throughput dépend directement de la vitesse GPU. Pas un problème de cohérence (le serveur attend `world.tick()`), uniquement de steps/heure.
+
+**Décisions** :
+- `nearest_walker_norm` non ajouté : les walkers ne sont pas dans les scénarios Phase 1, et le collision sensor les couvre dans tous les cas. Peut être ajouté en 10e scalaire pour Phase 2.
+- `heading_norm` (dérivé du yaw CARLA GT) supprimé : `lane_angle_norm` de Karim encode la même information depuis la vision réelle, sans tricher sur la carte CARLA.
+- `step()` passe `center_offset=obs[4]` (= `lane_angle_norm`) à `compute_reward` — même formule `r_center = (1 − |angle_norm|) × 0.3`, sémantique identique (0 = centré, ±1 = bord de voie).
+
+**Prochaine étape** :
+- Récupérer `best.pt` de Franck sur le serveur d'entraînement.
+- Lancer run v3 : `uv run python3 scripts/run_rl_training.py --timesteps 300000 --tag ppo_v3 --host 100.97.91.60 --yolo-weights <path/best.pt>`.
+- Observer si `p_offroad` et `has_red_light` génèrent un signal d'apprentissage visible dès 30k steps.
+
+---
+
+## 2026-07-01 — Reprise session, intégration travail équipe
+
+**Avancement** :
+- Reprise après interruption. Commits v2 (fixes stall + grace period) finalisés et pushés.
+- Franck a livré son module perception complet : YOLO11s (détection objets, 11 classes) + Depth Anything v2 (profondeur monoculaire calibrée) + `PerceptionPipeline` qui fusionne les deux. Poids YOLO entraînés sur le dataset CARLA maison. Calibration depth versionnée dans `calibration.json`.
+- Karim a livré son module lane detection : YOLOPv2 (segmentation zone roulable + lignes), post-traitement géométrique, sortie `estimate(rgb) → (direction, angle)`. Fonctionne sans CARLA à l'inférence.
+- `feat/rl-phase1` intègre maintenant le travail des deux — les vrais modèles pourront remplacer les GT stubs dès la prochaine run.
+
+**Difficultés** :
+- Les journals de Franck (`src/perception/yolo/JOURNAL.md`, `src/perception/depth/JOURNAL.md`) et Karim (`src/perception/lanes/JOURNAL.md`) sont vides — aucune trace écrite de leur travail malgré le code livré. À signaler à l'équipe.
+
+**Décisions** :
+- **Format expérimentation acté** : `runs/EXPERIMENTS.md` + `ANALYSIS.md` par run (gitignorés). Référence pour toutes les analyses futures.
+- **Prochaine run v3** : `p_collision` −1.0 → **−5.0** pour casser le speed attractor. On branche les vrais modèles de Franck et Karim dès que v3 confirme la convergence.
+
+**Benchmarks** :
+- `ppo_v1_100k` : 0/8 P1, reward −20 moy.
+- `ppo_v2_300k` : 0/8 best (3/8 @30k), reward +17 moy. Stall et off-route corrigés. Speed attractor ~120k.
+
+**Prochaine étape** :
+1. Ouvrir PR `feat/rl-phase1` → `dev`.
+2. Coder fix v3 : `p_collision` −1.0 → **−5.0**.
+3. Lancer `ppo_v3_300k`.
 - Commande : `uv run python3 scripts/run_rl_training.py --timesteps 300000 --tag ppo_v3 --host 100.97.91.60`
+
+---
+
+## 2026-07-02 — Revue du module lane_detection, correction du reward de centrage
+
+**Avancement** :
+- Revue complète du module `src/lane_detection/` (code de Karim) pour vérifier la cohérence avec l'intégration faite la veille.
+- **Bug trouvé** : `lane_geometry.py` calcule bien deux grandeurs distinctes — `offset` (position latérale dans la voie, normalisée [-1, 1]) et `angle` (cap vers le point de fuite) — mais `lane_perception.estimate()` ne renvoyait que `(direction, angle)`, jetant l'`offset`. `rl_env.py` utilisait donc l'angle comme proxy de centrage dans le reward, alors que ce sont deux grandeurs physiques différentes (cap vs position) : une voiture peut rouler droite (angle≈0) tout en étant collée à la ligne blanche (offset≈±1), et le reward la récompensait à tort comme "bien centrée".
+- Fix : `estimate()` renvoie maintenant `(direction, angle, offset)`. `rl_env.py` garde `angle` pour l'observation (`lane_angle_norm`, inchangé) mais utilise `offset` pour le terme `r_center` du reward.
+- `reward_fn.py` : docstring corrigée (référençait encore l'ancien stub `CarlaGTLaneDetector`).
+- 2 tests ajoutés (`test_reward_center_term_uses_lane_offset_*`) qui prouvent que le reward suit l'offset et plus l'angle. 82 tests passent.
+
+**Difficultés** :
+- La décision du 2026-07-01 ("même formule, sémantique identique") était fausse — angle et offset ne sont pas interchangeables même s'ils sont corrélés. Repéré en relisant `lane_geometry.py` ligne par ligne.
+
+**Décisions** :
+- Périmètre volontairement limité à ce bug précis. Le reste des observations faites sur `src/lane_detection/` (imports cassés dans `test/`, duplication de code entre `lane_geometry.py` et `test/yolop_lane.py`, vocabulaire français `GAUCHE/DROITE/ALIGNE`, scripts `test/main.py` et `test/debug_pipeline.py` non fonctionnels) concerne le code de Karim et lui est laissé — pas de modification de son module au-delà de l'ajout d'`offset` dans `estimate()`.
+
+**Benchmarks** : 82 tests passent (`uv run pytest benchmarks/ -q`).
+
+**Prochaine étape** :
+- Suivre le training `ppo_v3_300k` en cours avec ce fix.
+- Signaler à Karim les imports cassés dans `src/lane_detection/test/` et la duplication de logique avec `lane_geometry.py`.
+
+---
+
+## 2026-07-02 (suite) — Observation 9 → 10 scalaires, fix HUD/eval désynchronisé
+
+**Avancement** :
+- **Élargissement de l'observation à 10 scalaires** : ajout de `lane_offset_norm` (offset latéral réel de Karim) en plus de `lane_angle_norm` déjà présent. Raison : le reward est maintenant jugé sur `offset`, mais la policy ne le voyait jamais directement dans son observation — elle devait déduire indirectement le lien angle→reward. Avec `offset` en observation, la policy dispose à la fois du signal de position (offset) et de cap (angle), complémentaires comme un P + D en régulation.
+  - Nouveau layout : `[speed, cmd_left, cmd_right, cmd_straight, lane_angle_norm, lane_offset_norm, is_on_road, nearest_vehicle_norm, has_red_light, speed_limit_norm]`.
+- **Bug trouvé en cascade** : `src/ai/inference/rl_demo.py` (HUD vidéo, highlights, collecte de métriques `eval_model`) lisait encore les index de l'ancien layout à **7 scalaires** (`obs[4]`=center_offset, `obs[5]`=obstacle, `obs[6]`=heading) — jamais mis à jour depuis le passage à 9 scalaires la veille. Conséquence concrète : `benchmark.py`'s `_success_straight` vérifiait `mean(abs(center_offsets)) < 0.3` sur des valeurs qui étaient en fait `lane_angle_norm`, pas un vrai offset latéral — le critère de succès du scénario `straight` jugeait la mauvaise grandeur depuis la refonte 9-scalaires.
+- Fix complet des index dans `rl_demo.py` (highlights `near_obstacle`/`lane_drift`, panneau HUD `_draw_obs_panel` enrichi avec `on_road`/`red_light`, collecte `eval_model`) + `scripts/demo_mockup.py` (`RouteFollowPolicy`) + `scripts/run_rl_training.py` (docstring, `params["obs"]`).
+- 84 tests passent (2 nouveaux tests sur `lane_offset_norm`).
+
+**Difficultés** :
+- Ce bug HUD/eval ne datait pas d'hier : il existait déjà silencieusement depuis le passage 7→9 scalaires (jamais remarqué car rien ne crashait, juste des métriques et un affichage faux). Repéré en cherchant tous les usages d'`obs[N]` du repo avant de décaler les index pour le 10e scalaire.
+
+**Décisions** :
+- `_success_straight` (`benchmark.py`) n'a pas été touché : il vérifiait déjà la bonne formule (`mean(abs(center_offsets)) < 0.3`), c'est la donnée en amont (`obs[4]` au lieu d'`obs[5]`) qui était fausse. Corrigée à la source dans `rl_demo.py`.
+- README `src/ai/` pas encore mis à jour (toujours à l'ancien schéma 7 scalaires + stubs GT) — à faire, mais hors du chemin critique pour lancer le prochain training.
+
+**Benchmarks** : 84 tests passent (`uv run pytest benchmarks/ -q`).
+
+**Prochaine étape** :
+- Lancer un nouveau training propre avec le reward + l'observation corrigés (le `ppo_v3` en cours utilisait encore l'ancien reward, à ne pas garder comme référence).
+- Mettre à jour `src/ai/README.md` (schéma d'observation, reward constants, perception réelle vs stubs GT).
+
+---
+
+## 2026-07-02 (suite) — README à jour, script de lancement guidé pour handoff Franck
+
+**Avancement** :
+- `src/ai/README.md` entièrement resynchronisé avec le code réel : diagramme perception (Franck/Karim au lieu des capteurs GT), observation 10 scalaires, `r_stall` corrigé −0.05 → −0.20 dans le doc (valeur réelle depuis la v2, jamais mise à jour), section "Contrats" en-tête corrigée (`SceneState`/`ControlOutput` ne sont utilisés nulle part dans `src/ai/` — le vrai contrat est `CarlaEnv.observation_space`/`action_space`), table de tests recomptée (28 tests sur `test_rl_env.py`, pas 20).
+- **`launch_training.py`** (racine du repo) : script de preflight + lancement guidé pour le prochain training, pensé pour un handoff à distance (Franck lance en local sur son PC, résultats renvoyés après coup, pas de débogage interactif possible). Vérifie dans l'ordre : CARLA joignable (`get_server_version()`, message clair si le serveur n'est pas lancé), map active = Town10HD_Opt (sinon propose de la charger automatiquement — sinon les scénarios du benchmark pointent vers de mauvais endroits), GPU détecté (`torch.cuda.is_available()`, sinon avertit du ralentissement 10-50× et demande confirmation), poids YOLO présents sur disque. Puis menu interactif 100k/300k/500k/custom steps + tag de run, et lance `scripts/run_rl_training.py` avec les bons arguments.
+
+**Difficultés** :
+- Repéré en marge du README : les scénarios de benchmark (`src/ai/inference/benchmark.py`) ont leurs `spawn_idx`/`dest_spawn_idx` calibrés spécifiquement sur Town10HD_Opt (155 spawn points). Aucun script d'entraînement ne charge cette map automatiquement (`run_rl_training.py` utilise `client.get_world()`, la map déjà active) — un training lancé sur une autre map tournerait sans crash mais avec une évaluation finale dénuée de sens. D'où le check de map dans `launch_training.py`.
+
+**Décisions** :
+- Le script de lancement invoque `scripts/run_rl_training.py` en sous-processus (`subprocess.run`) plutôt que d'importer et ré-orchestrer sa logique — plus simple, pas de duplication, et le `try/finally` de nettoyage CARLA de `run_rl_training.py` reste intact.
+- Pas de rechargement complet des modèles de perception en preflight (juste vérification de présence du fichier `best.pt`) — chargement réel déjà couvert par `run_rl_training.py` juste après ; dupliquer le chargement (YOLO + Depth Anything + YOLOPv2, ~10-30s) dans le script de check aurait été redondant.
+
+**Benchmarks** : `uv run python3 -c "import ast; ast.parse(open('launch_training.py').read())"` (syntaxe), test manuel du chemin d'échec CARLA-injoignable (message clair confirmé). Pas de test automatisé (script interactif dépendant de CARLA/GPU réels, hors du périmètre `benchmarks/`).
+
+**Prochaine étape** :
+- Franck : `git pull` + `uv sync` + `uv run python3 launch_training.py` sur son PC, choisir 100k pour le premier run.
+- Analyser sa courbe reward/eval avant de décider d'un 300k complet.

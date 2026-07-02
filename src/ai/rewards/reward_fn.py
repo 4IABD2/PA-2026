@@ -28,7 +28,8 @@ def compute_reward(
     Args:
         speed_kmh:     Current vehicle speed in km/h.
         center_offset: Lateral deviation from lane centre, normalised to [-1, 1].
-                       0 = centred, ±1 = at lane edge. From CarlaGTLaneDetector.
+                       0 = centred, ±1 = at lane edge. From Karim's lane detection
+                       (lane_geometry's `offset`, via lane_perception.estimate()).
         is_on_road:    True if the vehicle is on a drivable surface.
                        Hardcoded True until Karim's segmentation model is plugged in.
         collision:     True if a collision event was fired this step.
