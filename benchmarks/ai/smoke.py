@@ -1,196 +1,179 @@
-"""Smoke tests for src/ai/ V1 — sans CARLA, sans GPU."""
+"""Smoke tests Phase 1 — RL (sans CARLA, sans GPU)."""
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import numpy as np
-import tensorflow as tf
+import pytest
+
+from src.ai.rewards.reward_fn import compute_reward
+from src.interfaces.perception_types import LanesInfo
+from src.interfaces.stubs import CarlaGTDepthEstimator, CarlaGTLaneDetector
 
 
-def test_pilotnet_output_shapes_and_ranges():
-    """Model produces 3 named heads with correct shapes and activation ranges."""
-    from src.ai.config import IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS
-    from src.ai.models.v1_pilotnet_speed import build_pilotnet_speed
-
-    model = build_pilotnet_speed()
-
-    rng = np.random.default_rng(0)
-    image = rng.random((2, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS), dtype=np.float32)
-    speed = rng.random((2, 1), dtype=np.float32)
-
-    out = model({"image": image, "speed": speed}, training=False)
-
-    assert set(out.keys()) == {"steer", "throttle", "brake"}
-    for head in ("steer", "throttle", "brake"):
-        assert out[head].shape == (2, 1), f"head {head} shape {out[head].shape}"
-
-    steer = out["steer"].numpy()
-    throttle = out["throttle"].numpy()
-    brake = out["brake"].numpy()
-    assert np.all(steer >= -1.0) and np.all(steer <= 1.0)
-    assert np.all(throttle >= 0.0) and np.all(throttle <= 1.0)
-    assert np.all(brake >= 0.0) and np.all(brake <= 1.0)
+# ---------------------------------------------------------------------------
+# compute_reward
+# ---------------------------------------------------------------------------
 
 
-def test_pilotnet_trainable():
-    """Sanity: the model can fit a tiny synthetic dataset (loss decreases)."""
-    from src.ai.config import IMAGE_CHANNELS, IMAGE_HEIGHT, IMAGE_WIDTH, LOSS_WEIGHTS
-    from src.ai.models.v1_pilotnet_speed import build_pilotnet_speed
-
-    tf.keras.utils.set_random_seed(0)
-    model = build_pilotnet_speed()
-    model.compile(
-        optimizer="adam",
-        loss={"steer": "mse", "throttle": "mse", "brake": "mse"},
-        loss_weights=LOSS_WEIGHTS,
+def test_collision_terminates_with_negative_reward():
+    """Une collision doit terminer l'épisode et donner -1.0."""
+    reward, done = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=True
     )
+    assert done is True
+    assert reward == pytest.approx(-1.0)
 
-    rng = np.random.default_rng(0)
-    n = 8
-    image = rng.random((n, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS), dtype=np.float32)
-    speed = rng.random((n, 1), dtype=np.float32)
-    targets = {
-        "steer": rng.uniform(-0.5, 0.5, (n, 1)).astype(np.float32),
-        "throttle": rng.uniform(0.2, 0.8, (n, 1)).astype(np.float32),
-        "brake": rng.uniform(0.0, 0.3, (n, 1)).astype(np.float32),
-    }
 
-    history = model.fit(
-        {"image": image, "speed": speed},
-        targets,
-        batch_size=4,
-        epochs=20,
-        verbose=0,
+def test_offroad_applies_penalty():
+    """Être hors-route doit donner une récompense plus faible qu'en route."""
+    reward_onroad, _ = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False
     )
-
-    losses = history.history["loss"]
-    assert losses[-1] < losses[0] * 0.9, f"loss did not decrease meaningfully: {losses}"
-
-
-def _make_synthetic_run(run_dir, frames):
-    """Create a fake run directory with manifest.csv + JPEG noise images.
-
-    `frames` is a list of dicts with keys:
-        frame_id, speed_kmh, steer, throttle, brake, is_collision
-    """
-    import pandas as pd
-    from PIL import Image
-
-    (run_dir / "images").mkdir(parents=True, exist_ok=True)
-
-    rng = np.random.default_rng(0)
-    rows = []
-    for f in frames:
-        img_rel = f"images/{f['frame_id']:06d}.jpg"
-        img_path = run_dir / img_rel
-        noise = rng.integers(0, 256, (720, 1280, 3), dtype=np.uint8)
-        Image.fromarray(noise).save(img_path, quality=80)
-        rows.append(
-            {
-                "frame_id": f["frame_id"],
-                "image_path": img_rel,
-                "timestamp": f["frame_id"] * 2.0,
-                "command": "lane_follow",
-                "speed_kmh": f["speed_kmh"],
-                "steer": f["steer"],
-                "throttle": f["throttle"],
-                "brake": f["brake"],
-                "is_collision": f["is_collision"],
-                "town": "Town01",
-                "weather": "ClearNoon",
-            }
-        )
-    pd.DataFrame(rows).to_csv(run_dir / "manifest.csv", index=False)
+    reward_offroad, _ = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=False, collision=False
+    )
+    assert reward_offroad < reward_onroad
+    assert reward_offroad == pytest.approx(reward_onroad - 0.5)
 
 
-def test_data_loader_synthetic(tmp_path):
-    """load_dataset reads a synthetic run, drops collision frames, produces correct shapes."""
-    from src.ai.config import IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS
-    from src.ai.training.data_loader import load_dataset
-
-    run = tmp_path / "run01"
-    frames = [
-        {
-            "frame_id": 0,
-            "speed_kmh": 10.0,
-            "steer": 0.0,
-            "throttle": 0.5,
-            "brake": 0.0,
-            "is_collision": 0,
-        },
-        {
-            "frame_id": 1,
-            "speed_kmh": 12.0,
-            "steer": 0.1,
-            "throttle": 0.5,
-            "brake": 0.0,
-            "is_collision": 0,
-        },
-        {
-            "frame_id": 2,
-            "speed_kmh": 15.0,
-            "steer": -0.05,
-            "throttle": 0.4,
-            "brake": 0.0,
-            "is_collision": 0,
-        },
-        {
-            "frame_id": 3,
-            "speed_kmh": 0.0,
-            "steer": 0.3,
-            "throttle": 0.0,
-            "brake": 1.0,
-            "is_collision": 1,
-        },  # dropped
-        {
-            "frame_id": 4,
-            "speed_kmh": 8.0,
-            "steer": -0.2,
-            "throttle": 0.6,
-            "brake": 0.0,
-            "is_collision": 0,
-        },
-    ]
-    _make_synthetic_run(run, frames)
-
-    train_ds, _, info = load_dataset([run], batch_size=2, seed=0)
-
-    assert info["n_total_kept"] == 4
-    assert info["n_dropped_collisions"] == 1
-    assert info["n_train"] + info["n_val"] == 4
-
-    inputs, targets = next(iter(train_ds))
-    assert inputs["image"].shape[1:] == (IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS)
-    assert inputs["speed"].shape[1:] == (1,)
-    assert set(targets.keys()) == {"steer", "throttle", "brake"}
-    assert float(inputs["image"].numpy().max()) <= 1.0
-    assert float(inputs["image"].numpy().min()) >= 0.0
+def test_speed_reward_scales_with_speed():
+    """Plus la vitesse est élevée, plus la récompense est haute (à offset fixe)."""
+    reward_slow, _ = compute_reward(
+        speed_kmh=10.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    reward_fast, _ = compute_reward(
+        speed_kmh=40.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    assert reward_fast > reward_slow
 
 
-def test_data_loader_split_deterministic(tmp_path):
-    """Same seed → same train/val split (set of (run_dir, frame_id) tuples)."""
-    from src.ai.training.data_loader import load_dataset
+def test_centering_reward_maximal_at_center():
+    """Un offset de 0 doit donner plus de récompense qu'un offset de 1."""
+    reward_center, _ = compute_reward(
+        speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    reward_edge, _ = compute_reward(
+        speed_kmh=0.0, center_offset=1.0, is_on_road=True, collision=False
+    )
+    assert reward_center > reward_edge
 
-    run = tmp_path / "run01"
-    frames = [
-        {
-            "frame_id": i,
-            "speed_kmh": 10.0 + i,
-            "steer": 0.0,
-            "throttle": 0.5,
-            "brake": 0.0,
-            "is_collision": 0,
-        }
-        for i in range(20)
-    ]
-    _make_synthetic_run(run, frames)
 
-    _, _, info_a = load_dataset([run], batch_size=4, seed=42)
-    _, _, info_b = load_dataset([run], batch_size=4, seed=42)
-    _, _, info_c = load_dataset([run], batch_size=4, seed=999)
+def test_alive_bonus_always_present():
+    """Même à l'arrêt centré, la récompense doit inclure le bonus de survie."""
+    reward, done = compute_reward(
+        speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    assert done is False
+    assert reward >= 0.01
 
-    set_a = {tuple(s) for s in info_a["splits"]["train"]}
-    set_b = {tuple(s) for s in info_b["splits"]["train"]}
-    set_c = {tuple(s) for s in info_c["splits"]["train"]}
 
-    assert set_a == set_b, "Same seed should produce same split"
-    assert set_a != set_c, "Different seed should produce different split"
+def test_reward_components_sum_at_max():
+    """À vitesse max (90 km/h), offset 0, en route, sans collision : r = 0.5 + 0.3 + 0.01."""
+    reward, done = compute_reward(
+        speed_kmh=90.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    assert done is False
+    assert reward == pytest.approx(0.5 + 0.3 + 0.01)
+
+
+def test_collision_overrides_other_components():
+    """En collision, la reward doit être -1.0 quelle que soit la vitesse ou l'offset."""
+    reward, done = compute_reward(
+        speed_kmh=50.0, center_offset=0.0, is_on_road=True, collision=True
+    )
+    assert reward == pytest.approx(-1.0)
+    assert done is True
+
+
+def test_stall_penalises_zero_speed():
+    """Rester à l'arrêt doit être moins bien récompensé qu'avancer."""
+    reward_still, _ = compute_reward(
+        speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    reward_moving, _ = compute_reward(
+        speed_kmh=5.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    assert reward_moving > reward_still
+
+
+# ---------------------------------------------------------------------------
+# CarlaGTDepthEstimator
+# ---------------------------------------------------------------------------
+
+
+def test_depth_estimator_registers_listener_on_init():
+    """Le constructeur doit appeler sensor.listen() pour recevoir les frames."""
+    sensor = Mock()
+    CarlaGTDepthEstimator(sensor)
+    sensor.listen.assert_called_once()
+
+
+def test_depth_estimator_raises_before_first_frame():
+    """estimate() doit lever RuntimeError si aucune frame n'a encore été reçue."""
+    sensor = Mock()
+    est = CarlaGTDepthEstimator(sensor)
+    with pytest.raises(RuntimeError):
+        est.estimate(np.zeros((88, 200, 3), dtype=np.uint8))
+
+
+def test_depth_estimator_returns_float32_array_when_ready():
+    """estimate() doit retourner _last_depth dès qu'une frame a été reçue."""
+    sensor = Mock()
+    est = CarlaGTDepthEstimator(sensor)
+    est._last_depth = np.ones((88, 200), dtype=np.float32) * 10.0
+    result = est.estimate(np.zeros((88, 200, 3), dtype=np.uint8))
+    assert result.dtype == np.float32
+    assert result.shape == (88, 200)
+    assert float(result[0, 0]) == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------------------
+# CarlaGTLaneDetector
+# ---------------------------------------------------------------------------
+
+
+def _make_lane_detector(vx: float, vy: float, wx: float, wy: float, yaw: float, lane_width: float = 3.5):
+    """Helper : construit un CarlaGTLaneDetector avec des mocks positionnés."""
+    world, vehicle = Mock(), Mock()
+    vehicle.get_transform.return_value.location.x = vx
+    vehicle.get_transform.return_value.location.y = vy
+    wp = Mock()
+    wp.transform.location.x = wx
+    wp.transform.location.y = wy
+    wp.transform.rotation.yaw = yaw
+    wp.lane_width = lane_width
+    world.get_map.return_value.get_waypoint.return_value = wp
+    return CarlaGTLaneDetector(world, vehicle)
+
+
+def test_lane_detector_returns_lanes_info():
+    """detect() doit retourner un LanesInfo avec center_offset dans [-1, 1]."""
+    det = _make_lane_detector(0.0, 0.0, 0.0, 0.0, 0.0)
+    result = det.detect(np.zeros((88, 200, 3), dtype=np.uint8))
+    assert isinstance(result, LanesInfo)
+    assert result.center_offset is not None
+    assert -1.0 <= result.center_offset <= 1.0
+
+
+def test_lane_detector_centered_when_on_waypoint():
+    """Véhicule exactement sur le waypoint → center_offset ≈ 0."""
+    det = _make_lane_detector(vx=0.0, vy=0.0, wx=0.0, wy=0.0, yaw=0.0)
+    result = det.detect(np.zeros((88, 200, 3), dtype=np.uint8))
+    assert result.center_offset == pytest.approx(0.0)
+
+
+def test_lane_detector_positive_offset_when_right_of_waypoint():
+    """Véhicule à droite du waypoint (heading +X, véhicule décalé en +Y) → offset > 0."""
+    # lane_width=4m → half=2m, décalage=1m → offset=0.5
+    det = _make_lane_detector(vx=0.0, vy=1.0, wx=0.0, wy=0.0, yaw=0.0, lane_width=4.0)
+    result = det.detect(np.zeros((88, 200, 3), dtype=np.uint8))
+    assert result.center_offset == pytest.approx(0.5)
+
+
+def test_lane_detector_clamps_to_minus_one_plus_one():
+    """Un décalage extrême doit être clampé à [-1, 1]."""
+    det = _make_lane_detector(vx=0.0, vy=100.0, wx=0.0, wy=0.0, yaw=0.0)
+    result = det.detect(np.zeros((88, 200, 3), dtype=np.uint8))
+    assert result.center_offset == pytest.approx(1.0)

@@ -1,6 +1,6 @@
-"""Perception de voie (production) : YOLOPv2 -> masques -> geometrie de voie.
-API pour l'IA centrale : estimate(rgb) -> (direction, angle).
-Rendu debug/live : draw_overlay. La geometrie est dans lane_geometry.py."""
+"""Lane perception (production): YOLOPv2 -> masks -> lane geometry.
+API for the central AI: estimate(rgb) -> (direction, angle).
+Debug/live rendering: draw_overlay. Geometry logic is in lane_geometry.py."""
 
 import os
 import urllib.request
@@ -9,12 +9,15 @@ import cv2
 import numpy as np
 import torch
 
-from lane_geometry import lane_geometry
+try:
+    from src.lane_detection.lane_geometry import lane_geometry
+except ImportError:
+    from lane_geometry import lane_geometry  # standalone execution from src/lane_detection/
 
 WEIGHTS_URL = "https://github.com/CAIC-AD/YOLOPv2/releases/download/V0.0.1/yolopv2.pt"
 WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
 WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, "yolopv2.pt")
-INF_W, INF_H = 640, 480   # entree du modele (multiple de 32, ratio 4:3)
+INF_W, INF_H = 640, 480   # model input size (multiple of 32, 4:3 ratio)
 
 DRIVABLE_COLOR = (0, 180, 0)
 LANE_COLOR = (0, 0, 255)
@@ -22,18 +25,18 @@ TRAJ_COLOR = (0, 255, 255)
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
-# --- Modele YOLOPv2 : RGB -> masques (zone roulable + lignes de voie) --------
+# --- YOLOPv2 model: RGB -> masks (drivable area + lane lines) ----------------
 def _ensure_weights():
     os.makedirs(WEIGHTS_DIR, exist_ok=True)
     if not os.path.exists(WEIGHTS_PATH):
-        print(f"[YOLOPv2] telechargement des poids -> {WEIGHTS_PATH} ...")
+        print(f"[YOLOPv2] downloading weights -> {WEIGHTS_PATH} ...")
         urllib.request.urlretrieve(WEIGHTS_URL, WEIGHTS_PATH)
     return WEIGHTS_PATH
 
 
 class LaneDetector:
-    """Charge YOLOPv2 (TorchScript) et produit, depuis une image RGB, les masques
-    (lignes de voie + zone roulable) puis la geometrie de voie."""
+    """Loads YOLOPv2 (TorchScript) and produces, from an RGB image, masks
+    (lane lines + drivable area) then lane geometry."""
 
     def __init__(self, weights=None, device=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -47,7 +50,7 @@ class LaneDetector:
 
     @staticmethod
     def _mask(t, w, h):
-        """(1, C, h, w) -> masque uint8 plein cadre. C>=2 -> argmax, sinon seuil."""
+        """(1, C, h, w) -> uint8 full-frame mask. C>=2 -> argmax, else threshold."""
         if t.dim() == 4 and t.shape[1] >= 2:
             m = t.argmax(1)
         elif t.dim() == 4:
@@ -59,7 +62,7 @@ class LaneDetector:
         return (m > 0.5).astype(np.uint8) * 255
 
     def detect(self, rgb):
-        """Image RGB -> dict de geometrie de voie (cf. lane_geometry)."""
+        """RGB image -> lane geometry dict (see lane_geometry)."""
         h, w = rgb.shape[:2]
         with torch.no_grad():
             out = self.model(self._preprocess(rgb))     # (det, drivable_seg, lane_seg)
@@ -68,26 +71,27 @@ class LaneDetector:
         return lane_geometry(lanes, drivable, w, h)
 
 
-# --- API de centralisation : RGB -> (direction, angle) ----------------------
+# --- Central API: RGB -> (direction, angle) ----------------------------------
 _DETECTOR = None
 
 
 def estimate(rgb, detector=None):
-    """Entree : image RGB. Sortie : (direction, angle).
-       direction in {"GAUCHE","DROITE","ALIGNE","NONE"} ; angle en degres
-       (signe : <0 gauche, >0 droite). Modele charge une fois (singleton)."""
+    """Input: RGB image. Output: (direction, angle, offset).
+       direction in {"GAUCHE","DROITE","ALIGNE","NONE"}; angle in degrees
+       (sign: <0 left, >0 right); offset = lateral position in [-1, 1]
+       (0 = lane centre, -1/+1 = left/right edge). Model loaded once (singleton)."""
     global _DETECTOR
     if detector is None:
         if _DETECTOR is None:
             _DETECTOR = LaneDetector()
         detector = _DETECTOR
     r = detector.detect(rgb)
-    return r["direction"], r["angle"]
+    return r["direction"], r["angle"], r["offset"]
 
 
 def draw_overlay(bgr, result):
-    """Dessine zone roulable (vert) + lignes (rouge) + trajectoire (jaune) +
-    bandeau consigne. `bgr` = image d'affichage (BGR)."""
+    """Draw drivable area (green) + lanes (red) + trajectory (yellow) +
+    direction banner. `bgr` = display image (BGR)."""
     overlay = bgr.copy()
     h, w = bgr.shape[:2]
     status = result.get("status", "NO_LANE")
@@ -108,14 +112,14 @@ def draw_overlay(bgr, result):
     overlay[0:80, 0:w] = cv2.addWeighted(bar, 0.4, np.zeros_like(bar), 0.6, 0)
     if status == "OK":
         d = result["direction"]
-        label, col = {"GAUCHE": ("<<<  ALLER A GAUCHE", (0, 200, 255)),
-                      "DROITE": ("ALLER A DROITE  >>>", (0, 200, 255)),
-                      "ALIGNE": ("ALIGNE  OK", (0, 255, 0))}[d]
+        label, col = {"GAUCHE": ("<<<  TURN LEFT", (0, 200, 255)),
+                      "DROITE": ("TURN RIGHT  >>>", (0, 200, 255)),
+                      "ALIGNE": ("ALIGNED  OK", (0, 255, 0))}[d]
         cv2.putText(overlay, label, (15, 38), FONT, 0.95, col, 2, cv2.LINE_AA)
         cv2.putText(overlay, f"angle={result['angle']:+.1f} deg", (15, 70),
                     FONT, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
     else:
-        cv2.putText(overlay, "VOIE NON DETECTEE", (15, 50), FONT, 1.0, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.putText(overlay, "LANE NOT DETECTED", (15, 50), FONT, 1.0, (0, 0, 255), 2, cv2.LINE_AA)
     return overlay
 
 
@@ -128,6 +132,6 @@ if __name__ == "__main__":
         res = det.detect(rgb)
         print("direction =", res["direction"], "| angle =", round(res["angle"], 1), "deg")
         cv2.imwrite("perception_out.png", draw_overlay(bgr, res))
-        print("ecrit: perception_out.png")
+        print("written: perception_out.png")
     else:
         print("usage: python lane_perception.py <image.png>")

@@ -1,7 +1,7 @@
 # `src/ai/` — IA centrale (décision)
 
 > **Owner** : Frédéric Huang
-> **Contrats** : produit [`ControlOutput`](../interfaces/ai_types.py) à partir de [`SceneState`](../interfaces/ai_types.py) + [`HighLevelCommand`](../interfaces/navigation_types.py)
+> **Contrats (Phase 1 réel)** : `CarlaEnv` (`gym.Env`) consomme directement `PerceptionPipeline.perceive()` (Franck), `lane_perception.estimate()` (Karim) et `Navigation.next_command()` (Victor) → `HighLevelCommand` ; produit une observation `Box(10,)` et consomme une action `Box(3,)` (steer, throttle, brake). Les dataclasses `SceneState`/`ControlOutput` de [`ai_types.py`](../interfaces/ai_types.py) faisaient partie du design initial mais ne sont plus utilisées : PPO/Stable-Baselines3 impose un espace d'observation/action `numpy` plat, pas des objets structurés.
 
 ---
 
@@ -9,65 +9,152 @@
 
 Module de **décision** : à partir de l'état courant de l'environnement et de l'intention de navigation, produire les contrôles à appliquer au véhicule (steering, accélération, freinage).
 
-Approche retenue : **RL hybride en deux phases** :
+## Phases
 
-1. **Phase 1 — CIL pre-training** : un modèle de réseau de neurones apprend à imiter un expert (l'autopilot CARLA pendant la collecte) en mappant `(image | scene_state, commande_HN, vitesse) → (steer, throttle, brake)`. Architecture initiale : PilotNet baseline. Permet d'avoir une démo fonctionnelle rapidement et de bootstrap le vrai entraînement RL.
-2. **Phase 2 — RL fine-tuning** : le modèle pré-entraîné est ensuite affiné en boucle avec CARLA via un algorithme RL (PPO ou SAC, à confirmer) pour optimiser une fonction de récompense (collisions, sortie de route, distance parcourue, respect des feux). Approche moderne style AlphaStar / OpenAI Five.
+### Phase 0 — CIL / PilotNet (archivé)
 
-**Pourquoi ce choix** : du RL pur from scratch sur CARLA est très long à converger sur une tâche multi-objectifs (conduite + feux + obstacles). Pré-initialiser le modèle par imitation learning donne un agent déjà fonctionnel, que le RL peut ensuite peaufiner. On garde une vraie composante RL (cf. sujet original du projet) sans le risque "rien à montrer".
+> Code préfixé `v1_*`. Ne pas modifier. Gardé comme référence et comme introduction à la stack CARLA.
 
-## Architecture
+L'IA imitait l'autopilot CARLA (Conditional Imitation Learning) : le modèle apprenait à copier les contrôles `(steer, throttle, brake)` de l'expert à partir des images RGB. Résultats Phase 0 documentés dans le [JOURNAL](JOURNAL.md).
 
-Le module est divisé en 3 sous-dossiers indépendants :
+**Limite principale** : le head `steer` avait un R² négatif (-0.67) — le modèle prédisait "tout droit" 92 % du temps car le dataset était à 92.7 % `|steer| ≤ 0.05`. L'imitation ne donne pas assez de signal sur les virages.
+
+### Phase 1 — RL par renforcement (en cours)
+
+L'IA apprend **seule** via PPO (Stable-Baselines3). Elle n'imite plus un expert — elle explore CARLA, reçoit un reward à chaque step, et optimise sa policy. Elle a accès à des **observations structurées** issues des modules de perception plutôt qu'aux pixels bruts.
+
+---
+
+## Architecture Phase 1
+
+### Vue d'ensemble
+
+```
+CARLA World (sync mode, 20 FPS)
+         │
+         ├─ RGB camera (1280×720 — résolution d'entraînement YOLO de Franck)
+         └─ Collision sensor ──────────► collision (bool, épisode terminé)
+
+[PerceptionPipeline — Franck]   src/perception/pipeline.py
+         │   YOLO11s (détection, 11 classes) + Depth Anything v2 (profondeur monoculaire calibrée)
+         ▼
+         liste d'objets détectés + distance_m ──► nearest_vehicle_norm, has_red_light, speed_limit_norm
+
+[lane_perception.estimate() — Karim]   src/lane_detection/lane_perception.py
+         │   YOLOPv2 (segmentation zone roulable + lignes) + géométrie (lane_geometry.py)
+         ▼
+         (direction, angle, offset) ──► lane_angle_norm, lane_offset_norm, is_on_road
+
+[Navigation — Victor]
+         ├─ plan(start, dest) → Route          ← au reset de chaque épisode
+         └─ next_command(pos, route) → HighLevelCommand  ← à chaque step
+
+[Observation vector] — 10 scalaires normalisés  ∈ [-1, 1] ou [0, 1]
+         ├─ [0] speed_norm            = speed_kmh / 90.0                    ∈ [0, 1]
+         ├─ [1] cmd_left              = 1.0 si LEFT else 0.0
+         ├─ [2] cmd_right             = 1.0 si RIGHT else 0.0
+         ├─ [3] cmd_straight          = 1.0 si STRAIGHT else 0.0
+         │       [0,0,0] = LANE_FOLLOW (pas d'intersection)
+         ├─ [4] lane_angle_norm       = angle de cap vers la voie / 90.0    ∈ [-1, 1]  (Karim)
+         ├─ [5] lane_offset_norm      = déviation latérale voie             ∈ [-1, 1]  (Karim)
+         ├─ [6] is_on_road            = 1.0 si voie détectée else 0.0                  (Karim)
+         ├─ [7] nearest_vehicle_norm  = min(dist_véhicule, 50m) / 50m       ∈ [0, 1]  (Franck)
+         ├─ [8] has_red_light         = 1.0 si feu rouge détecté else 0.0              (Franck)
+         └─ [9] speed_limit_norm      = limite de vitesse mémorisée / 90.0  ∈ [0, 1]  (Franck)
+
+[PPO Policy] — Stable-Baselines3 MlpPolicy
+         │   2 couches Dense 64, activation tanh
+         ▼
+[Action] — espace continu Box(3,)
+         ├─ steer    ∈ [-1, 1]
+         ├─ throttle ∈ [0, 1]
+         └─ brake    ∈ [0, 1]
+
+[Reward function — par step]   src/ai/rewards/reward_fn.py
+         ├─ r_speed     = (speed_kmh / 90.0) × 0.5          → encourage la vitesse
+         ├─ r_center    = (1 − |lane_offset_norm|) × 0.3    → encourage le centrage
+         ├─ r_alive     = +0.01                              → survie (anti-crash passif)
+         ├─ r_stall     = −0.20 si speed < 1 km/h           → pénalise l'immobilisme
+         ├─ r_offroad   = −0.5  si is_on_road=False         → pénalité hors route (Karim)
+         ├─ r_off_route = −0.5  si > 15m de la route GPS    → pénalise la déviation GPS
+         └─ r_collision = −1.0 + done=True                   → épisode terminé
+```
+
+### Espace d'observation — pourquoi des scalaires et pas des pixels
+
+Le RL pur sur pixels (end-to-end) nécessite des dizaines de millions de steps et des semaines de compute. Les observations compactes convergent en quelques heures car :
+- L'espace d'état est petit (10 floats) — même si la caméra tourne à 1280×720 (résolution imposée par le modèle YOLO de Franck), la policy PPO ne voit **jamais** l'image brute, seulement les scalaires extraits par les modules de perception
+- Chaque feature est directement exploitable (le réseau n'a pas à apprendre à extraire la distance depuis les pixels)
+- La variance de l'estimation de gradient (PPO) est beaucoup plus faible
+
+### Perception réelle (Franck + Karim)
+
+Les scalaires de perception viennent des vrais modèles d'IA, pas de capteurs GT CARLA :
+
+- **Franck** — `PerceptionPipeline` (`src/perception/pipeline.py`) : YOLO11s (détection d'objets, 1280×720) + Depth Anything v2 (profondeur monoculaire, calibrée via `calibration.json`) fusionnés en une liste d'objets avec `distance_m`. Alimente `nearest_vehicle_norm`, `has_red_light`, `speed_limit_norm` (mémorisé entre frames car le panneau n'est pas toujours visible dans le champ de vision).
+- **Karim** — `lane_perception.estimate()` (`src/lane_detection/lane_perception.py`) : YOLOPv2 (segmentation zone roulable + lignes, resize interne 640×480) + géométrie (`lane_geometry.py`, clustering des lignes + suivi + polyfit) → `(direction, angle, offset)`. Alimente `lane_angle_norm` (cap vers la voie), `lane_offset_norm` (position latérale), `is_on_road` (`direction != "NONE"`).
+
+Les anciens stubs GT CARLA (`src/interfaces/stubs.py`, `CarlaGTDepthEstimator`/`CarlaGTLaneDetector`) ne sont plus utilisés dans le pipeline d'entraînement — le code de l'IA centrale n'a pas eu besoin de changer au moment du swap, tout passait déjà par les protocoles de `src/interfaces/`.
+
+### Intégration navigation Victor
+
+- Au `reset()` de chaque épisode : `nav.plan(spawn_point, destination)` → Route
+- À chaque step : `nav.next_command(vehicle_pos, route)` → `HighLevelCommand`
+- La commande est encodée en one-hot dans l'observation (3 floats : left/right/straight)
+- `LANE_FOLLOW` (hors intersection) = `[0, 0, 0]`
+
+**Benchmark — GPS route par scénario (`dest_spawn_idx`)** : pour les scénarios de jonction,
+la route est replanifiée vers un spawn cible spécifique après le reset, ce qui garantit que
+la nav donne la bonne commande directionnelle (LEFT / RIGHT / STRAIGHT). Les `dest_spawn_idx`
+ont été identifiés via `scripts/find_dest_spawns.py` (API waypoint CARLA pure, sans nav.plan).
+
+**Pénalité off-route** : `CarlaEnv._is_off_route()` détecte si l'ego est à plus de 15m du
+waypoint de route le plus proche via une fenêtre glissante (O(1) amorti). La pénalité
+`−0.5/step` est appliquée dans `compute_reward(off_route=True)`.
+
+---
+
+## Structure des fichiers
 
 ```
 src/ai/
-├── config.py              ← Hyperparamètres centralisés
-├── models/                ← Architectures de réseaux
-├── training/              ← Scripts d'entraînement (+ data loader spécifique IA)
-└── inference/             ← Boucle de démo dans CARLA
+├── phase0/                    ← Phase 0 archivée (CIL/PilotNet), ne pas modifier
+│   ├── config.py
+│   ├── models/
+│   ├── training/
+│   └── inference/
+├── training/
+│   ├── rl_env.py              ← CarlaEnv (gym.Env) : spaces, reset, step, _is_off_route
+│   ├── rl_train.py            ← make_model() + train() PPO SB3
+│   └── run_manager.py         ← dossier de run horodaté, CSV, courbe reward
+├── inference/
+│   ├── rl_demo.py             ← run_episode, record_episode, eval_model (benchmark complet)
+│   └── benchmark.py           ← BENCHMARK_SCENARIOS (13 scénarios fixes) + success_fn
+└── rewards/
+    └── reward_fn.py           ← compute_reward() — fonction pure, sans CARLA
+
+scripts/
+├── run_rl_training.py         ← Pipeline complète : training + eval checkpoints + vidéos
+├── run_eval.py                ← Évaluation standalone d'un modèle → vidéo + JSON
+├── explore_spawns.py          ← Explore et classe les spawn points par catégorie
+└── find_dest_spawns.py        ← Trouve les dest_spawn_idx par direction de carrefour
 ```
 
-> ℹ️ **La collecte du dataset n'est pas dans ce module.** Elle est partagée entre tous les modules d'apprentissage et vit dans [src/dataset/](../dataset/). Voir aussi le [README racine](../../README.md) section "Datasets".
+---
 
-> ℹ️ **La lecture du dataset** (parsing manifest, conversion en `tf.data.Dataset`, augmentations) vit dans `training/data_loader.py` parce qu'elle est utilisée uniquement par le training. Pas de sous-dossier `dataset/` séparé.
+## Phase 0 — Documentation technique (archivée)
 
-### `models/`
-
-Définit les architectures de réseaux. **Convention** : préfixe `v<N>_` + nom auto-documenté pour garder la trace chronologique. Chaque version a son propre fichier ; on ne réécrit pas en place.
-
-- **`v1_pilotnet_speed.py`** — CNN style NVIDIA PilotNet + speed scalaire concat. Baseline `(image, speed) → (steer, throttle, brake)`. Voir [JOURNAL](JOURNAL.md) pour les résultats V1.
-- (à venir) **`v2_*.py`** — itérations basées sur les résultats V1 (Huber loss, oversampling steer, etc.).
-- (à venir) **`v<N>_cil_*.py`** — Conditional Imitation Learning multi-têtes, une fois `LocalPlanner` branché et commandes HN diverses dans le dataset.
-
-### `training/`
-
-Scripts CLI pour entraîner les modèles. Sauvegarde dans `checkpoints/<model_name>/` : `best.keras`, `last.keras`, `splits.json`, `config.json`, `training_log.csv`.
-
-```bash
-uv run -m src.ai.training.train \
-  --runs data/runs/<date>_town01_clearnoon data/runs/<date>_town01_cloudynoon ... \
-  --output checkpoints/pilotnet_v1/
-```
-
-**Args** :
-- `--runs` (requis) : un ou plusieurs dossiers de runs (chacun avec son `manifest.csv`)
-- `--output` (requis) : dossier de sortie pour les checkpoints
-- `--epochs` / `--batch-size` / `--seed` : optionnels, défauts dans `src/ai/config.py`
-
-**Sur GPU NVIDIA Linux sans bundle CUDA système** : `uv sync` n'installe que TF sans les libs CUDA bundled. Avant de lancer, ajouter `tensorflow[and-cuda]` dans le venv et exporter `LD_LIBRARY_PATH` vers les wheels :
+### Training CIL (offline)
 
 ```bash
 uv pip install 'tensorflow[and-cuda]==2.21.0'
 export LD_LIBRARY_PATH="$(ls -d .venv/lib/python3.10/site-packages/nvidia/*/lib | tr '\n' ':')${LD_LIBRARY_PATH:-}"
-CUDA_VISIBLE_DEVICES=1 uv run -m src.ai.training.train ...
+CUDA_VISIBLE_DEVICES=1 uv run -m src.ai.training.train \
+  --runs data/runs/<date>_town01_clearnoon \
+  --output checkpoints/pilotnet_v1/
 ```
 
-### `inference/`
-
-Boucle de démo : lance CARLA, charge un modèle entraîné, prédit et applique les contrôles à chaque tick. Spectator chase cam derrière la voiture, et après une collision la voiture est despawnée puis respawnée à un autre spawn point pour que la démo tienne sur toute la `--duration`.
-
-**Pré-requis** : serveur CARLA tournant sur `localhost:2000` (ou autre via `--host`/`--port`).
+### Démo CIL (archivée)
 
 ```bash
 uv run -m src.ai.inference.carla_demo \
@@ -75,126 +162,160 @@ uv run -m src.ai.inference.carla_demo \
   --town Town01 --weather ClearNoon --duration 120
 ```
 
-**Args** :
-- `--weights` (requis) : chemin du `best.keras` issu du training
-- `--town` (défaut Town01) : carte CARLA (Town01, Town02, Town03, …)
-- `--weather` (défaut ClearNoon) : preset météo CARLA
-- `--duration` (défaut 120) : durée simu en secondes
-- `--host` / `--port` (défauts localhost:2000) : serveur CARLA
-- `--record DIR` : dump chaque frame caméra avec HUD overlay en JPEG dans `DIR/frames/`, plus mirror du log console dans `DIR/demo.log`. La commande ffmpeg pour assembler le MP4 est imprimée à la fin.
+**Résultats Phase 0** (2026-05-10) :
+- 9 respawns sur 120s (1 crash / ~13s)
+- R² steer = -0.67 (échec — collapse vers 0)
+- R² throttle = +0.33, R² brake = +0.64
+- val_loss = 0.0735 sur 1350 frames
 
-**Post-processing appliqué dans la boucle** (constantes en haut du fichier `carla_demo.py`) :
-- **Mutex throttle/brake** : le V1 sort les deux pédales non-nulles simultanément (artefact des démonstrations autopilot). On garde la plus grande et on zéro l'autre, sinon CARLA inhibe la traction et la voiture reste collée.
-- **Kickstart** (`KICKSTART_SPEED_KMH=3.0`, `KICKSTART_THROTTLE=0.6`) : à basse vitesse, force throttle pour casser le point fixe stable "stopped → brake" appris du dataset (51 % des frames de training sont à <9 km/h).
-- **Respawn** (`RESPAWN_DELAY_S=2.0`) : sensor `sensor.other.collision` attaché à l'ego ; après hit, handbrake forcé 2 s puis despawn + respawn au prochain `random.choice(spawn_points)`.
+---
 
-**Exemple avec recording vidéo** :
+## Phase 1 — Lancer le training RL
 
 ```bash
-uv run -m src.ai.inference.carla_demo \
-  --weights checkpoints/pilotnet_v1/best.keras \
-  --town Town01 --weather ClearNoon --duration 120 \
-  --record logs/demo_v1_<date>
+# Training complet (génère aussi les evals et les vidéos automatiquement) :
+uv run python3 scripts/run_rl_training.py \
+  --timesteps 300000 \
+  --tag ppo_v1 \
+  --host <ip-carla>
+
+# Smoke test (vérifie que le pipeline tourne, ~2 min) :
+uv run python3 scripts/run_rl_training.py --timesteps 1000 --tag smoke --host <ip-carla>
 ```
 
-Puis (la commande exacte est imprimée par la démo en fin de run) :
+Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` :
+
+| Fichier / Dossier | Contenu |
+|---|---|
+| `params.json` | hyperparamètres + config de la run |
+| `model_best.zip` | meilleur checkpoint (EvalCallback SB3) |
+| `model_final.zip` | poids à la fin du training |
+| `training_log.monitor.csv` | reward / longueur par épisode (Monitor SB3) |
+| `reward_curve.png` | courbe reward brute + moyenne mobile |
+| `demo.mp4` | vidéo d'inférence avec HUD (best model, spawn fixe) |
+| `evals/checkpoint_XXXXk.mp4` | vidéo 13 scénarios par checkpoint |
+| `evals/best_model.mp4` | vidéo 13 scénarios du best model |
+| `evals/results.json` | métriques complètes (tous checkpoints + best model) |
+
+## Phase 1 — Évaluation d'un modèle existant
 
 ```bash
-ffmpeg -framerate 20 -i logs/demo_v1_<date>/frames/%06d.jpg \
-  -c:v libx264 -pix_fmt yuv420p logs/demo_v1_<date>/demo.mp4
+# Évalue un modèle sur les 13 scénarios → vidéo annotée + JSON métriques
+uv run python3 scripts/run_eval.py \
+  --model runs/<dir>/best_model.zip \
+  --host <ip-carla>
+# Sortie : eval_best_model.mp4 + eval_best_model.json dans le même dossier que le modèle
 ```
 
-Sortie attendue : ~360 MB de JPEGs intermédiaires (jetables après assemblage) → MP4 ~10–30 MB.
+### Structure du JSON de résultats
 
-## Pipeline complet
-
-### Phase 1 — CIL pre-training (offline, sans CARLA en boucle)
+Chaque scénario dans `results.json` contient :
 
 ```
-[src/dataset/] ──> data/runs/<date>/
-                          │
-                          ▼
-                   training/data_loader  (lecture, aug)
-                          │
-                          ▼
-                   training/train.py ──> checkpoints/<model>/best.h5
-                          │
-                          ▼
-                   inference/ ──> [CARLA] (démo)
+{
+  "straight": {
+    # Résultat
+    "success": true,            # bool (Phase 1) ou null (Phase 2)
+    "terminated": false,        # collision détectée
+    "collision_step": null,     # step de la collision (ou null)
+    "reached_dest": false,      # a atteint dest_spawn_idx (scénarios GPS)
+    "steps": 287,
+    "max_dist_from_start": 54.3,
+    "total_reward": 43.2,
+
+    # Stats vitesse (km/h)
+    "speed": {"mean": 28.4, "max": 51.2, "min": 0.0, "std": 12.1, "pct_moving": 0.94},
+
+    # Stats centrage voie
+    "center_offset": {"mean_abs": 0.08, "max_abs": 0.31, "std": 0.06, "pct_centered": 0.87},
+
+    # Stats orientation
+    "heading": {"mean_abs_deg": 4.2, "max_abs_deg": 18.7, "std_deg": 3.1},
+
+    # Stats obstacle (metres)
+    "obstacle": {"mean_m": 38.1, "min_m": 7.4},
+
+    # Stats actions
+    "steer":    {"mean_abs": 0.04, "mean": -0.003, "std": 0.06},  # mean signé → biais L/R
+    "throttle": {"mean": 0.41, "std": 0.12},                       # std élevé → oscillation
+    "brake":    {"mean": 0.03, "max": 0.88, "pct_braking": 0.08},
+
+    # Commandes nav reçues (step counts)
+    "nav_commands": {"LANE_FOLLOW": 250, "LEFT": 0, "RIGHT": 0, "STRAIGHT": 37},
+
+    # Off-route
+    "off_route_steps": 2,
+    "off_route_pct": 0.007,
+
+    # Séries temporelles (une valeur par step, pour tracer des courbes)
+    "trajectory":      [[x, y, yaw], ...],   # position GPS
+    "rewards_series":  [...],
+    "speed_series":    [...],
+    "center_series":   [...],
+    "steer_series":    [...],
+    "throttle_series": [...],
+    "brake_series":    [...],
+    "heading_series":  [...],                 # degrés
+    "obstacle_series": [...],                 # mètres
+    "nav_series":      [...],                 # 0=FOLLOW 1=LEFT 2=RIGHT 3=STRAIGHT
+    "off_route_series": [...],               # 0/1 par step
+    "dist_series":     [...]                 # distance au spawn (m)
+  }
+}
 ```
 
-La collecte du dataset commun est portée par [src/dataset/](../dataset/) (Franck principalement). Une fois le dataset sur disque, l'IA centrale s'entraîne offline, sans CARLA, sur n'importe quelle machine avec un GPU.
+## Phase 1 — Utilitaires spawn
 
-### Phase 2 — RL fine-tuning (en boucle CARLA)
+```bash
+# Explorer et classifier les spawn points de la map (utile pour choisir les spawn_idx)
+uv run python3 scripts/explore_spawns.py --host <ip-carla>
 
-```
-checkpoints/<cil_model>/best.h5
-          │
-          ▼ (initialisation)
-training/rl_finetune.py ←─────┐
-          │                   │
-          ▼                   │ (action)
-       [CARLA]                │
-          │ (state, reward)   │
-          └───────────────────┘
-                              │
-                              ▼
-              checkpoints/<rl_model>/best.h5
+# Identifier les dest_spawn_idx pour les scénarios de jonction
+# (utilise l'API waypoint CARLA directement — aucun appel à nav.plan())
+uv run python3 scripts/find_dest_spawns.py --host <ip-carla>
+# → affiche les candidats left/right/straight + la valeur à coller dans benchmark.py
 ```
 
-Le modèle pré-entraîné par CIL sert de point de départ à un algorithme RL (PPO/SAC) qui interagit avec CARLA en continu pour optimiser une fonction de récompense. Cette phase nécessite que CARLA tourne pendant des jours/semaines. Spec détaillé à venir une fois la Phase 1 validée.
-
-## Inputs et outputs
-
-### Mode "image only" (PilotNet baseline)
-
-- Input : `image (H, W, 3)` uint8
-- Output : `(steer, throttle, brake)` floats
-
-### Mode "scene_state" (CIL et au-delà)
-
-- Input : `SceneState` (image + objets détectés + depth + lignes + état véhicule + commande HN)
-- Output : `ControlOutput`
-
-Les deux modes coexistent et le choix se fait au niveau du modèle (`v<N>_pilotnet_*.py` vs `v<N>_cil_*.py`).
-
-## Stratégie face aux modules pas encore prêts
-
-Tant que YOLO / MIDAS / Lignes ne sont pas opérationnels, l'IA centrale s'entraîne en mode "image only" (baseline PilotNet). Le dataset collecté contient toutefois aussi les ground truths CARLA (objets, depth) pour permettre une évolution vers le mode "scene_state" sans recollecter.
-
-Lorsque les modules de perception seront prêts, la transition consiste à :
-
-1. Brancher leurs implémentations dans `inference/carla_demo.py` (via les protocoles de `src/interfaces/`)
-2. Entraîner un nouveau modèle `cil.py` qui consomme la `SceneState` complète
-3. Comparer les performances à la baseline
-
-## Configuration
-
-Hyperparamètres centralisés dans `config.py` :
-
-- Image size, batch size, learning rate, epochs
-- Dataset paths, train/val split
-- Augmentation params
+---
 
 ## Validation et benchmarks
 
-Dans [benchmarks/ai/](../../benchmarks/ai/) :
+```bash
+uv run pytest benchmarks/ai/ -v
+```
 
-- **`smoke.py`** — 4 tests pytest, sans CARLA, sans GPU, ~10 sec total :
-    - `test_pilotnet_output_shapes_and_ranges` : 3 têtes nommées avec shapes correctes et activations dans les bons intervalles (`steer ∈ [-1, 1]`, `throttle/brake ∈ [0, 1]`).
-    - `test_pilotnet_trainable` : le modèle peut fitter un mini batch synthétique (loss diminue sur 20 epochs).
-    - `test_data_loader_synthetic` : lit un run factice (manifest + JPEGs noise), drop les frames `is_collision=1`, produit les bons shapes en sortie.
-    - `test_data_loader_split_deterministic` : même seed → même split train/val.
-- **Benchmark de performance V2+** : loss val sur jeu de validation, taux de succès trajet sans collision en démo CARLA, FPS d'inférence — pas en V1.
+| Fichier | Couverture |
+|---|---|
+| `smoke.py` | reward_fn (8 tests) + stubs GT — `src/interfaces/stubs.py`, non utilisés en prod depuis le branchement Franck/Karim (7 tests) |
+| `test_rl_env.py` | CarlaEnv — spaces, reset, step, observation (10 scalaires), reward, render, off_route (28 tests) |
+| `test_rl_train.py` | make_model, train (4 tests) |
+| `test_rl_demo.py` | run_episode, _add_hud, record_episode, load_model (11 tests) |
+| `test_run_manager.py` | make_run_dir, save_params, plot_reward_curve (8 tests) |
 
-Lancer : `uv run pytest benchmarks/ai/smoke.py -v`
+Tous les tests tournent **sans CARLA** (Mocks). Les tests Phase 0 sont dans `benchmarks/ai/phase0/`.
 
-Voir [benchmarks/README.md](../../benchmarks/README.md) pour la convention.
+### Benchmark 13 scénarios — critères de succès Phase 1
+
+| Scénario | spawn_idx | dest_spawn_idx | Critère de succès |
+|---|---|---|---|
+| `straight` | 6 | — | pas de collision + ≥ 25m parcourus + offset moyen < 0.3 |
+| `curve_left` | 8 | — | pas de collision + ≥ 25m parcourus |
+| `curve_right` | 32 | — | pas de collision + ≥ 25m parcourus |
+| `turn_left` | 0 | 140 | atteindre dest (rayon 15m) sans collision |
+| `turn_right` | 70 | 68 | atteindre dest (rayon 15m) sans collision |
+| `junction_straight` | 31 | 119 | atteindre dest (rayon 15m) sans collision |
+| `npc_follow` | 6 | — | pas de collision + ≥ 25m parcourus |
+| `npc_crossing` | 0 | — | pas de collision + ≥ 25m parcourus |
+
+Phase 2 (enregistré sans critère) : `red_light`, `speed_zone`, `pedestrian`, `emergency_stop`, `lane_change`.
+
+---
 
 ## Liens
 
-- [Codevilla et al. 2018, Conditional Imitation Learning sur CARLA](https://arxiv.org/abs/1710.02410) — Phase 1
-- [Bojarski et al. 2016 (NVIDIA), End-to-End Learning for Self-Driving Cars](https://arxiv.org/abs/1604.07316) — Phase 1 (PilotNet)
-- [Schulman et al. 2017, Proximal Policy Optimization (PPO)](https://arxiv.org/abs/1707.06347) — candidat Phase 2
-- [Haarnoja et al. 2018, Soft Actor-Critic (SAC)](https://arxiv.org/abs/1801.01290) — candidat Phase 2
-- [Kendall et al. 2018, Learning to Drive in a Day (Wayve)](https://arxiv.org/abs/1807.00412) — RL sur conduite réelle, référence pour Phase 2
+- [Schulman et al. 2017, PPO](https://arxiv.org/abs/1707.06347) — algorithme Phase 1
+- [ROACH (Zhang et al. 2021)](https://arxiv.org/abs/2108.08265) — référence RL sur CARLA avec reward structuré
+- [Stable-Baselines3 docs](https://stable-baselines3.readthedocs.io/) — implémentation PPO utilisée
+- [Gymnasium docs](https://gymnasium.farama.org/) — interface `gym.Env` pour `CarlaEnv`
+- [Bojarski et al. 2016, PilotNet](https://arxiv.org/abs/1604.07316) — Phase 0 (archivé)
+- [Codevilla et al. 2018, CIL](https://arxiv.org/abs/1710.02410) — Phase 0 (archivé)

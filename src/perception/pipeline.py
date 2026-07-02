@@ -76,6 +76,7 @@ class PerceptionPipeline:
         self,
         yolo_weights: str = _DEFAULT_YOLO_WEIGHTS,
         depth_calibration: str | None = _DEFAULT_DEPTH_CALIB,
+        depth_model_name: str = "depth-anything/Depth-Anything-V2-Small-hf",
         device: str | None = None,
         max_depth_m: float = 100.0,
     ) -> None:
@@ -88,6 +89,7 @@ class PerceptionPipeline:
         )
         self.detector = YoloDetector(weights_path=yolo_weights, device=self.device)
         self.depth = DepthEstimator(
+            model_name=depth_model_name,
             device=self.device,
             max_depth_m=max_depth_m,
             calibration_path=calib,

@@ -6,7 +6,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-from src.ai.config import IMAGE_CHANNELS, IMAGE_HEIGHT, IMAGE_WIDTH
+from src.ai.phase0.config import IMAGE_CHANNELS, IMAGE_HEIGHT, IMAGE_WIDTH
 
 
 def build_pilotnet_speed() -> keras.Model:

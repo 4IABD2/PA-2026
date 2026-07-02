@@ -12,20 +12,26 @@ dependencies = [
     "Pillow",
     "fiftyone>=1.0.0",
     "ultralytics>=8.4.51",
+    "easyocr>=1.7.2",
+    "gymnasium>=0.29",
+    "stable-baselines3>=2.3",
+    "opencv-python-headless>=4.9",
+    "carla==0.9.16",
     "transformers>=5.9.0",
     "torch>=2.7",
     "torchvision>=0.22",
     "pygame>=2.5",
 ]
 
-[project.optional-dependencies]
-carla = ["carla==0.9.16"]
-
 [dependency-groups]
 dev = [
     "black",
     "pytest>=9.0.3",
 ]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py", "smoke.py"]
+pythonpath = ["."]
 
 # PyTorch CUDA 12.8 (cu128) pour les GPU NVIDIA Blackwell (RTX 50xx, sm_120) sur
 # Windows/Linux. Sur macOS, pas de wheel CUDA → on retombe sur PyPI (CPU/MPS).
