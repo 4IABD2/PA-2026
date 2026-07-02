@@ -177,7 +177,7 @@ def main() -> None:
     parser.add_argument("--demo-eps",          type=int, default=3)
     parser.add_argument("--yolo-weights",      default="src/perception/yolo/weights/best.pt")
     parser.add_argument("--depth-model",       default="depth-anything/Depth-Anything-V2-Small-hf",
-                        help="HuggingFace model ID ou chemin local vers le modele depth")
+                        help="HuggingFace model ID or local path to the depth model")
     args = parser.parse_args()
 
     run_dir = make_run_dir(tag=f"{args.tag}_{args.timesteps // 1000}k")
