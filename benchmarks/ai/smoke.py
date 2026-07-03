@@ -1,4 +1,4 @@
-"""Smoke tests Phase 1 — RL (sans CARLA, sans GPU)."""
+"""Smoke tests Phase 1 — RL (no CARLA, no GPU)."""
 
 from __future__ import annotations
 
@@ -18,16 +18,16 @@ from src.interfaces.stubs import CarlaGTDepthEstimator, CarlaGTLaneDetector
 
 
 def test_collision_terminates_with_negative_reward():
-    """Une collision doit terminer l'épisode et donner -1.0."""
+    """A collision at 0 km/h impact speed must terminate the episode and cost -5.0."""
     reward, done = compute_reward(
         speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=True
     )
     assert done is True
-    assert reward == pytest.approx(-1.0)
+    assert reward == pytest.approx(-5.0)
 
 
 def test_offroad_applies_penalty():
-    """Être hors-route doit donner une récompense plus faible qu'en route."""
+    """Being off-road must give a lower reward than being on-road, by exactly -0.25."""
     reward_onroad, _ = compute_reward(
         speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -35,11 +35,11 @@ def test_offroad_applies_penalty():
         speed_kmh=30.0, center_offset=0.0, is_on_road=False, collision=False
     )
     assert reward_offroad < reward_onroad
-    assert reward_offroad == pytest.approx(reward_onroad - 0.5)
+    assert reward_offroad == pytest.approx(reward_onroad - 0.25)
 
 
 def test_speed_reward_scales_with_speed():
-    """Plus la vitesse est élevée, plus la récompense est haute (à offset fixe)."""
+    """Higher speed must give a higher reward (at a fixed offset)."""
     reward_slow, _ = compute_reward(
         speed_kmh=10.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -50,7 +50,7 @@ def test_speed_reward_scales_with_speed():
 
 
 def test_centering_reward_maximal_at_center():
-    """Un offset de 0 doit donner plus de récompense qu'un offset de 1."""
+    """An offset of 0 must give more reward than an offset of 1."""
     reward_center, _ = compute_reward(
         speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -61,7 +61,7 @@ def test_centering_reward_maximal_at_center():
 
 
 def test_alive_bonus_always_present():
-    """Même à l'arrêt centré, la récompense doit inclure le bonus de survie."""
+    """Even when stopped and centered, the reward must include the survival bonus."""
     reward, done = compute_reward(
         speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -70,7 +70,7 @@ def test_alive_bonus_always_present():
 
 
 def test_reward_components_sum_at_max():
-    """À vitesse max (90 km/h), offset 0, en route, sans collision : r = 0.5 + 0.3 + 0.01."""
+    """At max speed (90 km/h), offset 0, on-road, no collision: r = 0.5 + 0.3 + 0.01."""
     reward, done = compute_reward(
         speed_kmh=90.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -79,16 +79,16 @@ def test_reward_components_sum_at_max():
 
 
 def test_collision_overrides_other_components():
-    """En collision, la reward doit être -1.0 quelle que soit la vitesse ou l'offset."""
+    """On collision, reward must be -5.0 (0 km/h impact) regardless of speed or offset."""
     reward, done = compute_reward(
         speed_kmh=50.0, center_offset=0.0, is_on_road=True, collision=True
     )
-    assert reward == pytest.approx(-1.0)
+    assert reward == pytest.approx(-5.0)
     assert done is True
 
 
 def test_stall_penalises_zero_speed():
-    """Rester à l'arrêt doit être moins bien récompensé qu'avancer."""
+    """Staying still must be rewarded less than moving forward."""
     reward_still, _ = compute_reward(
         speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -96,6 +96,131 @@ def test_stall_penalises_zero_speed():
         speed_kmh=5.0, center_offset=0.0, is_on_road=True, collision=False
     )
     assert reward_moving > reward_still
+
+
+def test_collision_scales_with_impact_speed():
+    """A faster impact must cost more than a near-stationary one."""
+    reward_slow, _ = compute_reward(
+        speed_kmh=50.0, center_offset=0.0, is_on_road=True, collision=True,
+        collision_speed_kmh=5.0,
+    )
+    reward_fast, _ = compute_reward(
+        speed_kmh=50.0, center_offset=0.0, is_on_road=True, collision=True,
+        collision_speed_kmh=60.0,
+    )
+    assert reward_fast < reward_slow
+    assert reward_slow == pytest.approx(-5.0 + (-0.05 * 5.0))
+    assert reward_fast == pytest.approx(-5.0 + (-0.05 * 60.0))
+
+
+def test_following_penalty_none_when_vehicle_far():
+    reward_far, _ = compute_reward(
+        speed_kmh=50.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_vehicle_m=100.0,
+    )
+    reward_default, _ = compute_reward(
+        speed_kmh=50.0, center_offset=0.0, is_on_road=True, collision=False,
+    )
+    assert reward_far == pytest.approx(reward_default)
+
+
+def test_following_penalty_none_when_stopped():
+    reward_stopped_close, _ = compute_reward(
+        speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_vehicle_m=2.0,
+    )
+    reward_stopped_far, _ = compute_reward(
+        speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_vehicle_m=100.0,
+    )
+    assert reward_stopped_close == pytest.approx(reward_stopped_far)
+
+
+def test_following_penalty_triggers_under_two_second_headway():
+    """10 m at 36 km/h (10 m/s) = 1.0 s headway, under the 2.0 s safe threshold."""
+    reward_close, _ = compute_reward(
+        speed_kmh=36.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_vehicle_m=10.0,
+    )
+    reward_clear, _ = compute_reward(
+        speed_kmh=36.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_vehicle_m=100.0,
+    )
+    assert reward_close < reward_clear
+    assert (reward_clear - reward_close) == pytest.approx(0.1, abs=1e-3)  # -(1 - 1.0/2.0) * 0.2
+
+
+def test_walker_penalty_triggers_when_close():
+    reward_close, _ = compute_reward(
+        speed_kmh=20.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_walker_m=5.0,
+    )
+    reward_far, _ = compute_reward(
+        speed_kmh=20.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_walker_m=100.0,
+    )
+    assert reward_close < reward_far
+    assert (reward_far - reward_close) == pytest.approx(0.15, abs=1e-3)  # -(1 - 5/10) * 0.3
+
+
+def test_walker_penalty_none_when_far():
+    reward, _ = compute_reward(
+        speed_kmh=20.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_walker_m=15.0,
+    )
+    reward_default, _ = compute_reward(
+        speed_kmh=20.0, center_offset=0.0, is_on_road=True, collision=False,
+    )
+    assert reward == pytest.approx(reward_default)
+
+
+def test_speeding_penalty_none_within_tolerance():
+    """5 km/h over the limit is within the tolerance band — no penalty."""
+    reward, _ = compute_reward(
+        speed_kmh=55.0, center_offset=0.0, is_on_road=True, collision=False,
+        speed_limit_kmh=50.0,
+    )
+    reward_no_limit, _ = compute_reward(
+        speed_kmh=55.0, center_offset=0.0, is_on_road=True, collision=False,
+    )
+    assert reward == pytest.approx(reward_no_limit)
+
+
+def test_speeding_penalty_triggers_over_tolerance():
+    """70 km/h with a 50 km/h limit and 5 km/h tolerance = 15 km/h over."""
+    reward, _ = compute_reward(
+        speed_kmh=70.0, center_offset=0.0, is_on_road=True, collision=False,
+        speed_limit_kmh=50.0,
+    )
+    reward_no_limit, _ = compute_reward(
+        speed_kmh=70.0, center_offset=0.0, is_on_road=True, collision=False,
+    )
+    assert reward < reward_no_limit
+    assert (reward_no_limit - reward) == pytest.approx((15.0 / 90.0) * 0.3, abs=1e-3)
+
+
+def test_red_light_violation_applies_flat_penalty():
+    reward_violation, _ = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False,
+        red_light_violation=True,
+    )
+    reward_clean, _ = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False,
+        red_light_violation=False,
+    )
+    assert (reward_clean - reward_violation) == pytest.approx(2.0, abs=1e-3)
+
+
+def test_stop_yield_violation_applies_flat_penalty():
+    reward_violation, _ = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False,
+        stop_yield_violation=True,
+    )
+    reward_clean, _ = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False,
+        stop_yield_violation=False,
+    )
+    assert (reward_clean - reward_violation) == pytest.approx(1.0, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------

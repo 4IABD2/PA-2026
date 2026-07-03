@@ -50,17 +50,19 @@ class HighlightSpec:
 
     detect(obs, action, reward, terminated, truncated) -> bool
 
-    Obs layout (10 scalars):
-        [0] speed_norm         = speed_kmh / 90              ∈ [0, 1]
-        [1] cmd_left           = 1 if nav says LEFT          ∈ {0, 1}
-        [2] cmd_right          = 1 if nav says RIGHT         ∈ {0, 1}
-        [3] cmd_straight       = 1 if nav says STRAIGHT      ∈ {0, 1}
-        [4] lane_angle_norm    = lane heading angle / 90     ∈ [-1, 1]
-        [5] lane_offset_norm   = lateral lane offset         ∈ [-1, 1]
-        [6] is_on_road         = 1 if lane detected          ∈ {0, 1}
-        [7] nearest_vehicle_norm = nearest_vehicle / 50m     ∈ [0, 1]
-        [8] has_red_light      = 1 if red light detected     ∈ {0, 1}
-        [9] speed_limit_norm   = current speed limit / 90    ∈ [0, 1]
+    Obs layout (12 scalars):
+        [0]  speed_norm              = speed_kmh / 90                 ∈ [0, 1]
+        [1]  cmd_left                = 1 if nav says LEFT             ∈ {0, 1}
+        [2]  cmd_right               = 1 if nav says RIGHT            ∈ {0, 1}
+        [3]  cmd_straight            = 1 if nav says STRAIGHT         ∈ {0, 1}
+        [4]  lane_angle_norm         = lane heading angle / 90        ∈ [-1, 1]
+        [5]  lane_offset_norm        = lateral lane offset            ∈ [-1, 1]
+        [6]  is_on_road              = 1 if lane detected             ∈ {0, 1}
+        [7]  nearest_vehicle_norm    = nearest vehicle / 50m          ∈ [0, 1]
+        [8]  red_light_distance_norm = nearest red light / 50m        ∈ [0, 1]
+        [9]  speed_limit_norm        = current speed limit / 90       ∈ [0, 1]
+        [10] nearest_walker_norm     = nearest pedestrian / 50m       ∈ [0, 1]
+        [11] nearest_stop_yield_norm = nearest stop/yield sign / 50m  ∈ [0, 1]
     """
 
     name: str
@@ -322,7 +324,7 @@ def _draw_obs_panel(
     if w <= 400:
         return
 
-    PW, PH = 215, 170
+    PW, PH = 215, 196
     PAD = 6
     x0 = w - PW - 6
     y0 = 18
@@ -352,7 +354,6 @@ def _draw_obs_panel(
     VAL_X = x0 + PAD + 88  # x position for value column
 
     on_road = obs[6] > 0.5
-    red_light = obs[8] > 0.5
 
     rows = [
         # (label, value_str, value_colour)
@@ -362,8 +363,10 @@ def _draw_obs_panel(
         ("lane angle", f"{obs[4] * 90:+.1f} deg", VAL),
         ("lane offset", f"{obs[5]:+.3f}",         VAL),
         ("on road",   "YES" if on_road else "NO", (60, 220, 80) if on_road else (60, 60, 220)),
-        ("obstacle",  f"{obs[7] * 50:5.1f} m",    VAL),
-        ("red light", "YES" if red_light else "NO", (60, 60, 220) if red_light else VAL),
+        ("vehicle",   f"{obs[7] * 50:5.1f} m",    VAL),
+        ("red light", f"{obs[8] * 50:5.1f} m",    VAL),
+        ("walker",    f"{obs[10] * 50:5.1f} m",   VAL),
+        ("stop/yield", f"{obs[11] * 50:5.1f} m",  VAL),
         ("ACTION",    None,                       HDR),
         ("steer",     f"{action[0]:+.3f}",        VAL),
         ("throttle",  f"{action[1]:.3f}",         VAL),

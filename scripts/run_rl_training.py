@@ -9,6 +9,8 @@ Usage:
     --tag         short label added to the run folder name
     --demo-eps    number of demo episodes to record after training (default: 3)
     --yolo-weights  path to YOLO best.pt (default: src/perception/yolo/weights/best.pt)
+    --npcs          number of NPC vehicles spawned (default: 18)
+    --pedestrians   number of NPC pedestrians spawned (default: 6)
 
 Output — one timestamped folder under runs/ :
     runs/YYYY-MM-DD_HH-MM_<tag>/
@@ -21,16 +23,30 @@ Output — one timestamped folder under runs/ :
         demo.mp4                 full inference with HUD overlay (best model)
         evals/                   benchmark eval per checkpoint + best model
 
-Obs (10 scalars): speed | cmd_left | cmd_right | cmd_straight |
-                  lane_angle | lane_offset | is_on_road | nearest_vehicle | has_red_light | speed_limit
+Obs (12 scalars): speed | cmd_left | cmd_right | cmd_straight |
+                  lane_angle | lane_offset | is_on_road | nearest_vehicle | red_light_distance |
+                  speed_limit | nearest_walker | nearest_stop_yield
 Perception: Franck's PerceptionPipeline (YOLO11s + Depth Anything v2) + Karim's YOLOPv2 lane detection.
+Environment: NPC vehicles (autopilot) + NPC pedestrians (AI walker controllers).
 """
 
 from __future__ import annotations
 
 import argparse
+import random
 import sys
+import time
 from pathlib import Path
+
+
+def _format_duration(seconds: float) -> str:
+    h, rem = divmod(int(seconds), 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
 
 
 class _StdoutFilter:
@@ -71,7 +87,9 @@ from src.ai.inference.rl_demo import load_model, record_episode, eval_model, Sce
 from src.ai.inference.benchmark import _MIN_DIST_M
 from src.ai.rewards.reward_fn import (
     MAX_SPEED_KMH, _W_SPEED, _W_CENTER, _W_ALIVE,
-    _P_OFFROAD, _P_COLLISION, _P_STALL, _P_OFF_ROUTE,
+    _P_OFFROAD, _P_COLLISION_BASE, _P_COLLISION_SPEED_SCALE, _P_STALL, _P_OFF_ROUTE,
+    _W_FOLLOWING, _SAFE_HEADWAY_S, _W_WALKER_PROXIMITY, _WALKER_DANGER_M,
+    _W_SPEEDING, _SPEEDING_TOLERANCE_KMH, _P_RED_LIGHT_VIOLATION, _P_STOP_YIELD_VIOLATION,
 )
 
 
@@ -150,6 +168,57 @@ def _destroy_all(actors: list) -> None:
             a.destroy()
 
 
+def _spawn_npc_vehicles(world: carla.World, client: carla.Client, n: int, exclude_spawn_idx: int) -> list:
+    tm = client.get_trafficmanager()
+    tm.set_synchronous_mode(True)
+    bp_lib = world.get_blueprint_library()
+    vehicle_bps = list(bp_lib.filter("vehicle.*"))
+    spawn_pts = world.get_map().get_spawn_points()
+    indices = [i for i in range(len(spawn_pts)) if i != exclude_spawn_idx]
+    random.shuffle(indices)
+    npcs = []
+    for i in indices[:n]:
+        bp = random.choice(vehicle_bps)
+        npc = world.try_spawn_actor(bp, spawn_pts[i])
+        if npc:
+            npc.set_autopilot(True, tm.get_port())
+            npcs.append(npc)
+    return npcs
+
+
+def _spawn_npc_pedestrians(world: carla.World, n: int) -> list:
+    bp_lib = world.get_blueprint_library()
+    walker_bps = list(bp_lib.filter("walker.pedestrian.*"))
+    ctrl_bp = bp_lib.find("controller.ai.walker")
+    actors = []
+    for _ in range(n):
+        loc = world.get_random_location_from_navigation()
+        if loc is None:
+            continue
+        bp = random.choice(walker_bps)
+        walker = world.try_spawn_actor(bp, carla.Transform(loc))
+        if walker is None:
+            continue
+        world.tick()
+        ctrl = world.spawn_actor(ctrl_bp, carla.Transform(), attach_to=walker)
+        ctrl.start()
+        dest = world.get_random_location_from_navigation()
+        if dest is not None:
+            ctrl.go_to_location(dest)
+        ctrl.set_max_speed(1.4)
+        actors.extend([ctrl, walker])
+    return actors
+
+
+def _destroy_pedestrians(actors: list) -> None:
+    for a in actors:
+        if not a or not a.is_alive:
+            continue
+        if "controller" in a.type_id:
+            a.stop()
+        a.destroy()
+
+
 # Fixed seed → reproducible spawn for the final full demo.
 _DEMO_RESET_SEED = 42
 
@@ -178,6 +247,10 @@ def main() -> None:
     parser.add_argument("--yolo-weights",      default="src/perception/yolo/weights/best.pt")
     parser.add_argument("--depth-model",       default="depth-anything/Depth-Anything-V2-Small-hf",
                         help="HuggingFace model ID or local path to the depth model")
+    parser.add_argument("--npcs",              type=int, default=18,
+                        help="number of NPC vehicles spawned in autopilot")
+    parser.add_argument("--pedestrians",       type=int, default=6,
+                        help="number of NPC pedestrians spawned")
     args = parser.parse_args()
 
     run_dir = make_run_dir(tag=f"{args.tag}_{args.timesteps // 1000}k")
@@ -188,16 +261,25 @@ def main() -> None:
         "timesteps":         args.timesteps,
         "max_episode_steps": args.max_episode_steps,
         "host":              args.host,
-        "obs":               "10-scalars-perception",
+        "obs":               "12-scalars-traffic",
         "reward": {
-            "max_speed_kmh": MAX_SPEED_KMH,
-            "w_speed":       _W_SPEED,
-            "w_center":      _W_CENTER,
-            "w_alive":       _W_ALIVE,
-            "p_offroad":     _P_OFFROAD,
-            "p_collision":   _P_COLLISION,
-            "p_stall":       _P_STALL,
-            "p_off_route":   _P_OFF_ROUTE,
+            "max_speed_kmh":     MAX_SPEED_KMH,
+            "w_speed":           _W_SPEED,
+            "w_center":          _W_CENTER,
+            "w_alive":           _W_ALIVE,
+            "p_offroad":         _P_OFFROAD,
+            "p_collision_base":         _P_COLLISION_BASE,
+            "p_collision_speed_scale":  _P_COLLISION_SPEED_SCALE,
+            "p_stall":           _P_STALL,
+            "p_off_route":       _P_OFF_ROUTE,
+            "w_following":       _W_FOLLOWING,
+            "safe_headway_s":    _SAFE_HEADWAY_S,
+            "w_walker_proximity": _W_WALKER_PROXIMITY,
+            "walker_danger_m":   _WALKER_DANGER_M,
+            "w_speeding":        _W_SPEEDING,
+            "speeding_tolerance_kmh": _SPEEDING_TOLERANCE_KMH,
+            "p_red_light_violation":  _P_RED_LIGHT_VIOLATION,
+            "p_stop_yield_violation": _P_STOP_YIELD_VIOLATION,
         },
         "env": {
             "off_route_m":             _OFF_ROUTE_M,
@@ -206,6 +288,8 @@ def main() -> None:
             "warmup_ticks":            _WARMUP_TICKS,
             "min_dist_m":              _MIN_DIST_M,
             "default_speed_limit_kmh": _DEFAULT_SPEED_LIMIT_KMH,
+            "npcs":                    args.npcs,
+            "pedestrians":             args.pedestrians,
         },
     }
     save_params(run_dir, params)
@@ -216,7 +300,7 @@ def main() -> None:
     world = client.get_world()
     _setup_sync(world)
 
-    ego, sensors = None, []
+    ego, sensors, npc_vehicles, npc_walkers = None, [], [], []
     try:
         ego        = _spawn_ego(world)
         camera     = _spawn_sensor(world, ego, "sensor.camera.rgb",
@@ -226,6 +310,13 @@ def main() -> None:
 
         for _ in range(10):          # warm-up: let sensors produce first frames
             world.tick()
+
+        print(f"Spawning {args.npcs} NPC vehicles + {args.pedestrians} pedestrians …")
+        npc_vehicles = _spawn_npc_vehicles(world, client, args.npcs, exclude_spawn_idx=0)
+        npc_walkers = _spawn_npc_pedestrians(world, args.pedestrians)
+        for _ in range(20):          # let NPCs settle before training starts
+            world.tick()
+        print(f"Spawned {len(npc_vehicles)} vehicles, {len(npc_walkers) // 2} pedestrians.")
 
         print("Loading perception models (YOLO + Depth Anything + YOLOPv2) …")
         perception = PerceptionPipeline(
@@ -273,8 +364,10 @@ def main() -> None:
 
         print(f"Training PPO for {args.timesteps:,} steps …")
         sys.stdout = _StdoutFilter(sys.stdout)
+        train_start = time.time()
         try:
             model.learn(total_timesteps=args.timesteps, callback=callbacks)
+            train_duration = time.time() - train_start
             model.save(str(run_dir / "model_final"))
             print("Training done.")
 
@@ -373,10 +466,12 @@ def main() -> None:
             sys.stdout = sys.stdout._out  # restore
 
         print(f"\nAll artifacts in: {run_dir}/")
+        print(f"Training time: {_format_duration(train_duration)}")
 
     finally:
         _restore_async(world)
-        _destroy_all([ego, *sensors])
+        _destroy_all([ego, *sensors, *npc_vehicles])
+        _destroy_pedestrians(npc_walkers)
         print("Cleanup done.")
 
 

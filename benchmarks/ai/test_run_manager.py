@@ -58,6 +58,16 @@ def test_save_params_content_is_valid_json(tmp_path):
     assert loaded["tag"] == "smoke"
 
 
+def test_save_params_handles_non_serializable_values(tmp_path):
+    def dummy_schedule(x):
+        return x
+    params = {"learning_rate": dummy_schedule, "gamma": 0.99}
+    save_params(tmp_path, params)  # must not raise
+    loaded = json.loads((tmp_path / "params.json").read_text())
+    assert loaded["gamma"] == pytest.approx(0.99)
+    assert isinstance(loaded["learning_rate"], str)
+
+
 # ---------------------------------------------------------------------------
 # plot_reward_curve
 # ---------------------------------------------------------------------------
