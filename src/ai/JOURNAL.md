@@ -657,3 +657,67 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Prochaine étape** :
 - Franck : `git pull` + `uv sync` + `uv run python3 launch_training.py` sur son PC, choisir 100k pour le premier run.
 - Analyser sa courbe reward/eval avant de décider d'un 300k complet.
+
+---
+
+## 2026-07-02 (suite) — Run ppo_v3_100k analysée, conception du prochain gros passage
+
+**Avancement** :
+- Franck a lancé `ppo_v3_100k` sur son PC (5070 Ti) via `launch_training.py` — premier run avec perception réelle + reward corrigé. Résultats récupérés et analysés dans `runs/2026-07-02_15-19_ppo_v3_100k/ANALYSIS.md` (dossier renommé de `ppo_v1_100k` pour respecter la numérotation d'expérience v1→v2→v3).
+- **Diagnostic v3** : reward jamais positif (−737 → −13 sur 100k, contre −70 → +17 pour v2), benchmark jamais mieux que 1/8 (contre 3/8 pour v2 à son pic). Pas une comparaison directe avec v2 : trois facteurs changent en même temps (perception bruitée au lieu de GT parfait, budget 3× plus faible, et surtout `p_offroad` actif pour la première fois — il était câblé à `is_on_road=True` en dur jusqu'à v2, donc jamais déclenché).
+- **Mécanisme identifié** : avec `p_offroad` actif, rester hors-route coûte −0.5/step ; un crash ne coûte qu'une fois −1.0 puis termine l'épisode. Survivre hors-route sur un épisode complet (1000 steps, ~−500) est donc structurellement bien pire que crasher tôt (~−31 au step 60). La longueur d'épisode s'effondre progressivement (1000 → 62 steps) pendant que la vitesse grimpe (4.6 → 40.5 km/h) — cohérent avec **une policy qui apprend à "écourter vite" plutôt qu'à "bien conduire"**, plutôt qu'un vrai apprentissage de la conduite.
+- Ajout d'un log de durée de training dans `run_rl_training.py` (`Training time: Xh Ym Zs` en dernier log significatif, chronométré autour de `model.learn()`).
+- **Conception du prochain passage (v4)**, en session de brainstorming structurée avant tout code :
+  - **Environnement** : `run_rl_training.py` ne spawnait jusqu'ici *aucun NPC* — training dans un monde vide depuis le début du projet. Ajout d'un pool fixe de véhicules + piétons en autopilot dispersés sur la map (pattern repris de `demo_mockup.py`), pour donner un vrai signal aux scalaires `nearest_vehicle_norm`/pietons qui n'avaient jusque-là presque jamais rien à détecter.
+  - **Nouvelles composantes de reward** (Approche B — continu quand c'est naturel, événement ponctuel quand c'est binaire) :
+    - Véhicule devant / piéton proche : pénalité continue proportionnelle à la proximité (comme `r_center`), pas un seuil dur.
+    - Feu rouge / stop-yield grillé : détecté comme événement ponctuel (comme la collision), flag "déjà pénalisé pour ce feu" remis à zéro à chaque `reset()` — évite qu'un freinage propre near un feu soit puni à chaque step tant que la voiture reste proche.
+    - Limite de vitesse : pénalité continue proportionnelle au dépassement, pas un seuil binaire.
+  - **Observation étendue** (10 → ~13 scalaires) : `nearest_walker_norm`, `red_light_distance_norm`, `nearest_stop_yield_norm`. Décision cohérente avec la leçon du bug angle/offset du matin même : exposer à la policy la grandeur exacte sur laquelle elle est jugée, plutôt que la laisser déduire indirectement une règle depuis des signaux détournés.
+  - **`p_collision` −1.0 → −5.0** : décidé depuis la v2, jamais appliqué jusqu'ici — devient encore plus pertinent avec `p_offroad` actif et de nouvelles pénalités par step (le raccourci "crasher vite" ne fait que devenir plus tentant si on ne le corrige pas).
+  - **Recalibrage de `p_offroad`** (−0.5 envisagé → plus bas, ex. −0.25) : jamais réellement calibré puisqu'il n'a jamais été actif avant aujourd'hui — le laisser tel quel en empilant encore plus de pénalités par step risque d'aggraver le raccourci diagnostiqué plutôt que de le résoudre.
+  - **PPO** : réseau plus grand (`net_arch=[128, 128]` au lieu du défaut `[64, 64]`) vu l'observation qui grossit et la tâche qui se complexifie ; `ent_coef` pour maintenir de l'exploration plus longtemps et éviter une convergence prématurée vers un comportement dégénéré (type speed attractor).
+- Classement d'idées supplémentaires par priorité — `VecNormalize` (normalisation obs/reward, échelles très hétérogènes désormais : angles /90, distances /50, booléens 0/1), schedule de learning rate décroissant (pertinent vu l'instabilité PPO tardive observée en v2 à 210k), info de direction (gauche/droite/devant) en plus de la distance pour les dangers proches (donnée déjà disponible via les bbox de Franck, jamais exploitée), seed explicite pour la reproductibilité des expériences. Politique récurrente (LSTM), domain randomization météo et curriculum NPC progressif jugés trop de variables en plus pour ce passage — candidats pour une itération suivante.
+
+**Difficultés** :
+- Le diagnostic v2→v3 aurait été plus difficile à interpréter si on avait changé le reward, l'observation ET le budget de steps sans les isoler consciemment — noté explicitement avant de se lancer dans ce nouveau lot de changements simultanés, pour ne pas reproduire la même confusion à plus grande échelle.
+
+**Décisions** :
+- Choix délibéré de faire un "gros bond" avec plusieurs changements simultanés (environnement + reward + observation + PPO) plutôt qu'itérer un paramètre à la fois — accepté en connaissance du compromis : plus rapide en nombre d'itérations, mais un résultat décevant sera plus difficile à attribuer à une cause précise qu'un changement isolé.
+- Session de conception faite via un processus de brainstorming structuré (questions one-by-one puis proposition d'approches) avant tout code, pour trancher les points ambigus (densité NPC, quelles règles de trafic inclure, observation vs reward-only) avant d'écrire quoi que ce soit.
+
+**Benchmarks** : `ppo_v3_100k` — reward −737→−13 (jamais positif), benchmark max 1/8, 89% de crashs. Voir `runs/2026-07-02_15-19_ppo_v3_100k/ANALYSIS.md`.
+
+**Prochaine étape** :
+- Finaliser le design (spec) du passage v4, l'implémenter, lancer un nouveau training complet.
+
+---
+
+## 2026-07-03 — Implémentation v4 : trafic NPC, reward de sécurité, tuning PPO
+
+**Avancement** :
+- **Trafic NPC** : `scripts/run_rl_training.py` spawne maintenant **18 véhicules NPC en autopilot** (Traffic Manager CARLA, mode synchrone) et **6 piétons NPC** (`controller.ai.walker`, destination aléatoire sur la navmesh piétonne, vitesse plafonnée à 1.4 m/s). Jusqu'ici le monde d'entraînement était complètement vide depuis le tout début du projet — `nearest_vehicle_norm` et les nouveaux scalaires piéton n'avaient donc jamais rien eu de réel à détecter pendant un training. Densité configurable via `--npcs`/`--pedestrians` (défauts 18/6) ; le point de spawn de l'ego est exclu du tirage pour ne pas faire apparaître un NPC dessus.
+- **Observation 10 → 12 scalaires** : ajout de `nearest_walker_norm` et `nearest_stop_yield_norm`, et remplacement de l'ancien booléen `has_red_light` par `red_light_distance_norm` (même emplacement, obs[8]). Nouveau layout : `[speed, cmd_left, cmd_right, cmd_straight, lane_angle_norm, lane_offset_norm, is_on_road, nearest_vehicle_norm, red_light_distance_norm, speed_limit_norm, nearest_walker_norm, nearest_stop_yield_norm]`. Au final 12 scalaires et non ~13 comme envisagé la veille : une fois la distance réelle au feu disponible, garder le booléen en plus n'apportait rien. Les classes `WALKER`/`STOP`/`YIELD` existaient déjà dans la taxonomie YOLO de Franck (`ObjectClass`) — rien à ajouter côté perception, juste à les consommer dans `rl_env.py`.
+- **Nouveaux termes de reward** (`src/ai/rewards/reward_fn.py`) :
+  - `r_following` — pénalité continue fondée sur la règle des 2 secondes (temps-avant-impact = distance / vitesse), pas un seuil de distance fixe : 15m à 10 km/h et 15m à 80 km/h ne représentent pas le même danger.
+  - `r_walker` — pénalité continue sur la distance brute au piéton le plus proche ; pas de time-headway ici, un piéton peut changer de direction à tout moment indépendamment de la vitesse du véhicule.
+  - `r_speeding` — pénalité continue au-delà de la limite détectée, avec 5 km/h de tolérance avant de déclencher (évite de punir un léger dépassement / bruit de mesure).
+  - `r_red_light` / `r_stop_yield` — pénalités ponctuelles (−2.0 / −1.0), une seule fois par infraction : un flag retombe dès que la distance repasse au-dessus du seuil (5m), pas seulement au `reset()` comme envisagé la veille — un deuxième feu plus loin dans le même épisode peut donc être sanctionné indépendamment du premier. Une infraction exige aussi que la vitesse dépasse 5 km/h : rester à l'arrêt collé au feu n'est jamais pénalisé, seul le franchir en roulant l'est.
+- **`p_offroad`** : −0.5 → **−0.25**. Il n'a été actif pour la première fois que sur `ppo_v3_100k` et n'avait donc jamais été réellement calibré pour ce régime — le laisser à −0.5 en empilant en plus les nouvelles pénalités par step aurait aggravé le raccourci diagnostiqué la veille plutôt que de le corriger.
+- **`p_collision`** : flat −1.0 → base **−5.0** scalée par la vitesse d'impact (**−0.05/km-h**, capturée dans `_on_collision` via `_speed_kmh()` au moment exact du contact, pas relue plus tard au moment du calcul du reward). Ex. : choc à 72 km/h → −5.0 − 3.6 = −8.6. Fix en attente depuis l'analyse v2/v3, appliqué maintenant — d'autant plus nécessaire que les nouvelles pénalités par step rendent le raccourci « crasher vite » encore plus tentant si le collision reward restait plat.
+- **PPO** (`src/ai/training/rl_train.py`) : réseau `net_arch=[128, 128]` (au lieu du défaut SB3 `[64, 64]`), `ent_coef=0.01` pour maintenir l'exploration plus longtemps, `seed=42` pour la reproductibilité des expériences, et `learning_rate` en décroissance linéaire (3e-4 → 0) au lieu d'une valeur fixe — vise directement l'instabilité de fin de training observée sur v2 autour de 210k steps.
+- `src/ai/README.md` resynchronisé : observation 12 scalaires, formules de reward complètes (les 5 nouveaux termes), nouvelle section « Trafic NPC », table de tests recomptée.
+
+**Difficultés** :
+- Spawn des piétons CARLA : le `controller.ai.walker` doit être attaché après que l'acteur piéton a été effectivement enregistré dans le monde — un `world.tick()` est nécessaire entre le `try_spawn_actor` du piéton et le `spawn_actor` de son controller, sinon ce dernier peut s'attacher à un acteur pas encore prêt côté serveur.
+- En remettant à plat tous les tests de collision pour la nouvelle formule base + vitesse, l'un d'eux est passé entre les mailles au premier passage : `test_collision_terminates_with_penalty` positionne `_collision_flag` directement sans passer par `_on_collision` (donc vitesse d'impact à 0) et vérifiait encore l'ancien −1.0 flat. Repéré en relisant la liste complète des tests de collision avant de considérer le fichier fini ; corrigé à −5.0.
+
+**Décisions** :
+- Le diagramme ASCII du README (section « PPO Policy ») mentionnait encore « 2 couches Dense 64 » — repéré en relisant l'ensemble juste avant de clore ce lot, corrigé à 128.
+- Pas de `VecNormalize` ni de politique récurrente sur ce passage, comme tranché la veille — on s'en tient strictement aux points actés en conception plutôt que d'ajouter des idées en cours de route.
+
+**Benchmarks** : 94 tests sur `benchmarks/ai/` (`uv run pytest benchmarks/ai/ -q`), contre 70 avant ce lot de changements (+10 dans `smoke.py`, +9 dans `test_rl_env.py`, +5 dans `test_rl_train.py`). Tout `benchmarks/` confondu (modules Franck/Karim compris) : 108 tests, contre 84 la dernière fois. Tout vert.
+
+**Prochaine étape** :
+- Lancer un training complet avec ce lot de changements (tag `ppo_v4`, 300k comme pour v2) et comparer à `ppo_v3_100k` : reward moyen, score benchmark, taux de crash, temps passé hors-route — et surtout si le raccourci « écourter vite » identifié en v3 a disparu maintenant que `p_collision` est proportionnel à la vitesse d'impact.
+- Vérifier si le signal des nouveaux scalaires piéton / feu / stop-yield est déjà visible dans les métriques dès les 30-50k premiers steps, comme `is_on_road` avait commencé à l'être en v3.
