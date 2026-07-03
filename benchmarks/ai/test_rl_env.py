@@ -24,7 +24,9 @@ def _make_env(
     lane_offset: float = 0.0,
     on_road: bool = True,
     nearest_vehicle_m: float = 50.0,
-    has_red_light: bool = False,
+    red_light_distance_m: float | None = None,
+    nearest_walker_m: float | None = None,
+    nearest_stop_yield_m: float | None = None,
     max_episode_steps: int = 10,
 ) -> CarlaEnv:
     world = Mock()
@@ -57,8 +59,12 @@ def _make_env(
     # Franck's perception mock
     perception = Mock()
     objects = [DetectedObject(class_name=ObjectClass.VEHICLE, bbox=(0, 0, 10, 10), confidence=0.9, distance_m=nearest_vehicle_m)]
-    if has_red_light:
-        objects.append(DetectedObject(class_name=ObjectClass.RED_LIGHT, bbox=(100, 0, 120, 30), confidence=0.95))
+    if red_light_distance_m is not None:
+        objects.append(DetectedObject(class_name=ObjectClass.RED_LIGHT, bbox=(100, 0, 120, 30), confidence=0.95, distance_m=red_light_distance_m))
+    if nearest_walker_m is not None:
+        objects.append(DetectedObject(class_name=ObjectClass.WALKER, bbox=(200, 0, 220, 60), confidence=0.9, distance_m=nearest_walker_m))
+    if nearest_stop_yield_m is not None:
+        objects.append(DetectedObject(class_name=ObjectClass.STOP, bbox=(300, 0, 320, 40), confidence=0.9, distance_m=nearest_stop_yield_m))
     perception.perceive.return_value = (objects, np.zeros((720, 1280), dtype=np.float32))
 
     # Karim's lane estimate mock
@@ -90,7 +96,7 @@ _ZERO_ACTION = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
 def test_observation_space_shape_and_dtype():
     env = _make_env()
-    assert env.observation_space.shape == (10,)
+    assert env.observation_space.shape == (12,)
     assert env.observation_space.dtype == np.float32
 
 
@@ -114,7 +120,7 @@ def test_reset_returns_obs_and_empty_info():
 
 def test_reset_obs_shape_and_dtype():
     obs, _ = _make_env().reset()
-    assert obs.shape == (10,)
+    assert obs.shape == (12,)
     assert obs.dtype == np.float32
 
 
@@ -160,7 +166,7 @@ def test_step_returns_five_tuple_correct_types():
     env = _make_env()
     env.reset()
     obs, reward, terminated, truncated, info = env.step(_ZERO_ACTION)
-    assert obs.shape == (10,)
+    assert obs.shape == (12,)
     assert isinstance(reward, float)
     assert isinstance(terminated, bool)
     assert isinstance(truncated, bool)
@@ -173,7 +179,49 @@ def test_collision_terminates_with_penalty():
     env._collision_flag = True
     _, reward, terminated, _, _ = env.step(_ZERO_ACTION)
     assert terminated is True
-    assert reward == pytest.approx(-1.0)
+    assert reward == pytest.approx(-5.0)
+
+
+def test_collision_captures_impact_speed():
+    env = _make_env(speed_mps=20.0)  # 72 km/h
+    env.reset()
+    env._on_collision(Mock())
+    assert env._collision_speed_kmh == pytest.approx(72.0, abs=0.1)
+
+
+def test_collision_speed_resets_on_reset():
+    env = _make_env(speed_mps=20.0)
+    env.reset()
+    env._on_collision(Mock())
+    env.reset()
+    assert env._collision_speed_kmh == pytest.approx(0.0)
+
+
+def test_red_light_violation_penalized_once_not_twice():
+    env = _make_env(speed_mps=10.0, red_light_distance_m=3.0)  # 36 km/h, close red light
+    env.reset()
+    _, reward1, _, _, _ = env.step(_ZERO_ACTION)
+    _, reward2, _, _, _ = env.step(_ZERO_ACTION)
+    assert reward2 - reward1 == pytest.approx(2.0, abs=1e-3)
+
+
+def test_red_light_violation_rearms_after_moving_away():
+    env = _make_env(speed_mps=10.0, red_light_distance_m=3.0)
+    env.reset()
+    env.step(_ZERO_ACTION)
+    assert env._red_light_flagged is True
+    far_objects = [DetectedObject(class_name=ObjectClass.RED_LIGHT, bbox=(0, 0, 1, 1), confidence=0.9, distance_m=40.0)]
+    env.perception.perceive.return_value = (far_objects, np.zeros((720, 1280), dtype=np.float32))
+    env.step(_ZERO_ACTION)
+    assert env._red_light_flagged is False
+
+
+def test_stop_yield_violation_penalized_once_not_twice():
+    env = _make_env(speed_mps=10.0, nearest_stop_yield_m=3.0)
+    env.reset()
+    _, reward1, _, _, _ = env.step(_ZERO_ACTION)
+    _, reward2, _, _, _ = env.step(_ZERO_ACTION)
+    assert reward2 - reward1 == pytest.approx(1.0, abs=1e-3)
 
 
 def test_max_steps_truncates_episode():
@@ -280,15 +328,39 @@ def test_obs_nearest_vehicle_normalized():
 
 
 def test_obs_red_light_detected():
-    env = _make_env(has_red_light=True)
+    env = _make_env(red_light_distance_m=10.0)
+    obs, _ = env.reset()
+    assert obs[8] == pytest.approx(10.0 / 50.0, abs=1e-4)
+
+
+def test_obs_no_red_light():
+    env = _make_env(red_light_distance_m=None)
     obs, _ = env.reset()
     assert obs[8] == pytest.approx(1.0)
 
 
-def test_obs_no_red_light():
-    env = _make_env(has_red_light=False)
+def test_obs_nearest_walker_normalized():
+    env = _make_env(nearest_walker_m=15.0)
     obs, _ = env.reset()
-    assert obs[8] == pytest.approx(0.0)
+    assert obs[10] == pytest.approx(15.0 / 50.0, abs=1e-4)
+
+
+def test_obs_no_walker_detected():
+    env = _make_env(nearest_walker_m=None)
+    obs, _ = env.reset()
+    assert obs[10] == pytest.approx(1.0)
+
+
+def test_obs_nearest_stop_yield_normalized():
+    env = _make_env(nearest_stop_yield_m=8.0)
+    obs, _ = env.reset()
+    assert obs[11] == pytest.approx(8.0 / 50.0, abs=1e-4)
+
+
+def test_obs_no_stop_yield_detected():
+    env = _make_env(nearest_stop_yield_m=None)
+    obs, _ = env.reset()
+    assert obs[11] == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------

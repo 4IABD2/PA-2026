@@ -1,7 +1,7 @@
 # `src/ai/` — IA centrale (décision)
 
 > **Owner** : Frédéric Huang
-> **Contrats (Phase 1 réel)** : `CarlaEnv` (`gym.Env`) consomme directement `PerceptionPipeline.perceive()` (Franck), `lane_perception.estimate()` (Karim) et `Navigation.next_command()` (Victor) → `HighLevelCommand` ; produit une observation `Box(10,)` et consomme une action `Box(3,)` (steer, throttle, brake). Les dataclasses `SceneState`/`ControlOutput` de [`ai_types.py`](../interfaces/ai_types.py) faisaient partie du design initial mais ne sont plus utilisées : PPO/Stable-Baselines3 impose un espace d'observation/action `numpy` plat, pas des objets structurés.
+> **Contrats (Phase 1 réel)** : `CarlaEnv` (`gym.Env`) consomme directement `PerceptionPipeline.perceive()` (Franck), `lane_perception.estimate()` (Karim) et `Navigation.next_command()` (Victor) → `HighLevelCommand` ; produit une observation `Box(12,)` et consomme une action `Box(3,)` (steer, throttle, brake). Les dataclasses `SceneState`/`ControlOutput` de [`ai_types.py`](../interfaces/ai_types.py) faisaient partie du design initial mais ne sont plus utilisées : PPO/Stable-Baselines3 impose un espace d'observation/action `numpy` plat, pas des objets structurés.
 
 ---
 
@@ -38,7 +38,8 @@ CARLA World (sync mode, 20 FPS)
 [PerceptionPipeline — Franck]   src/perception/pipeline.py
          │   YOLO11s (détection, 11 classes) + Depth Anything v2 (profondeur monoculaire calibrée)
          ▼
-         liste d'objets détectés + distance_m ──► nearest_vehicle_norm, has_red_light, speed_limit_norm
+         liste d'objets détectés + distance_m ──► nearest_vehicle_norm, red_light_distance_norm,
+         speed_limit_norm, nearest_walker_norm, nearest_stop_yield_norm
 
 [lane_perception.estimate() — Karim]   src/lane_detection/lane_perception.py
          │   YOLOPv2 (segmentation zone roulable + lignes) + géométrie (lane_geometry.py)
@@ -49,21 +50,23 @@ CARLA World (sync mode, 20 FPS)
          ├─ plan(start, dest) → Route          ← au reset de chaque épisode
          └─ next_command(pos, route) → HighLevelCommand  ← à chaque step
 
-[Observation vector] — 10 scalaires normalisés  ∈ [-1, 1] ou [0, 1]
-         ├─ [0] speed_norm            = speed_kmh / 90.0                    ∈ [0, 1]
-         ├─ [1] cmd_left              = 1.0 si LEFT else 0.0
-         ├─ [2] cmd_right             = 1.0 si RIGHT else 0.0
-         ├─ [3] cmd_straight          = 1.0 si STRAIGHT else 0.0
+[Observation vector] — 12 scalaires normalisés  ∈ [-1, 1] ou [0, 1]
+         ├─ [0] speed_norm              = speed_kmh / 90.0                    ∈ [0, 1]
+         ├─ [1] cmd_left                = 1.0 si LEFT else 0.0
+         ├─ [2] cmd_right               = 1.0 si RIGHT else 0.0
+         ├─ [3] cmd_straight            = 1.0 si STRAIGHT else 0.0
          │       [0,0,0] = LANE_FOLLOW (pas d'intersection)
-         ├─ [4] lane_angle_norm       = angle de cap vers la voie / 90.0    ∈ [-1, 1]  (Karim)
-         ├─ [5] lane_offset_norm      = déviation latérale voie             ∈ [-1, 1]  (Karim)
-         ├─ [6] is_on_road            = 1.0 si voie détectée else 0.0                  (Karim)
-         ├─ [7] nearest_vehicle_norm  = min(dist_véhicule, 50m) / 50m       ∈ [0, 1]  (Franck)
-         ├─ [8] has_red_light         = 1.0 si feu rouge détecté else 0.0              (Franck)
-         └─ [9] speed_limit_norm      = limite de vitesse mémorisée / 90.0  ∈ [0, 1]  (Franck)
+         ├─ [4] lane_angle_norm         = angle de cap vers la voie / 90.0    ∈ [-1, 1]  (Karim)
+         ├─ [5] lane_offset_norm        = déviation latérale voie             ∈ [-1, 1]  (Karim)
+         ├─ [6] is_on_road              = 1.0 si voie détectée else 0.0                  (Karim)
+         ├─ [7] nearest_vehicle_norm    = min(dist_véhicule, 50m) / 50m       ∈ [0, 1]  (Franck)
+         ├─ [8] red_light_distance_norm = min(dist_feu_rouge, 50m) / 50m      ∈ [0, 1]  (Franck)
+         ├─ [9] speed_limit_norm        = limite de vitesse mémorisée / 90.0  ∈ [0, 1]  (Franck)
+         ├─ [10] nearest_walker_norm    = min(dist_piéton, 50m) / 50m         ∈ [0, 1]  (Franck)
+         └─ [11] nearest_stop_yield_norm = min(dist_stop_ou_yield, 50m) / 50m ∈ [0, 1]  (Franck)
 
 [PPO Policy] — Stable-Baselines3 MlpPolicy
-         │   2 couches Dense 64, activation tanh
+         │   2 couches Dense 128, activation tanh
          ▼
 [Action] — espace continu Box(3,)
          ├─ steer    ∈ [-1, 1]
@@ -71,19 +74,24 @@ CARLA World (sync mode, 20 FPS)
          └─ brake    ∈ [0, 1]
 
 [Reward function — par step]   src/ai/rewards/reward_fn.py
-         ├─ r_speed     = (speed_kmh / 90.0) × 0.5          → encourage la vitesse
-         ├─ r_center    = (1 − |lane_offset_norm|) × 0.3    → encourage le centrage
-         ├─ r_alive     = +0.01                              → survie (anti-crash passif)
-         ├─ r_stall     = −0.20 si speed < 1 km/h           → pénalise l'immobilisme
-         ├─ r_offroad   = −0.5  si is_on_road=False         → pénalité hors route (Karim)
-         ├─ r_off_route = −0.5  si > 15m de la route GPS    → pénalise la déviation GPS
-         └─ r_collision = −1.0 + done=True                   → épisode terminé
+         ├─ r_speed      = (speed_kmh / 90.0) × 0.5                         → encourage la vitesse
+         ├─ r_center     = (1 − |lane_offset_norm|) × 0.3                   → encourage le centrage
+         ├─ r_alive      = +0.01                                            → survie (anti-crash passif)
+         ├─ r_stall      = −0.20 si speed < 1 km/h                          → pénalise l'immobilisme
+         ├─ r_offroad    = −0.25 si is_on_road=False                        → pénalité hors route (Karim)
+         ├─ r_off_route  = −0.5  si > 15m de la route GPS                   → pénalise la déviation GPS
+         ├─ r_following  = −(1 − headway_s/2.0) × 0.2 si headway < 2s       → distance de sécurité, règle des 2s (Franck)
+         ├─ r_walker     = −(1 − dist_piéton/10m) × 0.3 si dist < 10m       → priorité sécurité piéton (Franck)
+         ├─ r_speeding   = −((speed − limite − 5) / 90.0) × 0.3 si dépassement → pénalise l'excès de vitesse (Franck)
+         ├─ r_red_light  = −2.0 si franchissement de feu rouge              → sanctionne le "grillage" de feu (Franck)
+         ├─ r_stop_yield = −1.0 si franchissement de stop/yield             → sanctionne le "grillage" de panneau (Franck)
+         └─ r_collision  = (−5.0 − 0.05 × vitesse_impact_kmh) + done=True   → épisode terminé, pénalité ∝ vitesse d'impact
 ```
 
 ### Espace d'observation — pourquoi des scalaires et pas des pixels
 
 Le RL pur sur pixels (end-to-end) nécessite des dizaines de millions de steps et des semaines de compute. Les observations compactes convergent en quelques heures car :
-- L'espace d'état est petit (10 floats) — même si la caméra tourne à 1280×720 (résolution imposée par le modèle YOLO de Franck), la policy PPO ne voit **jamais** l'image brute, seulement les scalaires extraits par les modules de perception
+- L'espace d'état est petit (12 floats) — même si la caméra tourne à 1280×720 (résolution imposée par le modèle YOLO de Franck), la policy PPO ne voit **jamais** l'image brute, seulement les scalaires extraits par les modules de perception
 - Chaque feature est directement exploitable (le réseau n'a pas à apprendre à extraire la distance depuis les pixels)
 - La variance de l'estimation de gradient (PPO) est beaucoup plus faible
 
@@ -91,7 +99,7 @@ Le RL pur sur pixels (end-to-end) nécessite des dizaines de millions de steps e
 
 Les scalaires de perception viennent des vrais modèles d'IA, pas de capteurs GT CARLA :
 
-- **Franck** — `PerceptionPipeline` (`src/perception/pipeline.py`) : YOLO11s (détection d'objets, 1280×720) + Depth Anything v2 (profondeur monoculaire, calibrée via `calibration.json`) fusionnés en une liste d'objets avec `distance_m`. Alimente `nearest_vehicle_norm`, `has_red_light`, `speed_limit_norm` (mémorisé entre frames car le panneau n'est pas toujours visible dans le champ de vision).
+- **Franck** — `PerceptionPipeline` (`src/perception/pipeline.py`) : YOLO11s (détection d'objets, 1280×720) + Depth Anything v2 (profondeur monoculaire, calibrée via `calibration.json`) fusionnés en une liste d'objets avec `distance_m`. Alimente `nearest_vehicle_norm`, `red_light_distance_norm`, `speed_limit_norm` (mémorisé entre frames car le panneau n'est pas toujours visible dans le champ de vision), `nearest_walker_norm` et `nearest_stop_yield_norm`.
 - **Karim** — `lane_perception.estimate()` (`src/lane_detection/lane_perception.py`) : YOLOPv2 (segmentation zone roulable + lignes, resize interne 640×480) + géométrie (`lane_geometry.py`, clustering des lignes + suivi + polyfit) → `(direction, angle, offset)`. Alimente `lane_angle_norm` (cap vers la voie), `lane_offset_norm` (position latérale), `is_on_road` (`direction != "NONE"`).
 
 Les anciens stubs GT CARLA (`src/interfaces/stubs.py`, `CarlaGTDepthEstimator`/`CarlaGTLaneDetector`) ne sont plus utilisés dans le pipeline d'entraînement — le code de l'IA centrale n'a pas eu besoin de changer au moment du swap, tout passait déjà par les protocoles de `src/interfaces/`.
@@ -111,6 +119,20 @@ ont été identifiés via `scripts/find_dest_spawns.py` (API waypoint CARLA pure
 **Pénalité off-route** : `CarlaEnv._is_off_route()` détecte si l'ego est à plus de 15m du
 waypoint de route le plus proche via une fenêtre glissante (O(1) amorti). La pénalité
 `−0.5/step` est appliquée dans `compute_reward(off_route=True)`.
+
+### Trafic NPC (véhicules + piétons)
+
+Depuis `scripts/run_rl_training.py`, chaque run de training fait aussi spawner du trafic
+autour de l'ego : des véhicules NPC en pilote automatique (Traffic Manager CARLA) et des
+piétons NPC pilotés par un `controller.ai.walker` qui marchent vers des destinations
+aléatoires sur la navmesh piétonne. Les quantités sont configurables via `--npcs` (défaut
+18) et `--pedestrians` (défaut 6).
+
+Sans ce trafic, la map serait vide et `nearest_vehicle_norm` / `nearest_walker_norm`
+resteraient quasiment toujours à 1.0 (rien à détecter) : les nouveaux termes de reward
+`r_following` et `r_walker` n'auraient jamais l'occasion de s'activer pendant
+l'entraînement. `r_speeding`, `r_red_light` et `r_stop_yield` réagissent eux à
+l'infrastructure statique de la map (panneaux, feux) et ne dépendent donc pas du trafic NPC.
 
 ---
 
@@ -286,9 +308,9 @@ uv run pytest benchmarks/ai/ -v
 
 | Fichier | Couverture |
 |---|---|
-| `smoke.py` | reward_fn (8 tests) + stubs GT — `src/interfaces/stubs.py`, non utilisés en prod depuis le branchement Franck/Karim (7 tests) |
-| `test_rl_env.py` | CarlaEnv — spaces, reset, step, observation (10 scalaires), reward, render, off_route (28 tests) |
-| `test_rl_train.py` | make_model, train (4 tests) |
+| `smoke.py` | reward_fn — dont les 5 nouveaux termes `r_following`/`r_walker`/`r_speeding`/`r_red_light`/`r_stop_yield` (18 tests) + stubs GT — `src/interfaces/stubs.py`, non utilisés en prod depuis le branchement Franck/Karim (7 tests) |
+| `test_rl_env.py` | CarlaEnv — spaces, reset, step, observation (12 scalaires), reward, violations feu rouge / stop-yield, render, off_route (37 tests) |
+| `test_rl_train.py` | make_model (dont config PPO : réseau, entropy, seed, LR schedule), train (9 tests) |
 | `test_rl_demo.py` | run_episode, _add_hud, record_episode, load_model (11 tests) |
 | `test_run_manager.py` | make_run_dir, save_params, plot_reward_curve (8 tests) |
 

@@ -18,17 +18,17 @@ from src.ai.training.rl_train import make_model, train
 
 
 class _MinimalEnv(gym.Env):
-    observation_space = spaces.Box(low=-1.0, high=1.0, shape=(7,), dtype=np.float32)
+    observation_space = spaces.Box(low=-1.0, high=1.0, shape=(12,), dtype=np.float32)
     action_space = spaces.Box(
         low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
         high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
     )
 
     def reset(self, **kwargs):
-        return np.zeros(7, dtype=np.float32), {}
+        return np.zeros(12, dtype=np.float32), {}
 
     def step(self, action):
-        return np.zeros(7, dtype=np.float32), 0.0, False, False, {}
+        return np.zeros(12, dtype=np.float32), 0.0, False, False, {}
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +51,36 @@ def test_make_model_has_mlp_policy():
 def test_make_model_override_learning_rate():
     model = make_model(_MinimalEnv(), learning_rate=1e-3)
     assert model.learning_rate == pytest.approx(1e-3)
+
+
+def test_ppo_defaults_use_larger_network():
+    from src.ai.training.rl_train import _PPO_DEFAULTS
+    assert _PPO_DEFAULTS["policy_kwargs"]["net_arch"] == [128, 128]
+
+
+def test_ppo_defaults_have_entropy_coefficient():
+    from src.ai.training.rl_train import _PPO_DEFAULTS
+    assert _PPO_DEFAULTS["ent_coef"] == pytest.approx(0.01)
+
+
+def test_ppo_defaults_are_seeded():
+    from src.ai.training.rl_train import _PPO_DEFAULTS
+    assert _PPO_DEFAULTS["seed"] == 42
+
+
+def test_ppo_defaults_learning_rate_is_a_decaying_schedule():
+    from src.ai.training.rl_train import _PPO_DEFAULTS
+    lr_fn = _PPO_DEFAULTS["learning_rate"]
+    assert callable(lr_fn)
+    assert lr_fn(1.0) == pytest.approx(3e-4)
+    assert lr_fn(0.0) == pytest.approx(0.0)
+    assert lr_fn(0.5) == pytest.approx(1.5e-4)
+
+
+def test_make_model_builds_with_new_defaults():
+    model = make_model(_MinimalEnv())
+    assert model.ent_coef == pytest.approx(0.01)
+    assert model.seed == 42
 
 
 # ---------------------------------------------------------------------------

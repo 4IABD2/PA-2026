@@ -19,7 +19,7 @@ def make_run_dir(base: str = "runs", tag: str = "") -> Path:
 
 
 def save_params(run_dir: Path, params: dict) -> None:
-    (run_dir / "params.json").write_text(json.dumps(params, indent=2))
+    (run_dir / "params.json").write_text(json.dumps(params, indent=2, default=str))
 
 
 def plot_reward_curve(monitor_csv: Path, output_png: Path) -> None:

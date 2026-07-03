@@ -20,9 +20,10 @@ if TYPE_CHECKING:
 
 # obs = [speed_norm, cmd_left, cmd_right, cmd_straight,
 #         lane_angle_norm, lane_offset_norm, is_on_road,
-#         nearest_vehicle_norm, has_red_light, speed_limit_norm]
-_OBS_LOW  = np.array([0., 0., 0., 0., -1., -1., 0., 0., 0., 0.], dtype=np.float32)
-_OBS_HIGH = np.array([1., 1., 1., 1.,  1.,  1., 1., 1., 1., 1.], dtype=np.float32)
+#         nearest_vehicle_norm, red_light_distance_norm, speed_limit_norm,
+#         nearest_walker_norm, nearest_stop_yield_norm]
+_OBS_LOW  = np.array([0., 0., 0., 0., -1., -1., 0., 0., 0., 0., 0., 0.], dtype=np.float32)
+_OBS_HIGH = np.array([1., 1., 1., 1.,  1.,  1., 1., 1., 1., 1., 1., 1.], dtype=np.float32)
 
 _MAX_SPEED_KMH         = 90.0
 _MAX_OBSTACLE_M        = 50.0
@@ -37,6 +38,39 @@ _SPEED_LIMIT_KMH: dict[ObjectClass, float] = {
     ObjectClass.SPEED_60: 60.0,
     ObjectClass.SPEED_90: 90.0,
 }
+
+_RED_LIGHT_VIOLATION_DIST_M = 5.0
+_RED_LIGHT_VIOLATION_SPEED_KMH = 5.0
+_STOP_YIELD_VIOLATION_DIST_M = 5.0
+_STOP_YIELD_VIOLATION_SPEED_KMH = 5.0
+
+
+def _check_violation(
+    distance_norm: float, speed_kmh: float, flagged: bool,
+    dist_threshold_m: float, speed_threshold_kmh: float,
+) -> tuple[bool, bool]:
+    """Returns (violation_just_happened, new_flagged_state).
+
+    `flagged` prevents re-penalising every step while the vehicle lingers
+    close to the same light/sign; it clears once the vehicle moves away,
+    so a later, different light/sign can still trigger a new violation.
+    """
+    distance_m = distance_norm * _MAX_OBSTACLE_M
+    is_close = distance_m < dist_threshold_m
+    violation_now = is_close and speed_kmh > speed_threshold_kmh and not flagged
+    return violation_now, is_close
+
+
+def _nearest_distance_norm(objects: list, classes: tuple) -> float:
+    """Normalised distance (0-1) to the nearest object of any of `classes`.
+
+    Returns 1.0 (== _MAX_OBSTACLE_M or further away) if none is detected.
+    """
+    dists = [
+        o.distance_m for o in objects
+        if o.class_name in classes and o.distance_m is not None
+    ]
+    return float(np.clip(min(dists) / _MAX_OBSTACLE_M, 0.0, 1.0)) if dists else 1.0
 
 
 class CarlaEnv(gym.Env):
@@ -68,13 +102,16 @@ class CarlaEnv(gym.Env):
         )
 
         self._collision_flag: bool = False
+        self._collision_speed_kmh: float = 0.0
+        self._red_light_flagged: bool = False
+        self._stop_yield_flagged: bool = False
         self._last_image: np.ndarray | None = None
         self._step_count: int = 0
         self._route_idx: int = 0       # sliding pointer into route.waypoints for efficient off-route check
         self._current_speed_limit_kmh: float = _DEFAULT_SPEED_LIMIT_KMH
         self.off_route_count: int = 0  # steps spent off-route this episode (readable by eval_model)
 
-        collision_sensor.listen(lambda _: setattr(self, "_collision_flag", True))
+        collision_sensor.listen(self._on_collision)
         camera.listen(self._on_camera)
 
     def reset(self, *, seed: int | None = None, options: dict | None = None) -> tuple[np.ndarray, dict]:
@@ -92,6 +129,9 @@ class CarlaEnv(gym.Env):
             except Exception:
                 pass
         self._collision_flag = False
+        self._collision_speed_kmh = 0.0
+        self._red_light_flagged = False
+        self._stop_yield_flagged = False
         self._step_count = 0
         self._route_idx = 0
         self._current_speed_limit_kmh = _DEFAULT_SPEED_LIMIT_KMH
@@ -114,12 +154,28 @@ class CarlaEnv(gym.Env):
         off_route = self._is_off_route() if self._step_count > _ROUTE_GRACE_STEPS else False
         if off_route:
             self.off_route_count += 1
+
+        red_light_violation, self._red_light_flagged = _check_violation(
+            float(obs[8]), speed_kmh, self._red_light_flagged,
+            _RED_LIGHT_VIOLATION_DIST_M, _RED_LIGHT_VIOLATION_SPEED_KMH,
+        )
+        stop_yield_violation, self._stop_yield_flagged = _check_violation(
+            float(obs[11]), speed_kmh, self._stop_yield_flagged,
+            _STOP_YIELD_VIOLATION_DIST_M, _STOP_YIELD_VIOLATION_SPEED_KMH,
+        )
+
         reward, terminated = compute_reward(
             speed_kmh=speed_kmh,
-            center_offset=float(obs[5]),   # lane_offset_norm, from Karim's lane detection
-            is_on_road=bool(obs[6] > 0.5), # from Karim's lane detection
+            center_offset=float(obs[5]),    # lane_offset_norm, from Karim's lane detection
+            is_on_road=bool(obs[6] > 0.5),  # from Karim's lane detection
             collision=self._collision_flag,
             off_route=off_route,
+            nearest_vehicle_m=float(obs[7]) * _MAX_OBSTACLE_M,
+            nearest_walker_m=float(obs[10]) * _MAX_OBSTACLE_M,
+            speed_limit_kmh=self._current_speed_limit_kmh,
+            collision_speed_kmh=self._collision_speed_kmh,
+            red_light_violation=red_light_violation,
+            stop_yield_violation=stop_yield_violation,
         )
         truncated = self._step_count >= self.max_episode_steps
         return obs, reward, terminated, truncated, {}
@@ -145,19 +201,13 @@ class CarlaEnv(gym.Env):
         lane_offset_norm = float(np.clip(offset, -1.0, 1.0))
         is_on_road = 1.0 if direction != "NONE" else 0.0
 
-        # Franck: nearest vehicle + red light + speed limit sign
+        # Franck: nearest vehicle, red light distance, speed limit sign, walker, stop/yield
         objects, _ = self.perception.perceive(image)
 
-        vehicle_dists = [
-            o.distance_m for o in objects
-            if o.class_name == ObjectClass.VEHICLE and o.distance_m is not None
-        ]
-        nearest_vehicle_norm = (
-            float(np.clip(min(vehicle_dists) / _MAX_OBSTACLE_M, 0.0, 1.0))
-            if vehicle_dists else 1.0
-        )
-
-        has_red_light = 1.0 if any(o.class_name == ObjectClass.RED_LIGHT for o in objects) else 0.0
+        nearest_vehicle_norm = _nearest_distance_norm(objects, (ObjectClass.VEHICLE,))
+        red_light_distance_norm = _nearest_distance_norm(objects, (ObjectClass.RED_LIGHT,))
+        nearest_walker_norm = _nearest_distance_norm(objects, (ObjectClass.WALKER,))
+        nearest_stop_yield_norm = _nearest_distance_norm(objects, (ObjectClass.STOP, ObjectClass.YIELD))
 
         speed_signs = [o for o in objects if o.class_name in _SPEED_LIMIT_KMH]
         if speed_signs:
@@ -167,7 +217,8 @@ class CarlaEnv(gym.Env):
         return np.array(
             [speed_norm, cmd_left, cmd_right, cmd_straight,
              lane_angle_norm, lane_offset_norm, is_on_road,
-             nearest_vehicle_norm, has_red_light, speed_limit_norm],
+             nearest_vehicle_norm, red_light_distance_norm, speed_limit_norm,
+             nearest_walker_norm, nearest_stop_yield_norm],
             dtype=np.float32,
         )
 
@@ -225,6 +276,10 @@ class CarlaEnv(gym.Env):
                 min_idx = i
         self._route_idx = min_idx
         return min_dist_sq > _OFF_ROUTE_M ** 2
+
+    def _on_collision(self, event) -> None:
+        self._collision_flag = True
+        self._collision_speed_kmh = self._speed_kmh()
 
     def _on_camera(self, raw_image) -> None:
         arr = np.frombuffer(raw_image.raw_data, dtype=np.uint8).reshape(
