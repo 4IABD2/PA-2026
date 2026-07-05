@@ -1,4 +1,5 @@
 .idea
+.claude/
 **.png
 **__pycache__/
 **.h5

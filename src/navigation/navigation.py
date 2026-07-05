@@ -12,6 +12,7 @@ class Navigation:
         self.vehicle = vehicle
         self.carla_map = carla_map
         self.index_way = 0
+        self._graph = None
 
     @staticmethod
     def extract_road_network(carla_map, resolution=2.0):
@@ -105,8 +106,13 @@ class Navigation:
             return "straight"
 
     def plan(self, start, destination) -> Route:
-        graph = self.extract_road_network(self.carla_map)
-        path = self.manual_a_star(graph, start, destination)
+        # The road network never changes for a given map — building it is
+        # expensive (generates waypoints for the whole town + plots them),
+        # so it's cached after the first plan() call instead of rebuilt on
+        # every reset (CarlaEnv.reset() now replans on every episode).
+        if self._graph is None:
+            self._graph = self.extract_road_network(self.carla_map)
+        path = self.manual_a_star(self._graph, start, destination)
         MatplotVisualizer.plot_plan(path)
         waypoints = [
             Waypoint(

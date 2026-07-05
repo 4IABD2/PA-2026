@@ -14,6 +14,8 @@ import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.base_class import BaseAlgorithm
 
+from src.interfaces.navigation_types import Route
+
 
 # ---------------------------------------------------------------------------
 # Scenario + Highlight dataclasses
@@ -310,6 +312,48 @@ def _draw_result_card(success: bool | None, w: int, h: int, cv2) -> np.ndarray:
     return card
 
 
+def _draw_route_map_card(route: Route, w: int, h: int, cv2) -> np.ndarray:
+    """Top-down schematic of the planned route: path line + start/end markers (BGR)."""
+    card = np.full((h, w, 3), (12, 12, 16), dtype=np.uint8)
+    waypoints = route.waypoints
+    if not waypoints:
+        return card
+
+    xs = [wp.x for wp in waypoints]
+    ys = [wp.y for wp in waypoints]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    span_x = max(max_x - min_x, 1.0)
+    span_y = max(max_y - min_y, 1.0)
+
+    margin = 60
+    avail_w, avail_h = w - 2 * margin, h - 2 * margin
+    scale = min(avail_w / span_x, avail_h / span_y)
+
+    def _to_px(x: float, y: float) -> tuple[int, int]:
+        px = margin + int((x - min_x) * scale)
+        py = h - margin - int((y - min_y) * scale)  # flip Y for a map-like "up" feel
+        return px, py
+
+    points = np.array([_to_px(wp.x, wp.y) for wp in waypoints], dtype=np.int32)
+    cv2.polylines(card, [points], isClosed=False, color=(60, 200, 230), thickness=3)
+
+    start_px = (int(points[0][0]), int(points[0][1]))
+    end_px = (int(points[-1][0]), int(points[-1][1]))
+    cv2.circle(card, start_px, 8, (80, 220, 80), -1)
+    cv2.circle(card, end_px, 8, (60, 60, 220), -1)
+    cv2.putText(card, "A", (start_px[0] + 12, start_px[1] - 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (80, 220, 80), 2)
+    cv2.putText(card, "B", (end_px[0] + 12, end_px[1] - 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (60, 60, 220), 2)
+
+    title = "PLANNED ROUTE"
+    (tw, _), _ = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+    cv2.putText(card, title, ((w - tw) // 2, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (230, 230, 230), 2)
+    return card
+
+
 def _draw_obs_panel(
     frame_bgr: np.ndarray,
     obs: np.ndarray,
@@ -461,12 +505,16 @@ def record_episode(
     highlight_specs: list[HighlightSpec] | None = None,
     highlight_dir: Path | str | None = None,
     reset_seed: int | None = None,
+    spawn_idx: int | None = None,
+    route_map_seconds: float = 3.0,
     scenarios: list[Scenario] | None = None,
 ) -> None:
     """Record inference to an MP4 with HUD overlay.
 
     Two modes:
-    - Default (scenarios=None): runs n_episodes from same spawn (reset_seed).
+    - Default (scenarios=None): runs n_episodes from the same spawn (reset_seed
+      for determinism; pass spawn_idx too, otherwise the random-spawn safety
+      retry in CarlaEnv can still land on a different spawn point run to run).
     - Scenario mode (scenarios=[...]): runs each Scenario in sequence, each from
       its own spawn_idx, for scenario.max_steps steps — crash → next scenario.
     """
@@ -496,8 +544,10 @@ def record_episode(
             _record_scenarios(model, env, writer, recorder, scenarios,
                               _get_frame, hud_params, out_w, out_h, cv2)
         else:
+            route_map_frames = int(fps * route_map_seconds)
             _record_episodes(model, env, writer, recorder, n_episodes, max_steps,
-                             reset_seed, _get_frame, hud_params, cv2)
+                             reset_seed, spawn_idx, _get_frame, hud_params, cv2,
+                             out_w, out_h, route_map_frames)
     finally:
         writer.release()
         if recorder is not None:
@@ -510,9 +560,18 @@ def record_episode(
 
 def _record_episodes(
     model, env, writer, recorder, n_episodes, max_steps,
-    reset_seed, _get_frame, hud_params, cv2,
+    reset_seed, spawn_idx, _get_frame, hud_params, cv2,
+    out_w, out_h, route_map_frames,
 ) -> None:
-    obs, _ = env.reset(seed=reset_seed)
+    reset_options = {"spawn_idx": spawn_idx} if spawn_idx is not None else None
+    obs, _ = env.reset(seed=reset_seed, options=reset_options)
+
+    route = getattr(env, "route", None)
+    if route is not None and route.waypoints:
+        map_card = _draw_route_map_card(route, out_w, out_h, cv2)
+        for _ in range(route_map_frames):
+            writer.write(map_card)
+
     episode, total_reward, step = 0, 0.0, 0
 
     while episode < n_episodes:
@@ -538,7 +597,7 @@ def _record_episodes(
         if terminated or truncated or step >= max_steps:
             episode += 1
             if episode < n_episodes:
-                obs, _ = env.reset(seed=reset_seed)
+                obs, _ = env.reset(seed=reset_seed, options=reset_options)
                 total_reward, step = 0.0, 0
 
 

@@ -174,11 +174,13 @@ PA-2026/
 ├── scripts/
 │   ├── run_rl_training.py       ← Lance le training Phase 1 (CARLA + PPO + artifacts + eval)
 │   ├── run_eval.py              ← Évalue un modèle sur les 13 scénarios benchmark → vidéo + JSON
+│   ├── analyze_run.py           ← Analyse une run (courbe binée + benchmark + totaux, données brutes)
 │   ├── explore_spawns.py        ← Explore et classe les spawn points Town10HD_Opt
 │   └── find_dest_spawns.py      ← Trouve les dest_spawn_idx par direction de carrefour
 ├── runs/                        ← Artifacts d'entraînement horodatés (gitignored)
 │   └── YYYY-MM-DD_HH-MM_tag/
-│       ├── params.json, model_best.zip, model_final.zip, reward_curve.png, demo.mp4
+│       ├── params.json, run.log, model_best.zip, model_final.zip, reward_curve.png, demo.mp4
+│       ├── analysis_data.json   ← généré par scripts/analyze_run.py
 │       └── evals/               ← Résultats benchmark par checkpoint (JSON + vidéo)
 ├── data/                        ← Datasets (gitignored)
 ├── checkpoints/                 ← Modèles Phase 0 (gitignored)

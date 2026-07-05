@@ -53,8 +53,10 @@ def _make_env(
     spawn = Mock()
     spawn.location.x, spawn.location.y, spawn.location.z = 0.0, 0.0, 0.0
     world.get_map.return_value.get_spawn_points.return_value = [spawn, spawn]
+    world.get_actors.return_value.filter.return_value = []  # no nearby NPCs by default
 
     nav.next_command.return_value = cmd
+    nav.plan.return_value = Route(waypoints=[], destination=Waypoint(0.0, 0.0, 0.0, 0.0))
 
     # Franck's perception mock
     perception = Mock()
@@ -84,6 +86,14 @@ def _make_env(
         collision_sensor=col_sensor,
         max_episode_steps=max_episode_steps,
     )
+
+
+def _make_spawn(distance_to_nearest: float) -> Mock:
+    """A spawn-point Mock whose location reports a fixed nearest-actor distance,
+    regardless of which actor is queried."""
+    sp = Mock()
+    sp.location.distance = Mock(return_value=distance_to_nearest)
+    return sp
 
 
 _ZERO_ACTION = np.array([0.0, 0.0, 0.0], dtype=np.float32)
@@ -142,6 +152,111 @@ def test_reset_teleports_ego():
     env.reset()
     env.ego.set_transform.assert_called()
     env.ego.set_target_velocity.assert_called()
+
+
+def test_reset_replans_route_even_without_explicit_spawn_idx():
+    # Regression test: SB3 calls reset() with no options after every training
+    # episode (spawn_idx=None). The route must still be replanned from the
+    # new (randomly teleported) position — otherwise nav commands are computed
+    # against a stale route from a completely different location.
+    env = _make_env()
+    env.nav.plan.reset_mock()
+    env.reset()
+    env.nav.plan.assert_called_once()
+
+
+def test_reset_replans_route_with_explicit_spawn_idx():
+    env = _make_env()
+    env.nav.plan.reset_mock()
+    env.reset(options={"spawn_idx": 1})
+    env.nav.plan.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Safe spawn selection
+# ---------------------------------------------------------------------------
+
+
+def test_safe_spawn_rejects_candidate_within_min_distance():
+    env = _make_env()
+    unsafe = _make_spawn(distance_to_nearest=5.0)
+    safe = _make_spawn(distance_to_nearest=15.0)
+    env.world.get_map.return_value.get_spawn_points.return_value = [unsafe, safe]
+    nearby_actor = Mock(id=999, get_location=Mock(return_value=Mock()))
+    env.world.get_actors.return_value.filter.return_value = [nearby_actor]
+    env.np_random = Mock(integers=Mock(side_effect=[0, 1]))
+
+    env.reset()
+
+    env.ego.set_transform.assert_called_with(safe)
+
+
+def test_safe_spawn_accepts_first_candidate_at_exactly_min_distance():
+    env = _make_env()
+    safe = _make_spawn(distance_to_nearest=10.0)  # exactly the threshold
+    other = _make_spawn(distance_to_nearest=20.0)
+    env.world.get_map.return_value.get_spawn_points.return_value = [safe, other]
+    nearby_actor = Mock(id=999, get_location=Mock(return_value=Mock()))
+    env.world.get_actors.return_value.filter.return_value = [nearby_actor]
+    env.np_random = Mock(integers=Mock(side_effect=[0]))
+
+    env.reset()
+
+    env.ego.set_transform.assert_called_with(safe)
+    env.np_random.integers.assert_called_once()  # short-circuits, doesn't draw all 10
+
+
+def test_safe_spawn_falls_back_to_best_attempt_when_all_unsafe():
+    env = _make_env()
+    worse = _make_spawn(distance_to_nearest=2.0)
+    better = _make_spawn(distance_to_nearest=6.0)
+    env.world.get_map.return_value.get_spawn_points.return_value = [worse, better]
+    nearby_actor = Mock(id=999, get_location=Mock(return_value=Mock()))
+    env.world.get_actors.return_value.filter.return_value = [nearby_actor]
+    # 10 draws (all below the 10m threshold), ending on `worse` so a
+    # last-drawn-wins implementation would incorrectly return `worse`.
+    env.np_random = Mock(integers=Mock(side_effect=[0, 1, 0, 1, 0, 1, 0, 1, 0, 0]))
+
+    env.reset()
+
+    env.ego.set_transform.assert_called_with(better)
+
+
+def test_safe_spawn_accepts_immediately_when_no_nearby_actors():
+    env = _make_env()
+    only = _make_spawn(distance_to_nearest=0.0)  # would be unsafe if actors existed
+    env.world.get_map.return_value.get_spawn_points.return_value = [only]
+    env.world.get_actors.return_value.filter.return_value = []  # no vehicles, no walkers
+    env.np_random = Mock(integers=Mock(side_effect=[0]))
+
+    env.reset()
+
+    env.ego.set_transform.assert_called_with(only)
+
+
+def test_safe_spawn_excludes_ego_from_nearby_actors():
+    env = _make_env()
+    safe = _make_spawn(distance_to_nearest=999.0)
+    env.world.get_map.return_value.get_spawn_points.return_value = [safe]
+    env.ego.id = 1
+    ego_as_actor = Mock(id=1, get_location=Mock(return_value=Mock()))
+    env.world.get_actors.return_value.filter.return_value = [ego_as_actor]
+    env.np_random = Mock(integers=Mock(side_effect=[0]))
+
+    env.reset()
+
+    env.ego.set_transform.assert_called_with(safe)
+    safe.location.distance.assert_not_called()  # the only "actor" found was the ego itself
+
+
+def test_explicit_spawn_idx_skips_safety_check():
+    env = _make_env()
+    spawn0 = _make_spawn(distance_to_nearest=0.0)
+    env.world.get_map.return_value.get_spawn_points.return_value = [spawn0]
+
+    env.reset(options={"spawn_idx": 0})
+
+    env.world.get_actors.assert_not_called()
 
 
 def test_reset_does_warmup_ticks():
@@ -383,3 +498,61 @@ def test_render_returns_rgb_array_after_image_set():
     assert isinstance(result, np.ndarray)
     assert result.shape == (720, 1280, 3)
     assert result.dtype == np.uint8
+
+
+# ---------------------------------------------------------------------------
+# Episode reward components
+# ---------------------------------------------------------------------------
+
+
+def test_episode_reward_components_empty_mid_episode():
+    env = _make_env(speed_mps=10.0, max_episode_steps=10)
+    env.reset()
+    _, _, terminated, truncated, info = env.step(_ZERO_ACTION)
+    assert terminated is False
+    assert truncated is False
+    assert info == {}
+
+
+def test_episode_reward_components_reported_on_truncation():
+    env = _make_env(speed_mps=10.0, max_episode_steps=3)  # 36 km/h
+    env.reset()
+    env.step(_ZERO_ACTION)
+    env.step(_ZERO_ACTION)
+    _, _, terminated, truncated, info = env.step(_ZERO_ACTION)
+    assert truncated is True
+    assert terminated is False
+    # r_speed = (36/90)*0.3 = 0.12 per step, summed over 3 steps
+    assert info["r_speed"] == pytest.approx(0.12 * 3, abs=1e-3)
+
+
+def test_episode_reward_components_reported_on_collision():
+    env = _make_env(speed_mps=10.0)
+    env.reset()
+    env._collision_flag = True
+    _, _, terminated, _, info = env.step(_ZERO_ACTION)
+    assert terminated is True
+    assert info["r_collision"] != 0.0
+    assert info["r_speed"] == pytest.approx(0.0)  # collision step zeroes every other component
+
+
+def test_episode_reward_components_has_all_twelve_keys_when_reported():
+    env = _make_env(speed_mps=10.0, max_episode_steps=1)
+    env.reset()
+    _, _, _, truncated, info = env.step(_ZERO_ACTION)
+    assert truncated is True
+    expected_keys = {
+        "r_speed", "r_center", "r_alive", "r_offroad", "r_stall", "r_off_route",
+        "r_following", "r_walker", "r_speeding", "r_red_light", "r_stop_yield", "r_collision",
+    }
+    assert set(info.keys()) == expected_keys
+
+
+def test_episode_reward_components_reset_between_episodes():
+    env = _make_env(speed_mps=10.0, max_episode_steps=2)
+    env.reset()
+    env.step(_ZERO_ACTION)
+    _, _, _, truncated, _ = env.step(_ZERO_ACTION)
+    assert truncated is True
+    env.reset()
+    assert env._episode_reward_components["r_speed"] == pytest.approx(0.0)

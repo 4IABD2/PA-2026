@@ -721,3 +721,127 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Prochaine étape** :
 - Lancer un training complet avec ce lot de changements (tag `ppo_v4`, 300k comme pour v2) et comparer à `ppo_v3_100k` : reward moyen, score benchmark, taux de crash, temps passé hors-route — et surtout si le raccourci « écourter vite » identifié en v3 a disparu maintenant que `p_collision` est proportionnel à la vitesse d'impact.
 - Vérifier si le signal des nouveaux scalaires piéton / feu / stop-yield est déjà visible dans les métriques dès les 30-50k premiers steps, comme `is_on_road` avait commencé à l'être en v3.
+
+---
+
+## 2026-07-04 — Analyse ppo_v4.2_100k : "ne freine jamais" et diagnostic du virage systématique
+
+**Avancement** :
+- Franck a lancé `ppo_v4.2_100k` (trafic NPC + reward sécurité + tuning PPO du lot v4). Analyse complète dans `runs/2026-07-04_11-27_ppo_v4.2_100k/ANALYSIS.md`.
+- `params.json` confirme que tout le lot v4 est bien actif de bout en bout (12 scalaires, trafic 18 véhicules/6 piétons, tous les nouveaux termes de reward, `net_arch=[128,128]`) — le fix `save_params` (learning rate schedule sérialisé en `str`) tient depuis le premier vrai run qui l'utilise.
+- Point de départ moins négatif que v3 (−458 vs −737, cohérent avec `p_offroad` −0.5→−0.25) mais **1275 épisodes en 100k steps contre 650 en v3** et **97% de crashs courts** : les épisodes s'effondrent en durée bien plus qu'en v3, malgré le fix `p_collision`.
+- Benchmark 13 scénarios : jamais mieux que 2/8 (à 10k, quand la vitesse est quasi nulle), 0/8 partout ensuite. Le `best_model` a le meilleur taux hors-route de tout le projet (6%) mais **termine ses 13 scénarios par une collision**, entre 12 et 45 km/h.
+- **Diagnostic principal, trouvé en creusant les séries brutes (`brake_series`) plutôt que les seuls agrégats** : le frein n'est utilisé nulle part, sur aucun scénario, à aucun checkpoint. `throttle_mean` monte progressivement de 0.099 à 1.000 sur les 100k steps pendant que `brake_mean` reste à 0.000 partout — seul l'axe accélérateur/frein s'est effondré, le steering reste actif et modulé.
+- Second symptôme observé sur la vidéo de démo : la voiture tourne systématiquement à gauche dès le début de chaque test, quelle que soit la commande de navigation réelle affichée à l'écran.
+
+**Difficultés** :
+- Calcul de pourquoi le fix `p_collision` (base −5.0, −0.05/km-h) ne suffit pas : à 40 km/h, `r_speed` accumulé sur une survie moyenne de 35-50 steps avant crash cumule à +7.7/+11, contre un coût de collision de −7.0 au même impact. Les deux s'annulent quasiment — le fix rend le crash plus cher qu'avant (bonne direction) mais pas assez pour dominer le gain de vitesse accumulé sur la durée de vie d'un épisode entier. Autre facteur probable : toutes les nouvelles pénalités (`r_following`, `r_walker`, `r_speeding`, `r_red_light`, `r_stop_yield`) sont punitives, aucune ne récompense positivement un évitement réussi — freiner n'apporte jamais de bonus direct, seulement l'évitement d'une pénalité future incertaine, signal bien plus faible à apprendre par descente de gradient qu'un `r_speed` immédiat et garanti à chaque step.
+- Le symptôme "tourne à gauche" ne s'expliquait par aucun terme de reward — a nécessité d'aller lire le code de navigation plutôt que la fonction de reward (voir entrée suivante).
+
+**Décisions** :
+- Avant de retoucher le reward (`_W_SPEED` vs `_P_COLLISION_SPEED_SCALE`, récompense positive de maintien de distance de sécurité), identification de **4 sous-projets indépendants** à traiter en amont, chacun avec son propre design avant code :
+  1. **Outillage de diagnostic** : automatiser ce qui vient d'être fait à la main (courbe binée, tableau benchmark, décomposition du reward par composante) pour ne plus dépendre d'un one-liner Python ad-hoc à chaque analyse.
+  2. **Sécurité au spawn** : vérifier que l'ego ne spawn pas dans une situation dangereuse (NPC adjacent) et creuser le "tourne à gauche".
+  3. **CARLA en parallèle** : évaluer si `SubprocVecEnv` (plusieurs instances CARLA en parallèle) vaut le coup pour réduire le temps d'entraînement (~5-6h/100k steps actuellement).
+  4. **Overlay carte + trajet dans la vidéo de démo** : afficher le trajet A→B prévu en intro de vidéo pour vérifier visuellement que la voiture le suit.
+- Le reward design proprement dit (rééquilibrage `r_speed`/collision, récompense positive de sécurité) est **volontairement mis de côté** tant que ces 4 sous-projets n'ont pas amélioré la précision du diagnostic et corrigé les bugs indépendants du reward.
+
+**Benchmarks** : `ppo_v4.2_100k` — jamais mieux que 2/8 P1, 97% crashs courts, frein jamais utilisé (0.000 à tous les checkpoints). Voir `runs/2026-07-04_11-27_ppo_v4.2_100k/ANALYSIS.md`.
+
+**Prochaine étape** :
+- Sous-projet 1 (outillage diagnostic) en premier — condition pour analyser rapidement et précisément le prochain training.
+
+---
+
+## 2026-07-04 (suite) — Outillage diagnostic : reward par composante, log persistant, `analyze_run.py`
+
+**Avancement** :
+- **`compute_reward()` retourne un triplet** `(reward, terminated, components: dict[str, float])` au lieu de `(reward, terminated)`. `components` contient toujours les 12 clés (`r_speed`, `r_center`, `r_alive`, `r_offroad`, `r_stall`, `r_off_route`, `r_following`, `r_walker`, `r_speeding`, `r_red_light`, `r_stop_yield`, `r_collision`), même à zéro — sur une collision, toutes les clés sont à 0.0 sauf `r_collision`. Invariant conservé par construction : `reward = sum(components.values())`, jamais recalculé séparément.
+- **`CarlaEnv`** accumule ces composantes sur toute la durée d'un épisode (`self._episode_reward_components`) et les expose dans le dict `info` retourné par `step()`, uniquement à la fin de l'épisode (`terminated` ou `truncated`) — vide sur les steps intermédiaires.
+- **`Monitor(env, info_keywords=REWARD_COMPONENT_KEYS)`** dans `run_rl_training.py` : Stable-Baselines3 extrait automatiquement ces 12 clés du dict `info` à chaque fin d'épisode et les ajoute en colonnes du CSV existant (`training_log.monitor.csv`) — aucun nouveau fichier, le format existant grossit de 12 colonnes.
+- **Log persistant `run.log`** : la classe `_StdoutFilter` (qui ne filtrait que stdout, seulement autour de `model.learn()`) est remplacée par `_Tee`, qui duplique chaque ligne vers le flux réel ET un fichier, avec flush immédiat après chaque ligne. Appliquée sur `sys.stdout` ET `sys.stderr`, sur l'intégralité de `main()` (connexion CARLA, training, eval, démo) — en cas de crash, `run.log` contient tout jusqu'à la dernière ligne, pas seulement ce qui s'est passé pendant l'entraînement. Le filtrage des lignes de debug de Victor (`_BLOCKED`) reste actif sur stdout uniquement — jamais sur stderr, pour ne jamais perdre une trace de crash.
+- **Nouveau script `scripts/analyze_run.py`** : lit `training_log.monitor.csv` et `evals/results.json` d'un dossier de run, calcule une courbe d'apprentissage binée par tranches de 10k steps (reward moyen, % d'épisodes positifs, longueur moyenne, % de crashs courts, et la moyenne de chaque composante de reward présente), un résumé benchmark par checkpoint (succès Phase 1, vitesse/hors-route/accélérateur/frein moyens), et des totaux (épisodes, steps, taux de crash). Écrit `analysis_data.json` dans le dossier de run et affiche un résumé lisible en tables, directement copiable dans une future `ANALYSIS.md`. Volontairement **données brutes uniquement** : pas de détection automatique d'anomalie, pas de comparaison inter-run, pas d'interprétation — l'humain garde la main sur le diagnostic.
+- Testé manuellement sur `runs/2026-07-04_11-27_ppo_v4.2_100k` (run analysée à la main la veille) : les chiffres produits correspondent à ceux déjà écrits dans `ANALYSIS.md`.
+- 129 tests sur `benchmarks/ai/` (+21 vs les 108 précédents : +11 dans `smoke.py`/`test_rl_env.py` pour le triplet de reward et l'accumulateur, +10 dans le nouveau `test_analyze_run.py`).
+
+**Difficultés** :
+- `analyze_run.py` : agréger une ligne de `DataFrame.groupby(...).agg(...)` mélangeant colonnes de comptage (`n_episodes`, `n_positive`) et colonnes de moyenne fait remonter les comptages en `float64` au lieu d'`int64` (upcast pandas sur ligne mixte) — invisible dans les tests unitaires (qui ne comparent que la valeur, `2 == 2.0`) mais fait planter l'affichage du résumé (`f"{n:4d}"` sur un float lève `ValueError`). Repéré uniquement en testant sur la vraie run, pas dans les tests synthétiques — cast explicite en `int()` ajouté avant l'affichage.
+- Décision de granularité prise en amont : reward par **somme sur l'épisode complet**, pas par step. Suffisant pour la courbe binée visée et beaucoup plus simple à brancher sur `Monitor.info_keywords` (qui ne lit `info` qu'à la fin d'un épisode de toute façon).
+
+**Décisions** :
+- Le triplet `(reward, terminated, components)` construit `reward` en sommant le dict plutôt que par un calcul séparé — élimine structurellement tout risque de dérive entre les deux valeurs, plutôt que de compter sur une convention à respecter à la main dans chaque nouveau terme de reward futur.
+- Pas de détection automatique d'anomalie dans `analyze_run.py` (ex. "alerte si brake_mean < 0.01") — décision explicite : les seuils d'alerte pertinents changent avec chaque itération du reward, un système à seuils fixes serait vite obsolète ou trompeur. Le script calcule, le diagnostic reste manuel.
+
+**Benchmarks** : 129 tests sur `benchmarks/ai/`, 143 tous modules confondus (`uv run pytest benchmarks/ -q`).
+
+**Prochaine étape** :
+- Sous-projet 2 : sécurité au spawn + investigation du "tourne à gauche systématique".
+
+---
+
+## 2026-07-04 (suite) — Bug critique de replanification de route, spawn sûr face aux NPC
+
+**Avancement** :
+- **Bug trouvé en creusant le "tourne à gauche systématique"** : `CarlaEnv.reset()` ne replanifiait la route (`self.route`) que si un `spawn_idx` explicite était fourni (chemin eval/demo). Or pendant l'entraînement normal, SB3 appelle `reset()` sans aucune option après chaque épisode — l'ego est téléporté à un point de spawn **aléatoire**, mais la route reste celle calculée une seule fois à la création de l'environnement, depuis le tout premier spawn. Résultat : à partir du 2e épisode de chaque run, `Navigation.next_command()` calcule la commande `LEFT/RIGHT/STRAIGHT` en pointant vers un waypoint d'une route sans aucun rapport avec la position réelle du véhicule — un signal de navigation qui n'était que du bruit pendant la quasi-totalité de chaque entraînement depuis l'introduction du GPS de Victor. Fix : le bloc de replanification dans `reset()` tourne maintenant systématiquement, plus seulement quand `spawn_idx` est explicite.
+- **Cache du graphe réseau routier dans `Navigation`** : nécessaire pour que le fix ci-dessus ne ralentisse pas l'entraînement. `extract_road_network()` régénère tous les waypoints de la ville à 2m de résolution et trace un plot matplotlib à chaque appel — en faire un par épisode (toutes les ~50-90 steps) aurait sérieusement dégradé le débit. Le graphe est maintenant construit une seule fois par instance `Navigation` (statique pour une map donnée) et réutilisé pour tous les `plan()` suivants.
+- **Spawn sûr par re-tirage** : `CarlaEnv._teleport_to_spawn()` interroge maintenant `world.get_actors()` (véhicules + piétons, hors ego) au moment du reset et tire jusqu'à 10 points de spawn aléatoires, acceptant le premier à au moins 10m de tout acteur dynamique. Si les 10 tentatives échouent, conserve celui qui avait la plus grande distance observée (jamais pire que le tirage aléatoire d'avant ce fix). S'applique uniquement au chemin d'entraînement (spawn aléatoire) — les scénarios d'eval/démo avec `spawn_idx` explicite ne sont pas concernés.
+- **Fix de reproductibilité de la démo libre découvert en réintégrant les deux fixes ensemble** : la vidéo `demo.mp4` (mode libre, seed fixe `_DEMO_RESET_SEED=42`) perdait sa reproductibilité — le nouveau re-tirage de spawn consomme un nombre variable de tirages aléatoires selon la position des NPC au moment du reset, donc un spawn différent d'un run à l'autre malgré le seed fixe. Fix : `record_episode()` accepte maintenant un paramètre `spawn_idx` explicite (comme les scénarios de benchmark), passé à `env.reset(options={"spawn_idx": ...})` — `run_rl_training.py` fixe `spawn_idx=0` pour la démo, ce qui court-circuite entièrement le re-tirage aléatoire et retrouve un spawn garanti identique à chaque run.
+- Idée de démarrage en pilote automatique avant de rendre la main à la policy (évoquée initialement pour éviter un mauvais spawn) abandonnée : le vrai risque identifié était la proximité NPC, déjà réglé par le re-tirage ; les points de spawn CARLA sont déjà bien orientés sur la route, et un warmup de ticks physiques existe déjà dans `reset()`.
+- 136 tests sur `benchmarks/ai/` avant l'ajout de l'overlay démo (+7 vs 129 : 2 tests de non-régression sur la replanification de route, 5 sur le spawn sûr), 138 après le fix de reproductibilité démo (+2).
+
+**Difficultés** :
+- Aucune régression détectée, mais fix en deux temps nécessaire : corriger le spawn sûr seul aurait laissé la démo libre non-déterministe sans que rien ne le signale (aucun test existant ne couvrait ce chemin) — repéré uniquement en relisant tous les appels à `record_episode()` du repo une fois le spawn sûr en place.
+
+**Décisions** :
+- Cache du graphe routier scopé à l'instance `Navigation`, pas de cache statique/global partagé entre instances — une seule instance vit par run d'entraînement de toute façon, donc pas de bénéfice à un cache plus large, et ça évite tout risque de fuite d'état entre deux runs qui chargeraient des maps différentes dans le même process.
+- Seuil de sécurité 10m / 10 tentatives max choisis empiriquement : suffisant pour laisser une vraie marge de réaction sans exclure trop de points de spawn avec seulement 18 véhicules + 6 piétons dispersés sur toute la map.
+
+**Benchmarks** : 138 tests sur `benchmarks/ai/` après ce lot, tous verts.
+
+**Prochaine étape** :
+- Sous-projet 3 (CARLA parallèle) et sous-projet 4 (overlay démo).
+
+---
+
+## 2026-07-04 (suite) — Abandon du CARLA parallèle, overlay carte + trajet en démo
+
+**Avancement** :
+- **CARLA en parallèle (`SubprocVecEnv`) étudié puis abandonné.** PPO supporte nativement plusieurs environnements en parallèle (SB3 collecte `n_steps` par environnement, cumule dans un seul buffer, fait une mise à jour, relance la collecte) — la question n'était donc pas de faisabilité algorithmique mais d'infrastructure : seule la machine avec CARLA (celle de Franck) peut faire tourner le simulateur, donc "plusieurs CARLA" signifierait plusieurs instances sur le **même** poste, en concurrence sur le même GPU et son unique pipeline de perception (YOLO + Depth Anything + YOLOPv2, répliqué autant de fois que d'instances). Analyse coût/bénéfice : ça n'aurait accéléré que le temps mur par run, pas corrigé le vrai problème de fond (déséquilibre du reward, cf. entrée du 2026-07-04 matin) — seulement permis d'itérer plus vite une fois le reward design fait. Jugé pas rentable au vu de la complexité (gestion de N process CARLA, VRAM partagée) pour ce projet. Contrainte matérielle actée comme telle pour le rendu.
+- **Overlay carte + trajet dans la démo libre** : nouvelle fonction `_draw_route_map_card()` dans `rl_demo.py`, dans le même style visuel que les cartons titre/résultat déjà en place (fond sombre, dessin cv2, pas de dépendance matplotlib supplémentaire). Calcule la boîte englobante des waypoints de la route planifiée, trace le trajet à l'échelle avec marge (proportions préservées), marque le départ "A" et l'arrivée "B". `record_episode()` gagne un paramètre `route_map_seconds` (défaut 3.0), affiché une seule fois en tout début de la vidéo de démo libre — pas répété entre les épisodes si `n_episodes > 1`. Ne concerne que la démo libre : les scénarios de benchmark ont déjà leurs propres cartons et n'ont pas de vrai trajet point A→B à vérifier.
+- 143 tests sur `benchmarks/ai/` au global du projet (`uv run pytest benchmarks/ -q`), tout vert.
+
+**Difficultés** :
+- Aucune notable — le pattern de cartons cv2 réutilisables (déjà en place pour les scénarios de benchmark) a rendu l'ajout direct.
+
+**Décisions** :
+- Overlay en cv2 pur plutôt qu'en réutilisant `MatplotVisualizer.plot_plan()` (déjà utilisé ailleurs pour tracer la route) : cohérence visuelle avec les cartons existants, et `plot_plan()` ne nettoie jamais sa figure matplotlib globale entre deux appels (accumulation silencieuse d'un appel à l'autre) — un problème préexistant, pas dans le périmètre de ce lot, qu'il valait mieux ne pas hériter dans le nouveau code.
+- Pas de fond réseau routier complet derrière le trajet (juste la ligne + les deux points A/B) : suffisant pour vérifier visuellement que la voiture suit le bon chemin, et évite de coupler `rl_demo.py` au graphe interne de `Navigation`.
+
+**Benchmarks** : 143 tests, tout vert.
+
+**Prochaine étape** :
+- Les 4 sous-projets de ce lot sont clos (diagnostic outillé, bug de route + spawn sûr corrigés, CARLA parallèle tranché, overlay démo ajouté). Reste le reward design proprement dit (rééquilibrage vitesse/collision, récompense positive de sécurité) — à traiter ensuite, avec l'outillage de diagnostic maintenant disponible pour juger rapidement de son effet sur le prochain training.
+
+---
+
+## 2026-07-05 — Rééquilibrage vitesse/collision (v5)
+
+**Avancement** :
+- **`_W_SPEED` : 0.5 → 0.3** et **`_P_COLLISION_SPEED_SCALE` : −0.05 → −0.20/km-h** dans `reward_fn.py`. Objectif : casser l'incitatif "foncer sans jamais freiner" diagnostiqué sur `ppo_v4.2_100k`.
+- Chiffrage complet (pas seulement `r_speed` vs `r_collision` comme dans l'analyse initiale, mais en réintégrant aussi `r_center` et `r_alive` qui continuent de s'accumuler pendant une conduite dangereuse) sur la trajectoire type observée (40 km/h, survie ~40 steps) :
+  - Avant : `r_speed` +8.9, `r_center` +8.0, `r_alive` +0.4, `r_collision` −7.0 → **net +10.3**. Le déséquilibre réel était donc plus fort que ce que l'analyse `r_speed`-vs-`r_collision` seule laissait penser.
+  - Après : `r_speed` +5.3 (poids réduit), `r_center` +8.0 (inchangé), `r_alive` +0.4 (inchangé), `r_collision` −13.0 (pénalité ×4 par km/h d'impact) → **net +0.7**, quasi neutre.
+- Tests mis à jour en conséquence : `test_reward_components_sum_at_max` (0.5+0.3+0.01 → 0.3+0.3+0.01), `test_collision_scales_with_impact_speed` et `test_reward_components_only_collision_nonzero_on_collision` (formule −0.05 → −0.20), `test_episode_reward_components_reported_on_truncation` dans `test_rl_env.py` (r_speed attendu à 36 km/h : 0.2/step → 0.12/step). `src/ai/README.md` resynchronisé sur les deux nouvelles valeurs.
+- 143 tests, tout vert.
+
+**Difficultés** :
+- Aucune sur le code — mais reconnu explicitement que ce chiffrage n'est qu'une hypothèse de travail, pas une solution fermée : le calcul à la main sur UNE trajectoire type ne capture pas toute la dynamique d'exploration de PPO. Viser un net strictement négatif aurait été possible en poussant `_P_COLLISION_SPEED_SCALE` plus loin, mais risque de recréer une paralysie ("peur de rouler"), le même type de régression déjà rencontré et corrigé via `r_stall` en v2 — préféré un rapprochement vers la neutralité, à valider empiriquement sur le prochain training plutôt qu'une correction agressive non testée.
+
+**Décisions** :
+- Changement volontairement limité à ces deux constantes — aucun des 5 termes de sécurité (`r_following`/`r_walker`/`r_speeding`/`r_red_light`/`r_stop_yield`) n'a été touché : ils n'ont jamais eu l'occasion de vraiment s'exprimer tant que foncer restait rentable, donc pas encore de données pour juger s'ils sont eux-mêmes mal calibrés. Le candidat "récompense positive de maintien de distance de sécurité" (plutôt que seulement punitive) évoqué dans l'analyse `ppo_v4.2_100k` est explicitement repoussé à une itération suivante si `ppo_v5` montre encore un déficit de freinage après ce rééquilibrage.
+
+**Benchmarks** : 143 tests (`uv run pytest benchmarks/ -q`).
+
+**Prochaine étape** :
+- Envoyer ce lot à Franck pour un training `ppo_v5` (avec en plus le fix de replanification de route, le spawn sûr et l'outillage de diagnostic du lot précédent).
+- Analyser via `scripts/analyze_run.py` : vérifier en particulier `brake_mean` par checkpoint (jamais utilisé sur v4.2) et si le "tourne à gauche systématique" a disparu.
