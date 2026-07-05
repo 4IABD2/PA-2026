@@ -49,24 +49,35 @@ def _format_duration(seconds: float) -> str:
     return f"{s}s"
 
 
-class _StdoutFilter:
-    """Drops single-line debug prints from third-party code during training."""
+class _Tee:
+    """Duplicates every line to a real stream and a log file.
+
+    Buffers partial writes and only forwards complete lines, so line-based
+    filtering (dropping noisy third-party prints) works correctly. The log
+    file is flushed after every line — a crash must not lose the last output.
+    """
 
     _BLOCKED = ("newt command:", "next command:")
 
-    def __init__(self, stream):
+    def __init__(self, stream, log_file, filter_lines: bool = False):
         self._out = stream
+        self._log = log_file
+        self._filter = filter_lines
         self._buf = ""
 
     def write(self, text: str) -> None:
         self._buf += text
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
-            if not any(pat in line for pat in self._BLOCKED):
-                self._out.write(line + "\n")
+            if self._filter and any(pat in line for pat in self._BLOCKED):
+                continue
+            self._out.write(line + "\n")
+            self._log.write(line + "\n")
+            self._log.flush()
 
     def flush(self) -> None:
         self._out.flush()
+        self._log.flush()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -90,6 +101,7 @@ from src.ai.rewards.reward_fn import (
     _P_OFFROAD, _P_COLLISION_BASE, _P_COLLISION_SPEED_SCALE, _P_STALL, _P_OFF_ROUTE,
     _W_FOLLOWING, _SAFE_HEADWAY_S, _W_WALKER_PROXIMITY, _WALKER_DANGER_M,
     _W_SPEEDING, _SPEEDING_TOLERANCE_KMH, _P_RED_LIGHT_VIOLATION, _P_STOP_YIELD_VIOLATION,
+    REWARD_COMPONENT_KEYS,
 )
 
 
@@ -256,116 +268,122 @@ def main() -> None:
     run_dir = make_run_dir(tag=f"{args.tag}_{args.timesteps // 1000}k")
     print(f"Run folder: {run_dir}")
 
-    params = {
-        **_PPO_DEFAULTS,
-        "timesteps":         args.timesteps,
-        "max_episode_steps": args.max_episode_steps,
-        "host":              args.host,
-        "obs":               "12-scalars-traffic",
-        "reward": {
-            "max_speed_kmh":     MAX_SPEED_KMH,
-            "w_speed":           _W_SPEED,
-            "w_center":          _W_CENTER,
-            "w_alive":           _W_ALIVE,
-            "p_offroad":         _P_OFFROAD,
-            "p_collision_base":         _P_COLLISION_BASE,
-            "p_collision_speed_scale":  _P_COLLISION_SPEED_SCALE,
-            "p_stall":           _P_STALL,
-            "p_off_route":       _P_OFF_ROUTE,
-            "w_following":       _W_FOLLOWING,
-            "safe_headway_s":    _SAFE_HEADWAY_S,
-            "w_walker_proximity": _W_WALKER_PROXIMITY,
-            "walker_danger_m":   _WALKER_DANGER_M,
-            "w_speeding":        _W_SPEEDING,
-            "speeding_tolerance_kmh": _SPEEDING_TOLERANCE_KMH,
-            "p_red_light_violation":  _P_RED_LIGHT_VIOLATION,
-            "p_stop_yield_violation": _P_STOP_YIELD_VIOLATION,
-        },
-        "env": {
-            "off_route_m":             _OFF_ROUTE_M,
-            "route_grace_steps":       _ROUTE_GRACE_STEPS,
-            "max_obstacle_m":          _MAX_OBSTACLE_M,
-            "warmup_ticks":            _WARMUP_TICKS,
-            "min_dist_m":              _MIN_DIST_M,
-            "default_speed_limit_kmh": _DEFAULT_SPEED_LIMIT_KMH,
-            "npcs":                    args.npcs,
-            "pedestrians":             args.pedestrians,
-        },
-    }
-    save_params(run_dir, params)
-
-    print(f"Connecting to CARLA at {args.host}:{args.port} …")
-    client = carla.Client(args.host, args.port)
-    client.set_timeout(10.0)
-    world = client.get_world()
-    _setup_sync(world)
-
-    ego, sensors, npc_vehicles, npc_walkers = None, [], [], []
+    log_file = open(run_dir / "run.log", "w")
+    orig_stdout, orig_stderr = sys.stdout, sys.stderr
+    sys.stdout = _Tee(orig_stdout, log_file, filter_lines=True)
+    sys.stderr = _Tee(orig_stderr, log_file, filter_lines=False)
     try:
-        ego        = _spawn_ego(world)
-        camera     = _spawn_sensor(world, ego, "sensor.camera.rgb",
-                                   image_size_x=_CAM_W, image_size_y=_CAM_H)
-        col_sensor = _spawn_sensor(world, ego, "sensor.other.collision")
-        sensors = [camera, col_sensor]
+        params = {
+            **_PPO_DEFAULTS,
+            "timesteps":         args.timesteps,
+            "max_episode_steps": args.max_episode_steps,
+            "host":              args.host,
+            "obs":               "12-scalars-traffic",
+            "reward": {
+                "max_speed_kmh":     MAX_SPEED_KMH,
+                "w_speed":           _W_SPEED,
+                "w_center":          _W_CENTER,
+                "w_alive":           _W_ALIVE,
+                "p_offroad":         _P_OFFROAD,
+                "p_collision_base":         _P_COLLISION_BASE,
+                "p_collision_speed_scale":  _P_COLLISION_SPEED_SCALE,
+                "p_stall":           _P_STALL,
+                "p_off_route":       _P_OFF_ROUTE,
+                "w_following":       _W_FOLLOWING,
+                "safe_headway_s":    _SAFE_HEADWAY_S,
+                "w_walker_proximity": _W_WALKER_PROXIMITY,
+                "walker_danger_m":   _WALKER_DANGER_M,
+                "w_speeding":        _W_SPEEDING,
+                "speeding_tolerance_kmh": _SPEEDING_TOLERANCE_KMH,
+                "p_red_light_violation":  _P_RED_LIGHT_VIOLATION,
+                "p_stop_yield_violation": _P_STOP_YIELD_VIOLATION,
+            },
+            "env": {
+                "off_route_m":             _OFF_ROUTE_M,
+                "route_grace_steps":       _ROUTE_GRACE_STEPS,
+                "max_obstacle_m":          _MAX_OBSTACLE_M,
+                "warmup_ticks":            _WARMUP_TICKS,
+                "min_dist_m":              _MIN_DIST_M,
+                "default_speed_limit_kmh": _DEFAULT_SPEED_LIMIT_KMH,
+                "npcs":                    args.npcs,
+                "pedestrians":             args.pedestrians,
+            },
+        }
+        save_params(run_dir, params)
 
-        for _ in range(10):          # warm-up: let sensors produce first frames
-            world.tick()
+        print(f"Connecting to CARLA at {args.host}:{args.port} …")
+        client = carla.Client(args.host, args.port)
+        client.set_timeout(10.0)
+        world = client.get_world()
+        _setup_sync(world)
 
-        print(f"Spawning {args.npcs} NPC vehicles + {args.pedestrians} pedestrians …")
-        npc_vehicles = _spawn_npc_vehicles(world, client, args.npcs, exclude_spawn_idx=0)
-        npc_walkers = _spawn_npc_pedestrians(world, args.pedestrians)
-        for _ in range(20):          # let NPCs settle before training starts
-            world.tick()
-        print(f"Spawned {len(npc_vehicles)} vehicles, {len(npc_walkers) // 2} pedestrians.")
-
-        print("Loading perception models (YOLO + Depth Anything + YOLOPv2) …")
-        perception = PerceptionPipeline(
-            yolo_weights=args.yolo_weights,
-            depth_model_name=args.depth_model,
-        )
-        # lane_estimate is a module-level singleton — loaded on first call
-
-        carla_map = world.get_map()
-        nav       = _NavAdapter(Navigation(ego, carla_map))
-        spawn_pts = carla_map.get_spawn_points()
-        route     = nav.plan(ego.get_transform().location, spawn_pts[-1].location)
-
-        monitor_base = run_dir / "training_log"   # Monitor appends .monitor.csv itself
-        env = CarlaEnv(
-            world=world, ego_vehicle=ego, nav=nav, route=route,
-            perception=perception, lane_estimate_fn=lane_estimate,
-            camera=camera, collision_sensor=col_sensor,
-            max_episode_steps=args.max_episode_steps,
-        )
-
-        # SB3 Monitor wrapper — logs episode reward/length to CSV automatically
-        from stable_baselines3.common.monitor import Monitor
-        from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
-
-        env_monitored = Monitor(env, filename=str(monitor_base))
-        model = make_model(env_monitored)
-
-        callbacks = [
-            EvalCallback(
-                Monitor(env),
-                best_model_save_path=str(run_dir),
-                log_path=str(run_dir),
-                eval_freq=max(args.timesteps // 20, 1000),
-                n_eval_episodes=3,
-                verbose=0,
-            ),
-            CheckpointCallback(
-                save_freq=max(args.timesteps // 10, 2048),
-                save_path=str(run_dir / "checkpoints"),
-                name_prefix="rl_model",
-                verbose=0,
-            ),
-        ]
-
-        print(f"Training PPO for {args.timesteps:,} steps …")
-        sys.stdout = _StdoutFilter(sys.stdout)
-        train_start = time.time()
+        ego, sensors, npc_vehicles, npc_walkers = None, [], [], []
         try:
+            ego        = _spawn_ego(world)
+            camera     = _spawn_sensor(world, ego, "sensor.camera.rgb",
+                                       image_size_x=_CAM_W, image_size_y=_CAM_H)
+            col_sensor = _spawn_sensor(world, ego, "sensor.other.collision")
+            sensors = [camera, col_sensor]
+
+            for _ in range(10):          # warm-up: let sensors produce first frames
+                world.tick()
+
+            print(f"Spawning {args.npcs} NPC vehicles + {args.pedestrians} pedestrians …")
+            npc_vehicles = _spawn_npc_vehicles(world, client, args.npcs, exclude_spawn_idx=0)
+            npc_walkers = _spawn_npc_pedestrians(world, args.pedestrians)
+            for _ in range(20):          # let NPCs settle before training starts
+                world.tick()
+            print(f"Spawned {len(npc_vehicles)} vehicles, {len(npc_walkers) // 2} pedestrians.")
+
+            print("Loading perception models (YOLO + Depth Anything + YOLOPv2) …")
+            perception = PerceptionPipeline(
+                yolo_weights=args.yolo_weights,
+                depth_model_name=args.depth_model,
+            )
+            # lane_estimate is a module-level singleton — loaded on first call
+
+            carla_map = world.get_map()
+            nav       = _NavAdapter(Navigation(ego, carla_map))
+            spawn_pts = carla_map.get_spawn_points()
+            route     = nav.plan(ego.get_transform().location, spawn_pts[-1].location)
+
+            monitor_base = run_dir / "training_log"   # Monitor appends .monitor.csv itself
+            env = CarlaEnv(
+                world=world, ego_vehicle=ego, nav=nav, route=route,
+                perception=perception, lane_estimate_fn=lane_estimate,
+                camera=camera, collision_sensor=col_sensor,
+                max_episode_steps=args.max_episode_steps,
+            )
+
+            # SB3 Monitor wrapper — logs episode reward/length to CSV automatically
+            from stable_baselines3.common.monitor import Monitor
+            from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
+
+            env_monitored = Monitor(
+                env, filename=str(monitor_base),
+                info_keywords=REWARD_COMPONENT_KEYS,
+            )
+            model = make_model(env_monitored)
+
+            callbacks = [
+                EvalCallback(
+                    Monitor(env),
+                    best_model_save_path=str(run_dir),
+                    log_path=str(run_dir),
+                    eval_freq=max(args.timesteps // 20, 1000),
+                    n_eval_episodes=3,
+                    verbose=0,
+                ),
+                CheckpointCallback(
+                    save_freq=max(args.timesteps // 10, 2048),
+                    save_path=str(run_dir / "checkpoints"),
+                    name_prefix="rl_model",
+                    verbose=0,
+                ),
+            ]
+
+            print(f"Training PPO for {args.timesteps:,} steps …")
+            train_start = time.time()
             model.learn(total_timesteps=args.timesteps, callback=callbacks)
             train_duration = time.time() - train_start
             model.save(str(run_dir / "model_final"))
@@ -457,22 +475,25 @@ def main() -> None:
                         n_episodes=args.demo_eps,
                         render_fn=lambda: demo_frame[0],
                         reset_seed=_DEMO_RESET_SEED,
+                        spawn_idx=0,
                     )
                     print(f"Demo video → {run_dir / 'demo.mp4'}")
                 finally:
                     demo_cam.stop()
                     demo_cam.destroy()
+
+            print(f"\nAll artifacts in: {run_dir}/")
+            print(f"Training time: {_format_duration(train_duration)}")
+
         finally:
-            sys.stdout = sys.stdout._out  # restore
-
-        print(f"\nAll artifacts in: {run_dir}/")
-        print(f"Training time: {_format_duration(train_duration)}")
-
+            _restore_async(world)
+            _destroy_all([ego, *sensors, *npc_vehicles])
+            _destroy_pedestrians(npc_walkers)
+            print("Cleanup done.")
     finally:
-        _restore_async(world)
-        _destroy_all([ego, *sensors, *npc_vehicles])
-        _destroy_pedestrians(npc_walkers)
-        print("Cleanup done.")
+        sys.stdout = orig_stdout
+        sys.stderr = orig_stderr
+        log_file.close()
 
 
 if __name__ == "__main__":
