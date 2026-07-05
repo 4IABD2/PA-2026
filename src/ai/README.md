@@ -74,7 +74,7 @@ CARLA World (sync mode, 20 FPS)
          └─ brake    ∈ [0, 1]
 
 [Reward function — par step]   src/ai/rewards/reward_fn.py
-         ├─ r_speed      = (speed_kmh / 90.0) × 0.3                         → encourage la vitesse
+         ├─ r_speed      = (progress_speed_kmh / 90.0) × 0.3                → encourage la progression le long de la route (pas la vitesse brute)
          ├─ r_center     = (1 − |lane_offset_norm|) × 0.3                   → encourage le centrage
          ├─ r_alive      = +0.01                                            → survie (anti-crash passif)
          ├─ r_stall      = −0.20 si speed < 1 km/h                          → pénalise l'immobilisme
@@ -85,7 +85,10 @@ CARLA World (sync mode, 20 FPS)
          ├─ r_speeding   = −((speed − limite − 5) / 90.0) × 0.3 si dépassement → pénalise l'excès de vitesse (Franck)
          ├─ r_red_light  = −2.0 si franchissement de feu rouge              → sanctionne le "grillage" de feu (Franck)
          ├─ r_stop_yield = −1.0 si franchissement de stop/yield             → sanctionne le "grillage" de panneau (Franck)
-         └─ r_collision  = (−5.0 − 0.20 × vitesse_impact_kmh) + done=True   → épisode terminé, pénalité ∝ vitesse d'impact
+         ├─ r_collision  = (−5.0 − 0.20 × vitesse_impact_kmh) + done=True   → épisode terminé, pénalité ∝ vitesse d'impact
+         ├─ r_destination = +10.0 si destination atteinte (≥25m parcourus, <15m de la cible) → épisode terminé, succès
+         ├─ r_safe       = +0.05 si aucun danger actif (following/walker/speeding tous OK)   → renforcement positif de la prudence
+         └─ r_jerk       = −|steer_t − steer_t-1| × 0.1                     → pénalise le pilotage saccadé
 ```
 
 ### Espace d'observation — pourquoi des scalaires et pas des pixels
@@ -230,7 +233,7 @@ Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` :
 | `run.log` | copie intégrale de stdout+stderr sur toute la durée du script — survit à un crash |
 | `model_best.zip` | meilleur checkpoint (EvalCallback SB3) |
 | `model_final.zip` | poids à la fin du training |
-| `training_log.monitor.csv` | reward / longueur par épisode + moyenne des 12 composantes de reward (Monitor SB3, `info_keywords`) |
+| `training_log.monitor.csv` | reward / longueur par épisode + moyenne des 15 composantes de reward (Monitor SB3, `info_keywords`) |
 | `reward_curve.png` | courbe reward brute + moyenne mobile |
 | `demo.mp4` | vidéo d'inférence avec HUD (best model, spawn fixe) — ouvre sur 3s de carte du trajet prévu (départ "A" / arrivée "B") |
 | `evals/checkpoint_XXXXk.mp4` | vidéo 13 scénarios par checkpoint |
@@ -251,7 +254,7 @@ benchmark par checkpoint (succès Phase 1, vitesse/hors-route/accélérateur/fre
 des totaux (épisodes, steps, taux de crash global). Écrit `analysis_data.json` dans le
 dossier de run et affiche un résumé en tables directement réutilisable dans une `ANALYSIS.md`.
 
-Fonctionne aussi sur une run antérieure au branchement des 12 colonnes de composantes de
+Fonctionne aussi sur une run antérieure au branchement des 15 colonnes de composantes de
 reward dans le CSV — les moyennes par composante sont simplement absentes du résultat plutôt
 que de faire planter le script. Données brutes uniquement : pas de détection automatique
 d'anomalie ni de comparaison inter-run, le diagnostic reste manuel.
@@ -345,15 +348,15 @@ uv run pytest benchmarks/ai/ -v
 
 | Fichier | Couverture |
 |---|---|
-| `smoke.py` | reward_fn — triplet `(reward, terminated, components)`, invariant somme des 12 composantes, les 5 termes de sécurité `r_following`/`r_walker`/`r_speeding`/`r_red_light`/`r_stop_yield` (22 tests) + stubs GT — `src/interfaces/stubs.py`, non utilisés en prod depuis le branchement Franck/Karim (7 tests) |
-| `test_rl_env.py` | CarlaEnv — spaces, reset (dont replanification de route systématique + spawn sûr face aux NPC), step, observation (12 scalaires), reward, accumulateur de composantes par épisode, violations feu rouge / stop-yield, render, off_route (50 tests) |
+| `smoke.py` | reward_fn — triplet `(reward, terminated, components)`, invariant somme des 15 composantes, les 5 termes de sécurité `r_following`/`r_walker`/`r_speeding`/`r_red_light`/`r_stop_yield` + `r_destination`/`r_safe`/`r_jerk` (33 tests) + stubs GT — `src/interfaces/stubs.py`, non utilisés en prod depuis le branchement Franck/Karim (7 tests) |
+| `test_rl_env.py` | CarlaEnv — spaces, reset (dont replanification de route systématique + spawn sûr face aux NPC), step, observation (12 scalaires), reward (dont vitesse orientée-route, destination atteinte, jerk), accumulateur de composantes par épisode, violations feu rouge / stop-yield, render, off_route (59 tests) |
 | `test_rl_train.py` | make_model (dont config PPO : réseau, entropy, seed, LR schedule), train (9 tests) |
 | `test_rl_demo.py` | run_episode, _add_hud, record_episode (dont overlay carte du trajet, spawn_idx pour la reproductibilité démo), load_model (18 tests) |
 | `test_run_manager.py` | make_run_dir, save_params, plot_reward_curve (9 tests) |
 | `test_analyze_run.py` | binning de la courbe d'apprentissage, agrégation benchmark, compatibilité avec un CSV sans les colonnes de composantes de reward (10 tests) |
 
 Tous les tests tournent **sans CARLA** (Mocks). Les tests Phase 0 sont dans `benchmarks/ai/phase0/`.
-Total Phase 1 : 125 tests (`uv run pytest benchmarks/ai/ -v --ignore=benchmarks/ai/phase0`).
+Total Phase 1 : 145 tests (`uv run pytest benchmarks/ai/ -v --ignore=benchmarks/ai/phase0`).
 
 ### Benchmark 13 scénarios — critères de succès Phase 1
 
