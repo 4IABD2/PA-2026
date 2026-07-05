@@ -88,6 +88,16 @@ def _make_env(
     )
 
 
+def _set_ego_location(env, x: float, y: float, z: float = 0.0) -> None:
+    """Overrides the mocked ego's current position for a single check."""
+    loc = Mock()
+    loc.x, loc.y, loc.z = x, y, z
+    transform = Mock()
+    transform.location = loc
+    transform.rotation.yaw = 0.0
+    env.ego.get_transform.return_value = transform
+
+
 def _make_spawn(distance_to_nearest: float) -> Mock:
     """A spawn-point Mock whose location reports a fixed nearest-actor distance,
     regardless of which actor is queried."""
@@ -354,8 +364,9 @@ def test_reward_center_term_uses_lane_offset_when_centered():
     env = _make_env(lane_angle=80.0, lane_offset=0.0)
     env.reset()
     _, reward, _, _, _ = env.step(_ZERO_ACTION)
-    # speed=0 -> r_speed=0, r_center=0.3, r_alive=0.01, r_stall=-0.20 (speed < 1 km/h)
-    assert reward == pytest.approx(0.11, abs=1e-4)
+    # speed=0 -> r_speed=0, r_center=0.3, r_alive=0.01, r_stall=-0.20 (speed < 1 km/h),
+    # r_safe=0.05 (no vehicle/walker/speed-limit configured, so nothing dangerous is active)
+    assert reward == pytest.approx(0.16, abs=1e-4)
 
 
 def test_reward_center_term_uses_lane_offset_when_off_center():
@@ -363,8 +374,9 @@ def test_reward_center_term_uses_lane_offset_when_off_center():
     env = _make_env(lane_angle=0.0, lane_offset=0.9)
     env.reset()
     _, reward, _, _, _ = env.step(_ZERO_ACTION)
-    # speed=0 -> r_speed=0, r_center=(1-0.9)*0.3=0.03, r_alive=0.01, r_stall=-0.20
-    assert reward == pytest.approx(-0.16, abs=1e-4)
+    # speed=0 -> r_speed=0, r_center=(1-0.9)*0.3=0.03, r_alive=0.01, r_stall=-0.20,
+    # r_safe=0.05 (no vehicle/walker/speed-limit configured, so nothing dangerous is active)
+    assert reward == pytest.approx(-0.11, abs=1e-4)
 
 
 # ---------------------------------------------------------------------------
@@ -536,7 +548,7 @@ def test_episode_reward_components_reported_on_collision():
     assert info["r_speed"] == pytest.approx(0.0)  # collision step zeroes every other component
 
 
-def test_episode_reward_components_has_all_twelve_keys_when_reported():
+def test_episode_reward_components_has_all_fifteen_keys_when_reported():
     env = _make_env(speed_mps=10.0, max_episode_steps=1)
     env.reset()
     _, _, _, truncated, info = env.step(_ZERO_ACTION)
@@ -544,6 +556,7 @@ def test_episode_reward_components_has_all_twelve_keys_when_reported():
     expected_keys = {
         "r_speed", "r_center", "r_alive", "r_offroad", "r_stall", "r_off_route",
         "r_following", "r_walker", "r_speeding", "r_red_light", "r_stop_yield", "r_collision",
+        "r_destination", "r_safe", "r_jerk",
     }
     assert set(info.keys()) == expected_keys
 
@@ -556,3 +569,89 @@ def test_episode_reward_components_reset_between_episodes():
     assert truncated is True
     env.reset()
     assert env._episode_reward_components["r_speed"] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# Route-projected speed, destination check, jerk tracking
+# ---------------------------------------------------------------------------
+
+
+def test_progress_speed_falls_back_to_raw_speed_without_route():
+    env = _make_env(speed_mps=10.0)  # default route has empty waypoints
+    assert env._progress_speed_kmh() == pytest.approx(36.0)  # 10 m/s = 36 km/h
+
+
+def test_progress_speed_zero_when_perpendicular_to_route():
+    env = _make_env(speed_mps=10.0)  # velocity along +x (see _make_env's vel.x=speed_mps)
+    wp = Waypoint(x=0.0, y=0.0, z=0.0, yaw_deg=90.0)  # route heads along +y
+    env.route = Route(waypoints=[wp], destination=wp)
+    env._route_idx = 0
+    assert env._progress_speed_kmh() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_progress_speed_full_credit_when_aligned_with_route():
+    env = _make_env(speed_mps=10.0)
+    wp = Waypoint(x=0.0, y=0.0, z=0.0, yaw_deg=0.0)  # route heads along +x, same as velocity
+    env.route = Route(waypoints=[wp], destination=wp)
+    env._route_idx = 0
+    assert env._progress_speed_kmh() == pytest.approx(36.0)
+
+
+def test_reached_destination_false_when_close_but_not_travelled():
+    env = _make_env()
+    env.reset()  # captures start location at the default mocked (0, 0, 0)
+    # Route is assigned after reset(): reset() unconditionally replans the
+    # route from the (mocked) nav, which would otherwise clobber a route
+    # assigned beforehand.
+    env.route = Route(waypoints=[], destination=Waypoint(x=5.0, y=0.0, z=0.0, yaw_deg=0.0))
+    _set_ego_location(env, 5.0, 0.0)  # 5m from dest (< 15m radius), only 5m travelled (< 25m)
+    assert env._reached_destination() is False
+
+
+def test_reached_destination_false_when_travelled_but_far_from_dest():
+    env = _make_env()
+    env.reset()
+    env.route = Route(waypoints=[], destination=Waypoint(x=500.0, y=0.0, z=0.0, yaw_deg=0.0))
+    _set_ego_location(env, 100.0, 0.0)  # 100m travelled (>= 25m), but 400m from dest (>= 15m)
+    assert env._reached_destination() is False
+
+
+def test_reached_destination_true_when_both_conditions_met():
+    env = _make_env()
+    env.reset()
+    env.route = Route(waypoints=[], destination=Waypoint(x=100.0, y=0.0, z=0.0, yaw_deg=0.0))
+    _set_ego_location(env, 95.0, 0.0)  # 95m travelled (>= 25m), 5m from dest (< 15m)
+    assert env._reached_destination() is True
+
+
+def test_step_terminates_on_reached_destination():
+    env = _make_env()
+    env.reset()
+    env.route = Route(waypoints=[], destination=Waypoint(x=100.0, y=0.0, z=0.0, yaw_deg=0.0))
+    _set_ego_location(env, 95.0, 0.0)
+    _, reward, terminated, truncated, info = env.step(_ZERO_ACTION)
+    assert terminated is True
+    assert reward == pytest.approx(10.0)
+    assert info["r_destination"] == pytest.approx(10.0)
+
+
+def test_prev_steer_tracks_last_action_and_resets():
+    env = _make_env()
+    env.reset()
+    assert env._prev_steer == pytest.approx(0.0)
+    env.step(np.array([0.3, 0.0, 0.0], dtype=np.float32))
+    assert env._prev_steer == pytest.approx(0.3)
+    env.step(np.array([-0.2, 0.0, 0.0], dtype=np.float32))
+    assert env._prev_steer == pytest.approx(-0.2)
+    env.reset()
+    assert env._prev_steer == pytest.approx(0.0)
+
+
+def test_episode_reward_components_includes_jerk_penalty():
+    env = _make_env(max_episode_steps=2)
+    env.reset()
+    env.step(np.array([1.0, 0.0, 0.0], dtype=np.float32))    # steer 0.0 -> 1.0, delta=1.0
+    _, _, _, truncated, info = env.step(np.array([1.0, 0.0, 0.0], dtype=np.float32))  # 1.0 -> 1.0, delta=0.0
+    assert truncated is True
+    # r_jerk = -delta * 0.1, summed: step1 -0.1 + step2 0.0
+    assert info["r_jerk"] == pytest.approx(-0.1, abs=1e-3)

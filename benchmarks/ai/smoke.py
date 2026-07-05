@@ -70,12 +70,14 @@ def test_alive_bonus_always_present():
 
 
 def test_reward_components_sum_at_max():
-    """At max speed (90 km/h), offset 0, on-road, no collision: r = 0.3 + 0.3 + 0.01."""
+    """At max speed (90 km/h), offset 0, on-road, no collision: r = 0.3 + 0.3 + 0.01 + 0.05
+    (the last term is r_safe — no vehicle/walker/speed-limit configured, so nothing
+    dangerous is active and the safe-driving bonus fires)."""
     reward, done, _ = compute_reward(
         speed_kmh=90.0, center_offset=0.0, is_on_road=True, collision=False
     )
     assert done is False
-    assert reward == pytest.approx(0.3 + 0.3 + 0.01)
+    assert reward == pytest.approx(0.3 + 0.3 + 0.01 + 0.05)
 
 
 def test_collision_overrides_other_components():
@@ -147,7 +149,9 @@ def test_following_penalty_triggers_under_two_second_headway():
         nearest_vehicle_m=100.0,
     )
     assert reward_close < reward_clear
-    assert (reward_clear - reward_close) == pytest.approx(0.1, abs=1e-3)  # -(1 - 1.0/2.0) * 0.2
+    # -(1 - 1.0/2.0) * 0.2 = -0.1 from r_following, plus reward_clear also earns the
+    # +0.05 r_safe bonus that reward_close doesn't (it has an active following risk)
+    assert (reward_clear - reward_close) == pytest.approx(0.15, abs=1e-3)
 
 
 def test_walker_penalty_triggers_when_close():
@@ -160,7 +164,9 @@ def test_walker_penalty_triggers_when_close():
         nearest_walker_m=100.0,
     )
     assert reward_close < reward_far
-    assert (reward_far - reward_close) == pytest.approx(0.15, abs=1e-3)  # -(1 - 5/10) * 0.3
+    # -(1 - 5/10) * 0.3 = -0.15 from r_walker, plus reward_far also earns the +0.05
+    # r_safe bonus that reward_close doesn't (it has an active walker danger)
+    assert (reward_far - reward_close) == pytest.approx(0.20, abs=1e-3)
 
 
 def test_walker_penalty_none_when_far():
@@ -196,7 +202,9 @@ def test_speeding_penalty_triggers_over_tolerance():
         speed_kmh=70.0, center_offset=0.0, is_on_road=True, collision=False,
     )
     assert reward < reward_no_limit
-    assert (reward_no_limit - reward) == pytest.approx((15.0 / 90.0) * 0.3, abs=1e-3)
+    # (15/90)*0.3 = 0.05 from r_speeding, plus reward_no_limit also earns the +0.05
+    # r_safe bonus that reward doesn't (it has an active speeding violation)
+    assert (reward_no_limit - reward) == pytest.approx((15.0 / 90.0) * 0.3 + 0.05, abs=1e-3)
 
 
 def test_red_light_violation_applies_flat_penalty():
@@ -242,10 +250,11 @@ def test_reward_components_sum_to_total_on_collision():
     assert reward == pytest.approx(sum(components.values()))
 
 
-def test_reward_components_always_has_all_twelve_keys():
+def test_reward_components_always_has_all_fifteen_keys():
     expected_keys = {
         "r_speed", "r_center", "r_alive", "r_offroad", "r_stall", "r_off_route",
         "r_following", "r_walker", "r_speeding", "r_red_light", "r_stop_yield", "r_collision",
+        "r_destination", "r_safe", "r_jerk",
     }
     _, _, components_no_collision = compute_reward(
         speed_kmh=10.0, center_offset=0.0, is_on_road=True, collision=False,
@@ -253,8 +262,13 @@ def test_reward_components_always_has_all_twelve_keys():
     _, _, components_collision = compute_reward(
         speed_kmh=10.0, center_offset=0.0, is_on_road=True, collision=True,
     )
+    _, _, components_destination = compute_reward(
+        speed_kmh=10.0, center_offset=0.0, is_on_road=True, collision=False,
+        reached_destination=True,
+    )
     assert set(components_no_collision.keys()) == expected_keys
     assert set(components_collision.keys()) == expected_keys
+    assert set(components_destination.keys()) == expected_keys
 
 
 def test_reward_components_only_collision_nonzero_on_collision():
@@ -268,6 +282,108 @@ def test_reward_components_only_collision_nonzero_on_collision():
             assert value == pytest.approx(-5.0 + (-0.20 * 20.0))
         else:
             assert value == pytest.approx(0.0)
+
+
+def test_destination_reached_terminates_with_bonus():
+    reward, done, components = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False,
+        reached_destination=True,
+    )
+    assert done is True
+    assert reward == pytest.approx(10.0)
+    assert components["r_destination"] == pytest.approx(10.0)
+
+
+def test_destination_reached_zeroes_other_components():
+    _, _, components = compute_reward(
+        speed_kmh=30.0, center_offset=0.5, is_on_road=False, collision=False,
+        reached_destination=True, off_route=True,
+    )
+    for key, value in components.items():
+        if key == "r_destination":
+            assert value == pytest.approx(10.0)
+        else:
+            assert value == pytest.approx(0.0)
+
+
+def test_collision_takes_priority_over_destination():
+    """If both fire the same step, collision must win (checked first)."""
+    reward, done, components = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=True,
+        collision_speed_kmh=10.0, reached_destination=True,
+    )
+    assert done is True
+    assert components["r_destination"] == pytest.approx(0.0)
+    assert reward == pytest.approx(-5.0 + (-0.20 * 10.0))
+
+
+def test_safe_driving_bonus_when_no_danger():
+    _, _, components = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_vehicle_m=100.0, nearest_walker_m=100.0, speed_limit_kmh=None,
+    )
+    assert components["r_safe"] == pytest.approx(0.05)
+
+
+def test_safe_driving_bonus_absent_when_following_too_close():
+    _, _, components = compute_reward(
+        speed_kmh=36.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_vehicle_m=10.0, nearest_walker_m=100.0, speed_limit_kmh=None,
+    )
+    assert components["r_safe"] == pytest.approx(0.0)
+
+
+def test_safe_driving_bonus_absent_when_walker_close():
+    _, _, components = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_vehicle_m=100.0, nearest_walker_m=5.0, speed_limit_kmh=None,
+    )
+    assert components["r_safe"] == pytest.approx(0.0)
+
+
+def test_safe_driving_bonus_absent_when_speeding():
+    _, _, components = compute_reward(
+        speed_kmh=80.0, center_offset=0.0, is_on_road=True, collision=False,
+        nearest_vehicle_m=100.0, nearest_walker_m=100.0, speed_limit_kmh=30.0,
+    )
+    assert components["r_safe"] == pytest.approx(0.0)
+
+
+def test_jerk_penalty_zero_when_no_delta():
+    _, _, components = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False,
+        steer_delta=0.0,
+    )
+    assert components["r_jerk"] == pytest.approx(0.0)
+
+
+def test_jerk_penalty_scales_with_steer_delta():
+    _, _, components_small = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False,
+        steer_delta=0.1,
+    )
+    _, _, components_large = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False,
+        steer_delta=1.0,
+    )
+    assert components_small["r_jerk"] == pytest.approx(-0.1 * 0.1)
+    assert components_large["r_jerk"] == pytest.approx(-1.0 * 0.1)
+    assert components_large["r_jerk"] < components_small["r_jerk"]
+
+
+def test_r_speed_uses_progress_speed_when_provided():
+    _, _, components = compute_reward(
+        speed_kmh=90.0, center_offset=0.0, is_on_road=True, collision=False,
+        progress_speed_kmh=45.0,
+    )
+    assert components["r_speed"] == pytest.approx((45.0 / 90.0) * 0.3)
+
+
+def test_r_speed_falls_back_to_speed_kmh_without_progress():
+    _, _, components = compute_reward(
+        speed_kmh=45.0, center_offset=0.0, is_on_road=True, collision=False,
+    )
+    assert components["r_speed"] == pytest.approx((45.0 / 90.0) * 0.3)
 
 
 # ---------------------------------------------------------------------------

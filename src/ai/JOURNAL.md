@@ -845,3 +845,36 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Prochaine étape** :
 - Envoyer ce lot à Franck pour un training `ppo_v5` (avec en plus le fix de replanification de route, le spawn sûr et l'outillage de diagnostic du lot précédent).
 - Analyser via `scripts/analyze_run.py` : vérifier en particulier `brake_mean` par checkpoint (jamais utilisé sur v4.2) et si le "tourne à gauche systématique" a disparu.
+
+---
+
+## 2026-07-05 — Revue approfondie du reward, lot v6 : progression, destination, sécurité positive, fluidité
+
+**Avancement** :
+- Pendant que `ppo_v5` tournait chez Franck, relecture complète de `reward_fn.py`/`rl_env.py` terme par terme pour juger si le rééquilibrage v5 suffisait et identifier d'autres angles morts. Deux problèmes structurels trouvés au-delà du déséquilibre déjà connu :
+  1. **`r_speed` récompensait la vitesse brute (norme du vecteur vitesse), pas la progression** — une voiture qui roule vite en marche arrière, de travers ou en boucle recevait le même `r_speed` qu'une voiture qui avance correctement.
+  2. **Aucun signal d'entraînement ne récompensait l'arrivée effective à destination** — `reached_dest` existe dans le code d'évaluation (`benchmark.py`) mais n'était jamais calculé ni renvoyé pendant l'entraînement ; le critère de succès mesuré en éval n'était donc jamais ce que la policy apprenait à optimiser.
+  3. Confirmation que tous les termes de sécurité (`r_following`, `r_walker`, `r_speeding`, `r_red_light`, `r_stop_yield`) sont purement punitifs, sans aucun signal positif pour une conduite prudente réussie.
+- **`r_speed` devient une vitesse orientée-route** : nouvelle méthode `CarlaEnv._progress_speed_kmh()` — projette le vecteur vitesse sur le cap du waypoint de route le plus proche (`_route_idx`), plancher à 0 (rouler à contresens de la route ne punit pas en plus, les pénalités hors-route/hors-voie couvrent déjà ce cas), retombe sur la vitesse brute si la route n'a pas de waypoints.
+- **Bonus d'arrivée à destination** : nouvelle méthode `CarlaEnv._reached_destination()` — déclenche seulement si la voiture est à moins de 15m de `route.destination` **et** a parcouru au moins 25m depuis le début de l'épisode (garde-fou contre un spawn qui atterrirait par chance près de la destination fixe d'entraînement sans avoir vraiment roulé). Nouveau terme `r_destination = +10.0`, termine l'épisode comme une collision mais en positif. Limite assumée : la destination d'entraînement reste un point fixe unique (`spawn_pts[-1]`) pour toute la durée d'un run, donc ce bonus restera rare tant que la survie/navigation ne s'améliore pas — corriger ça (destination plus proche/mobile) est un chantier séparé, pas fait ici.
+- **Premier signal positif de sécurité** : nouveau terme `r_safe = +0.05`, actif quand aucun danger n'est en cours (`_following_penalty`/`_walker_penalty`/`_speeding_penalty` tous à zéro — réutilise directement ces fonctions, pas de seuils dupliqués).
+- **Pénalité de fluidité de pilotage** : nouveau terme `r_jerk = -|steer_t - steer_t-1| × 0.1`, nouvel état `CarlaEnv._prev_steer` réinitialisé à chaque `reset()`.
+- **Commentaire corrigé sans changer de valeur** : `_P_OFF_ROUTE` affirmait être "aussi sévère que `_P_OFFROAD`", ce qui n'est plus vrai depuis que `_P_OFFROAD` a été volontairement abaissé en v4 (−0.5→−0.25) pour ne pas aggraver le raccourci "crasher vite" diagnostiqué à l'époque — décision qui reste valable, donc pas de ré-équilibrage, juste la documentation corrigée.
+- `REWARD_COMPONENT_KEYS` passe de 12 à 15 clés. Grâce à la conception générique de l'outillage de diagnostic (accumulateur, `Monitor.info_keywords`, détection de colonnes `r_*` dans `analyze_run.py`), aucun de ces trois consommateurs n'a eu besoin d'être modifié — seuls les tests qui énuméraient les clés en dur ont dû être mis à jour.
+- 163 tests sur `benchmarks/` (145 en Phase 1), tout vert.
+
+**Difficultés** :
+- **Bug de conception trouvé pendant la relecture du plan, avant tout code** : le nouveau `r_safe` n'est pas protégé par un paramètre optionnel (contrairement aux trois autres nouvelles entrées) — il se calcule à partir des arguments existants (`nearest_vehicle_m`/`nearest_walker_m`/`speed_limit_kmh`), dont les valeurs par défaut ("rien à proximité") le font se déclencher automatiquement dans la quasi-totalité des tests existants qui ne configurent pas explicitement un danger. Repéré à la relecture du plan avant dispatch, mais sous-estimé : 5 tests corrigés dans le plan initial, 2 de plus découverts seulement en lançant la suite complète après la première implémentation (un dans `test_rl_env.py` sur le terme de centrage). Sept tests au total ont dû voir leur valeur exacte attendue augmentée de `+0.05`.
+- **Vrai bug de production trouvé en implémentant `_reached_destination()`** : le garde-fou initial (`if not (self.route and self.route.destination)`) s'appuyait sur la "vérité" (truthiness) de `Route`, mais `Route.__len__` délègue à `len(waypoints)` — une route avec zéro waypoint mais une destination valide est donc jugée fausse, peu importe la destination. Ce n'est pas qu'un artefact de test : `Navigation.a_star` renvoie une liste vide quand la recherche de chemin échoue, et `plan()` renvoie quand même une `Route` avec la vraie destination — dans ce cas précis, le bonus de destination aurait été silencieusement et définitivement désactivé pour tout l'épisode. Corrigé avec des vérifications explicites `is None` plutôt que la troncature.
+- Un des deux agents d'implémentation a été interrompu en cours de tâche par une erreur de connexion transitoire ; repris via reprise de session, terminé proprement sans perte de travail.
+
+**Décisions** :
+- `r_safe`, volontairement non filtré par un nouveau paramètre — le déclenchement "par défaut" est le comportement voulu (le cas commun "rien de détecté" doit compter comme sûr), pas un bug à corriger en amont ; la correction porte sur les tests, pas sur la conception.
+- Détection de franchissement de feu rouge/stop contournable (ralentir sous le seuil de vitesse pour passer sans pénalité), repérée à la relecture mais **volontairement exclue** de ce lot — corriger ça proprement demande un vrai signal de franchissement de ligne d'arrêt côté perception, qui n'existe pas encore (domaine de Franck, pas un changement de `reward_fn.py`/`rl_env.py`).
+- `params.json` (`run_rl_training.py`) mis à jour pour inclure les 5 nouvelles constantes — trouvé manquant à la revue finale de branche, corrigé avant de considérer le lot terminé (sinon la traçabilité des futures runs aurait été incomplète).
+
+**Benchmarks** : 163 tests (`uv run pytest benchmarks/ -q`), 145 en Phase 1 seule.
+
+**Prochaine étape** :
+- Lancer `ppo_v6` avec ce lot (branche `feat/reward-v6`) et analyser via `scripts/analyze_run.py` : le frein s'active-t-il enfin ? `r_destination` se déclenche-t-il ne serait-ce qu'une fois ? `r_safe` a-t-il un effet visible sur la fréquence des `r_following`/`r_walker`/`r_speeding` ?
+- Si le déficit de freinage persiste malgré tout : reste la piste du contournement feu rouge/stop (nécessite Franck) et un éventuel rééquilibrage supplémentaire de `_W_SPEED`/`_P_COLLISION_SPEED_SCALE`.
