@@ -4,12 +4,12 @@ from __future__ import annotations
 
 MAX_SPEED_KMH = 90.0
 
-_W_SPEED = 0.5
+_W_SPEED = 0.3
 _W_CENTER = 0.3
 _W_ALIVE = 0.01
 _P_OFFROAD = -0.25
 _P_COLLISION_BASE = -5.0
-_P_COLLISION_SPEED_SCALE = -0.05   # per km/h of speed at the moment of impact
+_P_COLLISION_SPEED_SCALE = -0.20   # per km/h of speed at the moment of impact
 _P_STALL = -0.20       # breaks the lazy-policy attractor (staying still = 0 risk)
 _P_OFF_ROUTE = -0.5    # leaving the planned GPS route is penalised as hard as going off-road
 
@@ -24,6 +24,11 @@ _SPEEDING_TOLERANCE_KMH = 5.0
 
 _P_RED_LIGHT_VIOLATION = -2.0
 _P_STOP_YIELD_VIOLATION = -1.0
+
+REWARD_COMPONENT_KEYS: tuple[str, ...] = (
+    "r_speed", "r_center", "r_alive", "r_offroad", "r_stall", "r_off_route",
+    "r_following", "r_walker", "r_speeding", "r_red_light", "r_stop_yield", "r_collision",
+)
 
 
 def _following_penalty(distance_m: float, speed_kmh: float) -> float:
@@ -74,7 +79,7 @@ def compute_reward(
     collision_speed_kmh: float = 0.0,
     red_light_violation: bool = False,
     stop_yield_violation: bool = False,
-) -> tuple[float, bool]:
+) -> tuple[float, bool, dict[str, float]]:
     """Compute the per-step reward and whether the episode should terminate.
 
     All inputs come from CarlaEnv.step(), already converted to physical units
@@ -102,24 +107,28 @@ def compute_reward(
         stop_yield_violation: Same as above, for stop/yield signs.
 
     Returns:
-        (reward, terminated) where terminated is True only on collision.
+        (reward, terminated, components) where terminated is True only on
+        collision, and components holds every key in REWARD_COMPONENT_KEYS
+        (0.0 for any that didn't contribute this step). reward always equals
+        sum(components.values()) — the two are never computed independently.
     """
     if collision:
-        return _P_COLLISION_BASE + _P_COLLISION_SPEED_SCALE * collision_speed_kmh, True
+        components = {key: 0.0 for key in REWARD_COMPONENT_KEYS}
+        components["r_collision"] = _P_COLLISION_BASE + _P_COLLISION_SPEED_SCALE * collision_speed_kmh
+        return components["r_collision"], True, components
 
-    r_speed = (speed_kmh / max_speed_kmh) * _W_SPEED
-    r_center = (1.0 - abs(center_offset)) * _W_CENTER
-    r_offroad = 0.0 if is_on_road else _P_OFFROAD
-    r_stall = _P_STALL if speed_kmh < 1.0 else 0.0
-    r_off_route = _P_OFF_ROUTE if off_route else 0.0
-    r_following = _following_penalty(nearest_vehicle_m, speed_kmh)
-    r_walker = _walker_penalty(nearest_walker_m)
-    r_speeding = _speeding_penalty(speed_kmh, speed_limit_kmh, max_speed_kmh)
-    r_red_light = _P_RED_LIGHT_VIOLATION if red_light_violation else 0.0
-    r_stop_yield = _P_STOP_YIELD_VIOLATION if stop_yield_violation else 0.0
-
-    total = (
-        r_speed + r_center + _W_ALIVE + r_offroad + r_stall + r_off_route
-        + r_following + r_walker + r_speeding + r_red_light + r_stop_yield
-    )
-    return total, False
+    components = {
+        "r_speed": (speed_kmh / max_speed_kmh) * _W_SPEED,
+        "r_center": (1.0 - abs(center_offset)) * _W_CENTER,
+        "r_alive": _W_ALIVE,
+        "r_offroad": 0.0 if is_on_road else _P_OFFROAD,
+        "r_stall": _P_STALL if speed_kmh < 1.0 else 0.0,
+        "r_off_route": _P_OFF_ROUTE if off_route else 0.0,
+        "r_following": _following_penalty(nearest_vehicle_m, speed_kmh),
+        "r_walker": _walker_penalty(nearest_walker_m),
+        "r_speeding": _speeding_penalty(speed_kmh, speed_limit_kmh, max_speed_kmh),
+        "r_red_light": _P_RED_LIGHT_VIOLATION if red_light_violation else 0.0,
+        "r_stop_yield": _P_STOP_YIELD_VIOLATION if stop_yield_violation else 0.0,
+        "r_collision": 0.0,
+    }
+    return sum(components.values()), False, components

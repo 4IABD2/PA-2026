@@ -74,7 +74,7 @@ CARLA World (sync mode, 20 FPS)
          └─ brake    ∈ [0, 1]
 
 [Reward function — par step]   src/ai/rewards/reward_fn.py
-         ├─ r_speed      = (speed_kmh / 90.0) × 0.5                         → encourage la vitesse
+         ├─ r_speed      = (speed_kmh / 90.0) × 0.3                         → encourage la vitesse
          ├─ r_center     = (1 − |lane_offset_norm|) × 0.3                   → encourage le centrage
          ├─ r_alive      = +0.01                                            → survie (anti-crash passif)
          ├─ r_stall      = −0.20 si speed < 1 km/h                          → pénalise l'immobilisme
@@ -85,7 +85,7 @@ CARLA World (sync mode, 20 FPS)
          ├─ r_speeding   = −((speed − limite − 5) / 90.0) × 0.3 si dépassement → pénalise l'excès de vitesse (Franck)
          ├─ r_red_light  = −2.0 si franchissement de feu rouge              → sanctionne le "grillage" de feu (Franck)
          ├─ r_stop_yield = −1.0 si franchissement de stop/yield             → sanctionne le "grillage" de panneau (Franck)
-         └─ r_collision  = (−5.0 − 0.05 × vitesse_impact_kmh) + done=True   → épisode terminé, pénalité ∝ vitesse d'impact
+         └─ r_collision  = (−5.0 − 0.20 × vitesse_impact_kmh) + done=True   → épisode terminé, pénalité ∝ vitesse d'impact
 ```
 
 ### Espace d'observation — pourquoi des scalaires et pas des pixels
@@ -111,6 +111,12 @@ Les anciens stubs GT CARLA (`src/interfaces/stubs.py`, `CarlaGTDepthEstimator`/`
 - La commande est encodée en one-hot dans l'observation (3 floats : left/right/straight)
 - `LANE_FOLLOW` (hors intersection) = `[0, 0, 0]`
 
+**Route replanifiée à chaque reset, sans exception** : `CarlaEnv.reset()` replanifie
+systématiquement `self.route` depuis la position réelle de l'ego après téléportation, que le
+spawn soit explicite (eval/démo) ou aléatoire (entraînement normal). Le graphe du réseau
+routier est mis en cache par instance `Navigation` (statique pour une map donnée) pour que
+cette replanification systématique ne coûte pas un recalcul complet à chaque épisode.
+
 **Benchmark — GPS route par scénario (`dest_spawn_idx`)** : pour les scénarios de jonction,
 la route est replanifiée vers un spawn cible spécifique après le reset, ce qui garantit que
 la nav donne la bonne commande directionnelle (LEFT / RIGHT / STRAIGHT). Les `dest_spawn_idx`
@@ -133,6 +139,16 @@ resteraient quasiment toujours à 1.0 (rien à détecter) : les nouveaux termes 
 `r_following` et `r_walker` n'auraient jamais l'occasion de s'activer pendant
 l'entraînement. `r_speeding`, `r_red_light` et `r_stop_yield` réagissent eux à
 l'infrastructure statique de la map (panneaux, feux) et ne dépendent donc pas du trafic NPC.
+
+### Spawn sûr face au trafic
+
+Pendant l'entraînement (spawn aléatoire, pas les scénarios eval/démo à `spawn_idx` fixe),
+`CarlaEnv._teleport_to_spawn()` tire jusqu'à 10 points de spawn candidats et accepte le
+premier situé à au moins 10m de tout véhicule ou piéton NPC actuellement dans le monde
+(`world.get_actors()`, hors ego). Si aucun des 10 essais ne passe le seuil, le candidat avec
+la plus grande distance observée est conservé — jamais pire qu'un tirage aléatoire simple.
+Évite de téléporter l'ego au contact d'un NPC en mouvement, ce qui produirait une collision
+artificielle sans rapport avec la conduite de la policy.
 
 ---
 
@@ -158,6 +174,7 @@ src/ai/
 scripts/
 ├── run_rl_training.py         ← Pipeline complète : training + eval checkpoints + vidéos
 ├── run_eval.py                ← Évaluation standalone d'un modèle → vidéo + JSON
+├── analyze_run.py             ← Analyse automatisée d'une run (courbe binée, benchmark, totaux)
 ├── explore_spawns.py          ← Explore et classe les spawn points par catégorie
 └── find_dest_spawns.py        ← Trouve les dest_spawn_idx par direction de carrefour
 ```
@@ -210,14 +227,34 @@ Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` :
 | Fichier / Dossier | Contenu |
 |---|---|
 | `params.json` | hyperparamètres + config de la run |
+| `run.log` | copie intégrale de stdout+stderr sur toute la durée du script — survit à un crash |
 | `model_best.zip` | meilleur checkpoint (EvalCallback SB3) |
 | `model_final.zip` | poids à la fin du training |
-| `training_log.monitor.csv` | reward / longueur par épisode (Monitor SB3) |
+| `training_log.monitor.csv` | reward / longueur par épisode + moyenne des 12 composantes de reward (Monitor SB3, `info_keywords`) |
 | `reward_curve.png` | courbe reward brute + moyenne mobile |
-| `demo.mp4` | vidéo d'inférence avec HUD (best model, spawn fixe) |
+| `demo.mp4` | vidéo d'inférence avec HUD (best model, spawn fixe) — ouvre sur 3s de carte du trajet prévu (départ "A" / arrivée "B") |
 | `evals/checkpoint_XXXXk.mp4` | vidéo 13 scénarios par checkpoint |
 | `evals/best_model.mp4` | vidéo 13 scénarios du best model |
 | `evals/results.json` | métriques complètes (tous checkpoints + best model) |
+| `analysis_data.json` | généré par `scripts/analyze_run.py` (voir section suivante) |
+
+## Phase 1 — Analyser une run
+
+```bash
+uv run python3 scripts/analyze_run.py runs/<dossier_de_run>
+```
+
+Lit `training_log.monitor.csv` et `evals/results.json`, calcule une courbe d'apprentissage
+binée par tranches de 10k steps (reward moyen, % d'épisodes positifs, longueur moyenne, %
+de crashs courts, moyenne de chaque composante de reward présente dans le CSV), un résumé
+benchmark par checkpoint (succès Phase 1, vitesse/hors-route/accélérateur/frein moyens) et
+des totaux (épisodes, steps, taux de crash global). Écrit `analysis_data.json` dans le
+dossier de run et affiche un résumé en tables directement réutilisable dans une `ANALYSIS.md`.
+
+Fonctionne aussi sur une run antérieure au branchement des 12 colonnes de composantes de
+reward dans le CSV — les moyennes par composante sont simplement absentes du résultat plutôt
+que de faire planter le script. Données brutes uniquement : pas de détection automatique
+d'anomalie ni de comparaison inter-run, le diagnostic reste manuel.
 
 ## Phase 1 — Évaluation d'un modèle existant
 
@@ -308,13 +345,15 @@ uv run pytest benchmarks/ai/ -v
 
 | Fichier | Couverture |
 |---|---|
-| `smoke.py` | reward_fn — dont les 5 nouveaux termes `r_following`/`r_walker`/`r_speeding`/`r_red_light`/`r_stop_yield` (18 tests) + stubs GT — `src/interfaces/stubs.py`, non utilisés en prod depuis le branchement Franck/Karim (7 tests) |
-| `test_rl_env.py` | CarlaEnv — spaces, reset, step, observation (12 scalaires), reward, violations feu rouge / stop-yield, render, off_route (37 tests) |
+| `smoke.py` | reward_fn — triplet `(reward, terminated, components)`, invariant somme des 12 composantes, les 5 termes de sécurité `r_following`/`r_walker`/`r_speeding`/`r_red_light`/`r_stop_yield` (22 tests) + stubs GT — `src/interfaces/stubs.py`, non utilisés en prod depuis le branchement Franck/Karim (7 tests) |
+| `test_rl_env.py` | CarlaEnv — spaces, reset (dont replanification de route systématique + spawn sûr face aux NPC), step, observation (12 scalaires), reward, accumulateur de composantes par épisode, violations feu rouge / stop-yield, render, off_route (50 tests) |
 | `test_rl_train.py` | make_model (dont config PPO : réseau, entropy, seed, LR schedule), train (9 tests) |
-| `test_rl_demo.py` | run_episode, _add_hud, record_episode, load_model (11 tests) |
-| `test_run_manager.py` | make_run_dir, save_params, plot_reward_curve (8 tests) |
+| `test_rl_demo.py` | run_episode, _add_hud, record_episode (dont overlay carte du trajet, spawn_idx pour la reproductibilité démo), load_model (18 tests) |
+| `test_run_manager.py` | make_run_dir, save_params, plot_reward_curve (9 tests) |
+| `test_analyze_run.py` | binning de la courbe d'apprentissage, agrégation benchmark, compatibilité avec un CSV sans les colonnes de composantes de reward (10 tests) |
 
 Tous les tests tournent **sans CARLA** (Mocks). Les tests Phase 0 sont dans `benchmarks/ai/phase0/`.
+Total Phase 1 : 125 tests (`uv run pytest benchmarks/ai/ -v --ignore=benchmarks/ai/phase0`).
 
 ### Benchmark 13 scénarios — critères de succès Phase 1
 

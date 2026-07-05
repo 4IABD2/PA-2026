@@ -9,7 +9,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from src.ai.rewards.reward_fn import compute_reward
+from src.ai.rewards.reward_fn import compute_reward, REWARD_COMPONENT_KEYS
 from src.interfaces.navigation_types import HighLevelCommand, Route, Waypoint
 from src.interfaces.perception_types import ObjectClass
 
@@ -31,6 +31,9 @@ _WARMUP_TICKS          = 5     # ticks after teleport so physics settles and sen
 _OFF_ROUTE_M           = 15.0  # metres from nearest route waypoint before off_route penalty fires
 _ROUTE_GRACE_STEPS     = 20    # steps after reset where off-route is not penalised (car joins route)
 _DEFAULT_SPEED_LIMIT_KMH = 50.0
+
+_SPAWN_SAFETY_MIN_DIST_M   = 10.0  # minimum clearance from any NPC/pedestrian for a random spawn to be "safe"
+_SPAWN_SAFETY_MAX_ATTEMPTS = 10    # random spawn draws tried before falling back to the best one seen
 
 _SPEED_LIMIT_KMH: dict[ObjectClass, float] = {
     ObjectClass.SPEED_30: 30.0,
@@ -105,6 +108,7 @@ class CarlaEnv(gym.Env):
         self._collision_speed_kmh: float = 0.0
         self._red_light_flagged: bool = False
         self._stop_yield_flagged: bool = False
+        self._episode_reward_components: dict[str, float] = {k: 0.0 for k in REWARD_COMPONENT_KEYS}
         self._last_image: np.ndarray | None = None
         self._step_count: int = 0
         self._route_idx: int = 0       # sliding pointer into route.waypoints for efficient off-route check
@@ -120,8 +124,12 @@ class CarlaEnv(gym.Env):
         self._teleport_to_spawn(spawn_idx)
         if hasattr(self.nav, 'index_way'):
             self.nav.index_way = 0
-        # Replan route from new position so nav commands are correct at every spawn.
-        if spawn_idx is not None and hasattr(self.nav, 'plan'):
+        # Replan route from new position so nav commands are correct at every
+        # spawn. Must run unconditionally: during normal training, SB3 calls
+        # reset() with no options (spawn_idx=None) after every episode, so
+        # skipping this when spawn_idx is None left the route — and thus every
+        # nav command fed to the policy — stale from the very first episode.
+        if hasattr(self.nav, 'plan'):
             try:
                 spawn_pts = self.world.get_map().get_spawn_points()
                 dest = spawn_pts[-1].location
@@ -132,6 +140,7 @@ class CarlaEnv(gym.Env):
         self._collision_speed_kmh = 0.0
         self._red_light_flagged = False
         self._stop_yield_flagged = False
+        self._episode_reward_components = {k: 0.0 for k in REWARD_COMPONENT_KEYS}
         self._step_count = 0
         self._route_idx = 0
         self._current_speed_limit_kmh = _DEFAULT_SPEED_LIMIT_KMH
@@ -164,7 +173,7 @@ class CarlaEnv(gym.Env):
             _STOP_YIELD_VIOLATION_DIST_M, _STOP_YIELD_VIOLATION_SPEED_KMH,
         )
 
-        reward, terminated = compute_reward(
+        reward, terminated, components = compute_reward(
             speed_kmh=speed_kmh,
             center_offset=float(obs[5]),    # lane_offset_norm, from Karim's lane detection
             is_on_road=bool(obs[6] > 0.5),  # from Karim's lane detection
@@ -177,8 +186,12 @@ class CarlaEnv(gym.Env):
             red_light_violation=red_light_violation,
             stop_yield_violation=stop_yield_violation,
         )
+        for key, value in components.items():
+            self._episode_reward_components[key] += value
+
         truncated = self._step_count >= self.max_episode_steps
-        return obs, reward, terminated, truncated, {}
+        info = dict(self._episode_reward_components) if (terminated or truncated) else {}
+        return obs, reward, terminated, truncated, info
 
     def _get_obs(self) -> np.ndarray:
         image = self._last_image if self._last_image is not None else np.zeros((720, 1280, 3), dtype=np.uint8)
@@ -231,15 +244,49 @@ class CarlaEnv(gym.Env):
             return
         if spawn_idx is not None:
             idx = int(spawn_idx) % len(spawn_points)
+            spawn = spawn_points[idx]
         else:
-            idx = int(self.np_random.integers(len(spawn_points)))
-        spawn = spawn_points[idx]
+            spawn = self._pick_safe_random_spawn(spawn_points)
         self.ego.set_transform(spawn)
         try:
             from carla import Vector3D  # noqa: PLC0415
             self.ego.set_target_velocity(Vector3D(0, 0, 0))
         except ModuleNotFoundError:
             self.ego.set_target_velocity(None)
+
+    def _pick_safe_random_spawn(self, spawn_points: list) -> "carla.Transform":
+        """Draws up to _SPAWN_SAFETY_MAX_ATTEMPTS random spawn points and returns
+        the first one at least _SPAWN_SAFETY_MIN_DIST_M away from every nearby
+        vehicle/pedestrian. Falls back to the candidate with the largest observed
+        clearance if none clears the threshold — never worse than a pure random
+        pick, and expected to essentially never trigger with light NPC traffic.
+        """
+        actors = self._nearby_dynamic_actors()
+        best_spawn = None
+        best_dist = -1.0
+        for _ in range(_SPAWN_SAFETY_MAX_ATTEMPTS):
+            candidate = spawn_points[int(self.np_random.integers(len(spawn_points)))]
+            dist = self._min_actor_distance(candidate.location, actors)
+            if dist >= _SPAWN_SAFETY_MIN_DIST_M:
+                return candidate
+            if dist > best_dist:
+                best_dist = dist
+                best_spawn = candidate
+        return best_spawn
+
+    def _nearby_dynamic_actors(self) -> list:
+        """All vehicle and pedestrian actors in the world, excluding the ego."""
+        actors = self.world.get_actors()
+        vehicles = list(actors.filter("vehicle.*"))
+        walkers = list(actors.filter("walker.pedestrian.*"))
+        return [a for a in vehicles + walkers if a.id != self.ego.id]
+
+    @staticmethod
+    def _min_actor_distance(location: "carla.Location", actors: list) -> float:
+        """Distance from `location` to the nearest actor, or inf if `actors` is empty."""
+        if not actors:
+            return float("inf")
+        return min(location.distance(a.get_location()) for a in actors)
 
     def _apply_control(self, steer: float, throttle: float, brake: float) -> None:
         try:
