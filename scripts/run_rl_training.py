@@ -91,7 +91,10 @@ from src.interfaces.navigation_types import HighLevelCommand, Route, Waypoint
 from src.navigation.navigation import Navigation
 from src.perception.pipeline import PerceptionPipeline
 from src.lane_detection.lane_perception import estimate as lane_estimate
-from src.ai.training.rl_env import CarlaEnv, _OFF_ROUTE_M, _MAX_OBSTACLE_M, _WARMUP_TICKS, _ROUTE_GRACE_STEPS, _DEFAULT_SPEED_LIMIT_KMH
+from src.ai.training.rl_env import (
+    CarlaEnv, _OFF_ROUTE_M, _MAX_OBSTACLE_M, _WARMUP_TICKS, _ROUTE_GRACE_STEPS,
+    _DEFAULT_SPEED_LIMIT_KMH, _DEST_REACHED_RADIUS_M, _MIN_TRAVEL_FOR_DEST_M,
+)
 from src.ai.training.rl_train import make_model, train, _PPO_DEFAULTS
 from src.ai.training.run_manager import make_run_dir, save_params, plot_reward_curve
 from src.ai.inference.rl_demo import load_model, record_episode, eval_model, Scenario
@@ -101,6 +104,7 @@ from src.ai.rewards.reward_fn import (
     _P_OFFROAD, _P_COLLISION_BASE, _P_COLLISION_SPEED_SCALE, _P_STALL, _P_OFF_ROUTE,
     _W_FOLLOWING, _SAFE_HEADWAY_S, _W_WALKER_PROXIMITY, _WALKER_DANGER_M,
     _W_SPEEDING, _SPEEDING_TOLERANCE_KMH, _P_RED_LIGHT_VIOLATION, _P_STOP_YIELD_VIOLATION,
+    _P_DEST_REACHED, _W_SAFE_DRIVING, _W_JERK,
     REWARD_COMPONENT_KEYS,
 )
 
@@ -297,6 +301,9 @@ def main() -> None:
                 "speeding_tolerance_kmh": _SPEEDING_TOLERANCE_KMH,
                 "p_red_light_violation":  _P_RED_LIGHT_VIOLATION,
                 "p_stop_yield_violation": _P_STOP_YIELD_VIOLATION,
+                "p_dest_reached":    _P_DEST_REACHED,
+                "w_safe_driving":    _W_SAFE_DRIVING,
+                "w_jerk":            _W_JERK,
             },
             "env": {
                 "off_route_m":             _OFF_ROUTE_M,
@@ -305,6 +312,8 @@ def main() -> None:
                 "warmup_ticks":            _WARMUP_TICKS,
                 "min_dist_m":              _MIN_DIST_M,
                 "default_speed_limit_kmh": _DEFAULT_SPEED_LIMIT_KMH,
+                "dest_reached_radius_m":   _DEST_REACHED_RADIUS_M,
+                "min_travel_for_dest_m":   _MIN_TRAVEL_FOR_DEST_M,
                 "npcs":                    args.npcs,
                 "pedestrians":             args.pedestrians,
             },

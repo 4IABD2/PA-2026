@@ -11,7 +11,9 @@ _P_OFFROAD = -0.25
 _P_COLLISION_BASE = -5.0
 _P_COLLISION_SPEED_SCALE = -0.20   # per km/h of speed at the moment of impact
 _P_STALL = -0.20       # breaks the lazy-policy attractor (staying still = 0 risk)
-_P_OFF_ROUTE = -0.5    # leaving the planned GPS route is penalised as hard as going off-road
+_P_OFF_ROUTE = -0.5    # calibrated independently from _P_OFFROAD, which was deliberately
+                       # lowered in the v4 batch to avoid worsening the "crash fast" shortcut
+                       # diagnosed at the time — the two are no longer meant to be equal
 
 _W_FOLLOWING = 0.2
 _SAFE_HEADWAY_S = 2.0             # standard "2-second rule" following distance
@@ -25,9 +27,14 @@ _SPEEDING_TOLERANCE_KMH = 5.0
 _P_RED_LIGHT_VIOLATION = -2.0
 _P_STOP_YIELD_VIOLATION = -1.0
 
+_P_DEST_REACHED = 10.0
+_W_SAFE_DRIVING = 0.05
+_W_JERK = 0.1
+
 REWARD_COMPONENT_KEYS: tuple[str, ...] = (
     "r_speed", "r_center", "r_alive", "r_offroad", "r_stall", "r_off_route",
     "r_following", "r_walker", "r_speeding", "r_red_light", "r_stop_yield", "r_collision",
+    "r_destination", "r_safe", "r_jerk",
 )
 
 
@@ -66,6 +73,25 @@ def _speeding_penalty(speed_kmh: float, speed_limit_kmh: float | None, max_speed
     return -(over / max_speed_kmh) * _W_SPEEDING
 
 
+def _safe_driving_bonus(
+    speed_kmh: float,
+    nearest_vehicle_m: float,
+    nearest_walker_m: float,
+    speed_limit_kmh: float | None,
+    max_speed_kmh: float,
+) -> float:
+    """Small positive signal for driving with no active danger, complementing the
+    purely punitive following/walker/speeding penalties above — reuses their
+    exact thresholds so "safe" here means precisely "none of those would fire".
+    """
+    following_ok = _following_penalty(nearest_vehicle_m, speed_kmh) == 0.0
+    walker_ok = _walker_penalty(nearest_walker_m) == 0.0
+    speeding_ok = _speeding_penalty(speed_kmh, speed_limit_kmh, max_speed_kmh) == 0.0
+    if following_ok and walker_ok and speeding_ok:
+        return _W_SAFE_DRIVING
+    return 0.0
+
+
 def compute_reward(
     speed_kmh: float,
     center_offset: float,
@@ -79,6 +105,9 @@ def compute_reward(
     collision_speed_kmh: float = 0.0,
     red_light_violation: bool = False,
     stop_yield_violation: bool = False,
+    progress_speed_kmh: float | None = None,
+    reached_destination: bool = False,
+    steer_delta: float = 0.0,
 ) -> tuple[float, bool, dict[str, float]]:
     """Compute the per-step reward and whether the episode should terminate.
 
@@ -105,20 +134,38 @@ def compute_reward(
         red_light_violation:  True on the single step a red light is judged run
                        (CarlaEnv resolves the "already penalised this light" state).
         stop_yield_violation: Same as above, for stop/yield signs.
+        progress_speed_kmh: Velocity projected onto the route direction, in
+                       km/h. None (default) makes r_speed use speed_kmh
+                       instead — every existing caller that doesn't compute
+                       this gets today's exact behaviour.
+        reached_destination: True the step the ego is judged to have arrived
+                       (CarlaEnv checks both proximity and minimum distance
+                       travelled). Terminates the episode like a collision,
+                       but with a positive reward.
+        steer_delta:   abs(current steer - previous steer), for the jerk
+                       penalty. 0.0 (default) means no penalty.
 
     Returns:
-        (reward, terminated, components) where terminated is True only on
-        collision, and components holds every key in REWARD_COMPONENT_KEYS
-        (0.0 for any that didn't contribute this step). reward always equals
-        sum(components.values()) — the two are never computed independently.
+        (reward, terminated, components) where terminated is True on
+        collision or when the destination is reached, and components holds
+        every key in REWARD_COMPONENT_KEYS (0.0 for any that didn't
+        contribute this step). reward always equals sum(components.values())
+        — the two are never computed independently.
     """
     if collision:
         components = {key: 0.0 for key in REWARD_COMPONENT_KEYS}
         components["r_collision"] = _P_COLLISION_BASE + _P_COLLISION_SPEED_SCALE * collision_speed_kmh
         return components["r_collision"], True, components
 
+    if reached_destination:
+        components = {key: 0.0 for key in REWARD_COMPONENT_KEYS}
+        components["r_destination"] = _P_DEST_REACHED
+        return components["r_destination"], True, components
+
+    effective_speed_for_r_speed = speed_kmh if progress_speed_kmh is None else progress_speed_kmh
+
     components = {
-        "r_speed": (speed_kmh / max_speed_kmh) * _W_SPEED,
+        "r_speed": (effective_speed_for_r_speed / max_speed_kmh) * _W_SPEED,
         "r_center": (1.0 - abs(center_offset)) * _W_CENTER,
         "r_alive": _W_ALIVE,
         "r_offroad": 0.0 if is_on_road else _P_OFFROAD,
@@ -130,5 +177,8 @@ def compute_reward(
         "r_red_light": _P_RED_LIGHT_VIOLATION if red_light_violation else 0.0,
         "r_stop_yield": _P_STOP_YIELD_VIOLATION if stop_yield_violation else 0.0,
         "r_collision": 0.0,
+        "r_destination": 0.0,
+        "r_safe": _safe_driving_bonus(speed_kmh, nearest_vehicle_m, nearest_walker_m, speed_limit_kmh, max_speed_kmh),
+        "r_jerk": -steer_delta * _W_JERK,
     }
     return sum(components.values()), False, components
