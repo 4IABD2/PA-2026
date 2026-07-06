@@ -903,3 +903,26 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Prochaine étape** :
 - Avant d'envoyer `ppo_v6` : le lot v6 (progression, destination, sécurité positive, fluidité) reste pertinent mais son effet risque d'être marginal tant que le problème hors-route/hors-voie n'est pas investigué. Pistes à explorer : qualité du trajet planifié par Victor (A* résolution 2m), fiabilité de la détection de voie de Karim en trafic dense, seuil `_OFF_ROUTE_M=15m` peut-être trop strict vu le bruit de perception réel.
 - Relancer un run avec le fix d'encodage pour enfin récupérer les données d'éval/démo (vitesse, frein, hors-route par scénario) — actuellement aveugle sur ce point pour toute la lignée v4.2→v5.
+
+---
+
+## 2026-07-06 (suite) — Second crash après le fix d'encodage : division par zéro sur petit run
+
+**Avancement** :
+- Franck a retenté un run après le fix du log (`--timesteps 10000`, smoke test `ppo_v6.2_10k`) — le fix d'encodage a fonctionné (`"Reward curve → ..."` s'affiche bien cette fois), mais un second bug jusque-là invisible a fait planter le script juste après, à la sélection des checkpoints pour l'éval : `ZeroDivisionError` sur `step = (len(ckpt_files) - 1) / (n_select - 1)` (`run_rl_training.py`).
+- **Cause** : `n_select = min(10, max(1, args.timesteps // 10_000))` vaut **1** dès que `--timesteps <= 10_000`. Le garde-fou existant (`if n_select >= len(ckpt_files): selected = ckpt_files`) ne couvre que le cas où il y a peu de checkpoints — avec un `save_freq` plancher à 2048 steps, un run de 10k steps sauvegarde quand même 4-5 checkpoints, donc `n_select(1) >= len(ckpt_files)(4)` est faux, et le calcul du pas divise par `n_select - 1 = 0`.
+- Jamais rencontré avant car tous les runs analysés jusqu'ici (100k-300k steps) donnaient `n_select=10`, jamais 1 — bug latent depuis l'introduction de cette logique de sélection, révélé seulement par un petit smoke test.
+- **Fix** : cas `n_select <= 1` traité à part, sélectionne directement le dernier checkpoint (le plus représentatif du modèle entraîné) sans passer par le calcul de pas. Vérifié en isolant exactement le scénario du crash (4 checkpoints, `n_select=1`) avant de toucher au vrai script — plus de division par zéro, sélection correcte.
+- Un message `ERROR: failed to destroy actor ... not found` apparaît aussi dans les logs juste avant la traceback — vient de CARLA lui-même (pas une exception Python), bénin, l'exécution continue normalement. Pas d'action prise dessus.
+
+**Difficultés** :
+- Aucune — cause identifiée directement depuis la traceback complète cette fois (contrairement au bug d'encodage qui n'en laissait aucune trace).
+
+**Décisions** :
+- Fix appliqué directement, même traitement que les bugs précédents (correctness non ambiguë, pas de décision de design). Pas de test automatisé possible pour la même raison que le bug précédent (`run_rl_training.py` importe `carla` au niveau module).
+
+**Benchmarks** : 163 tests (`uv run pytest benchmarks/ -q`), tous verts après le fix.
+
+**Prochaine étape** :
+- Les deux bugs de crash (encodage + division par zéro) sont réglés — un run devrait maintenant aller jusqu'au bout, éval et démo comprises.
+- Le point de fond reste entier : le problème hors-route/hors-voie identifié sur `ppo_v5` n'est traité par aucun de ces fixes ni par le lot v6. Décision pour l'instant : lancer `ppo_v6` quand même pour voir, plutôt que d'investiguer en amont.
