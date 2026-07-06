@@ -434,7 +434,11 @@ def main() -> None:
                     ckpt_files = sorted(ckpt_dir.glob("rl_model_*_steps.zip"))
                     if ckpt_files:
                         n_select = min(10, max(1, args.timesteps // 10_000))
-                        if n_select >= len(ckpt_files):
+                        if n_select <= 1:
+                            # A single slot was requested (short/smoke runs) — the last
+                            # checkpoint is the most representative of trained performance.
+                            selected = [ckpt_files[-1]]
+                        elif n_select >= len(ckpt_files):
                             selected = ckpt_files
                         else:
                             step = (len(ckpt_files) - 1) / (n_select - 1)
