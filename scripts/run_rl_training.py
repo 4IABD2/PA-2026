@@ -272,7 +272,7 @@ def main() -> None:
     run_dir = make_run_dir(tag=f"{args.tag}_{args.timesteps // 1000}k")
     print(f"Run folder: {run_dir}")
 
-    log_file = open(run_dir / "run.log", "w")
+    log_file = open(run_dir / "run.log", "w", encoding="utf-8")
     orig_stdout, orig_stderr = sys.stdout, sys.stderr
     sys.stdout = _Tee(orig_stdout, log_file, filter_lines=True)
     sys.stderr = _Tee(orig_stderr, log_file, filter_lines=False)

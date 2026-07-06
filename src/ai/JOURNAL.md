@@ -878,3 +878,28 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Prochaine étape** :
 - Lancer `ppo_v6` avec ce lot (branche `feat/reward-v6`) et analyser via `scripts/analyze_run.py` : le frein s'active-t-il enfin ? `r_destination` se déclenche-t-il ne serait-ce qu'une fois ? `r_safe` a-t-il un effet visible sur la fréquence des `r_following`/`r_walker`/`r_speeding` ?
 - Si le déficit de freinage persiste malgré tout : reste la piste du contournement feu rouge/stop (nécessite Franck) et un éventuel rééquilibrage supplémentaire de `_W_SPEED`/`_P_COLLISION_SPEED_SCALE`.
+
+---
+
+## 2026-07-06 — Analyse `ppo_v5_300k`, bug critique du log persistant trouvé et corrigé
+
+**Avancement** :
+- Récupéré et analysé `ppo_v5_300k` (300k steps, lancé par Franck avec le rééquilibrage v5). Analyse complète dans `runs/2026-07-05_17-29_ppo_v5_300k/.../ANALYSIS.md`.
+- **Bug critique trouvé sur le log persistant** : `run.log` s'arrêtait net juste après `Training done.`/`Cleanup done.`, sans trace d'éval ni de démo, sans traceback. Diagnostiqué en inspectant les octets bruts du fichier : `open(run_dir / "run.log", "w")` (dans `run_rl_training.py`) n'imposait pas d'encodage — sur Windows ça retombe sur cp1252, qui ne sait pas écrire le caractère `→` utilisé dans plusieurs `print()` (`"Reward curve → ..."` et suivants). Le tout premier print concerné plante le script (`UnicodeEncodeError`) juste après l'entraînement ; le `finally` de nettoyage s'exécute encore (d'où `Cleanup done.` visible), mais le traceback part sur un flux déjà restauré au moment où l'exception remonte jusqu'au niveau racine — invisible dans le fichier. Fix : `encoding="utf-8"` ajouté à l'ouverture du fichier. Ce bug aurait touché tout run Windows sans exception depuis l'introduction du log persistant, `ppo_v6` y compris si non corrigé avant.
+- **Conséquence directe pour l'analyse** : aucune donnée d'éval (13 scénarios, vitesse/frein/hors-route par checkpoint) disponible pour v5 — seule la courbe d'entraînement a pu être exploitée.
+- **Diagnostic principal, en creusant les composantes de reward par step plutôt que les seuls agrégats** : `r_speed` reste bas et stable tout du long (0.001 → 0.07/step, jamais plus, ~15-22 km/h de moyenne) — contrairement à `ppo_v4.2` où le throttle grimpait progressivement jusqu'à 1.000. Le rééquilibrage v5 a bien cassé le raccourci "foncer à fond sans jamais freiner" qu'il ciblait.
+- **Mais un problème plus large domine, resté invisible avant cet outillage** : `r_off_route` (jusqu'à −0.44/step sur un max de −0.5) et `r_offroad` (−0.19 à −0.23/step sur un max de −0.25) cumulent jusqu'à −0.6 à −0.8 par step — très largement supérieur à toutes les autres composantes. La voiture est hors-route et/ou hors-voie la majorité du temps, sans amélioration nette sur les 300k steps (`r_offroad` en particulier reste quasi identique −0.19/−0.22 sur toute la seconde moitié du run). 3704 épisodes, taux de crash global 97%, pas de tendance d'amélioration claire dans la seconde moitié.
+- **`r_walker`, `r_red_light`, `r_stop_yield` à zéro exact sur la totalité des 3704 épisodes** ; `r_speeding` quasi jamais actif. Avec des épisodes qui durent 50-100 steps en moyenne, la voiture ne va jamais assez loin pour croiser un piéton, un feu rouge ou un stop — ces mécanismes (et le nouveau `r_safe` de v6, qui dépend des mêmes conditions) n'auront probablement aucune chance de s'exprimer tant que le problème plus basique de maintien sur la route n'est pas réglé.
+
+**Difficultés** :
+- Diagnostic du bug d'encodage non trivial : aucune erreur explicite dans le log (par construction, puisque c'est justement l'écriture du log qui plante). Repéré en inspectant les octets bruts du fichier (pas juste le texte décodé) pour confirmer l'absence de troncature/corruption, puis en croisant la position exacte de l'arrêt avec la liste des `print()` du script contenant le caractère `→` — le tout premier de ces prints après l'entraînement correspond exactement au point d'arrêt.
+
+**Décisions** :
+- Fix appliqué directement (une ligne, `encoding="utf-8"`) sans passer par tout le cycle conception/plan — bug de correctness non ambigu, même traitement que le bug de replanification de route trouvé plus tôt dans le projet.
+- Pas de test automatisé ajouté pour `_Tee`/le fichier de log : `run_rl_training.py` importe `carla` au niveau module, donc rien n'est testable depuis ce fichier sans CARLA installé — limite déjà actée et documentée pour ce fichier spécifique, non résolue ici (aurait demandé d'extraire `_Tee` dans un module séparé, hors périmètre d'un fix urgent).
+
+**Benchmarks** : 163 tests (`uv run pytest benchmarks/ -q`), tous verts après le fix.
+
+**Prochaine étape** :
+- Avant d'envoyer `ppo_v6` : le lot v6 (progression, destination, sécurité positive, fluidité) reste pertinent mais son effet risque d'être marginal tant que le problème hors-route/hors-voie n'est pas investigué. Pistes à explorer : qualité du trajet planifié par Victor (A* résolution 2m), fiabilité de la détection de voie de Karim en trafic dense, seuil `_OFF_ROUTE_M=15m` peut-être trop strict vu le bruit de perception réel.
+- Relancer un run avec le fix d'encodage pour enfin récupérer les données d'éval/démo (vitesse, frein, hors-route par scénario) — actuellement aveugle sur ce point pour toute la lignée v4.2→v5.
