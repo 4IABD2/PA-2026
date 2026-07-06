@@ -40,8 +40,12 @@ class LaneDetector:
 
     def __init__(self, weights=None, device=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = torch.jit.load(weights or _ensure_weights(),
-                                    map_location=self.device).eval()
+        # Opened as a file object rather than passed as a path string: torch.jit.load's
+        # C++ loader mishandles non-ASCII characters in Windows paths (e.g. an accented
+        # username like "Frédéric"), raising a spurious "No such file or directory" even
+        # when the file exists. Python's own open() handles Unicode paths correctly.
+        with open(weights or _ensure_weights(), "rb") as f:
+            self.model = torch.jit.load(f, map_location=self.device).eval()
 
     def _preprocess(self, rgb):
         img = cv2.resize(rgb, (INF_W, INF_H), interpolation=cv2.INTER_LINEAR)

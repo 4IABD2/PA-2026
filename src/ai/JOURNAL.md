@@ -926,3 +926,25 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Prochaine étape** :
 - Les deux bugs de crash (encodage + division par zéro) sont réglés — un run devrait maintenant aller jusqu'au bout, éval et démo comprises.
 - Le point de fond reste entier : le problème hors-route/hors-voie identifié sur `ppo_v5` n'est traité par aucun de ces fixes ni par le lot v6. Décision pour l'instant : lancer `ppo_v6` quand même pour voir, plutôt que d'investiguer en amont.
+
+---
+
+## 2026-07-06 (suite) — Troisième blocage, cette fois sur mon propre PC : chemin Windows accentué
+
+**Avancement** :
+- En testant le chargement du modèle YOLOPv2 de Karim (`src/lane_detection/lane_perception.py`) sur mon PC fixe, `LaneDetector()` plantait avec `RuntimeError: ... No such file or directory` sur `weights/yolopv2.pt` — alors que le fichier existait bien, avec la bonne taille (156 Mo, vérifié identique à la référence).
+- **Cause** : bug connu de PyTorch sous Windows — `torch.jit.load()` reçoit le chemin comme une chaîne et le passe à son chargeur C++, qui ne gère pas correctement les caractères non-ASCII dans le chemin. Mon nom d'utilisateur Windows contient un accent (`Frédéric`), ce qui suffit à faire échouer l'ouverture côté C++ même si le fichier est bien là.
+- **Fix** : `LaneDetector.__init__` ouvre maintenant le fichier lui-même en Python (`open(..., "rb")`, qui gère l'Unicode correctement sur Windows) et passe l'objet fichier déjà ouvert à `torch.jit.load()` plutôt que le chemin brut — contourne entièrement le chargeur C++ pour la résolution du chemin.
+- Touche le module de Karim (`lane_detection/`), mais corrigé directement comme le bug offset/angle du 2026-07-02 : périmètre limité à cette ligne précise, aucun test existant ne couvre ce fichier (nécessite les vrais poids YOLOPv2 + torch, hors périmètre des smoke tests CARLA-free).
+
+**Difficultés** :
+- Piste trouvée rapidement car le seul élément distinctif de mon environnement par rapport aux autres PC de l'équipe était l'accent dans le chemin utilisateur — pas de temps perdu sur de fausses pistes (taille de fichier, permissions, etc.), déjà écartées avant de creuser le chargeur PyTorch lui-même.
+
+**Décisions** :
+- Fix appliqué directement, non ambigu, même traitement que les bugs précédents de la journée.
+
+**Benchmarks** : 163 tests (`uv run pytest benchmarks/ -q`), tous verts — aucun test ne couvre `LaneDetector` directement, donc pas de test cassé ni de test à ajouter pour ce fix précis.
+
+**Prochaine étape** :
+- Signaler à Karim ce bug potentiel sur son module, au cas où d'autres membres de l'équipe auraient un nom Windows accentué.
+- Sinon, rien de plus à faire avant de lancer `ppo_v6`.
