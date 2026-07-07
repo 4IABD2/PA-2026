@@ -1,7 +1,7 @@
 # `src/ai/` — IA centrale (décision)
 
 > **Owner** : Frédéric Huang
-> **Contrats (Phase 1 réel)** : `CarlaEnv` (`gym.Env`) consomme directement `PerceptionPipeline.perceive()` (Franck), `lane_perception.estimate()` (Karim) et `Navigation.next_command()` (Victor) → `HighLevelCommand` ; produit une observation `Box(12,)` et consomme une action `Box(3,)` (steer, throttle, brake). Les dataclasses `SceneState`/`ControlOutput` de [`ai_types.py`](../interfaces/ai_types.py) faisaient partie du design initial mais ne sont plus utilisées : PPO/Stable-Baselines3 impose un espace d'observation/action `numpy` plat, pas des objets structurés.
+> **Contrats (Phase 1 réel)** : `CarlaEnv` (`gym.Env`) consomme directement `PerceptionPipeline.perceive()` (Franck), `lane_perception.estimate()` (Karim) et `Navigation.next_command()` (Victor) → `HighLevelCommand` ; produit une observation `Box(11,)` et consomme une action `Box(3,)` (steer, throttle, brake). Les dataclasses `SceneState`/`ControlOutput` de [`ai_types.py`](../interfaces/ai_types.py) faisaient partie du design initial mais ne sont plus utilisées : PPO/Stable-Baselines3 impose un espace d'observation/action `numpy` plat, pas des objets structurés.
 
 ---
 
@@ -50,20 +50,19 @@ CARLA World (sync mode, 20 FPS)
          ├─ plan(start, dest) → Route          ← au reset de chaque épisode
          └─ next_command(pos, route) → HighLevelCommand  ← à chaque step
 
-[Observation vector] — 12 scalaires normalisés  ∈ [-1, 1] ou [0, 1]
+[Observation vector] — 11 scalaires normalisés  ∈ [-1, 1] ou [0, 1]
          ├─ [0] speed_norm              = speed_kmh / 90.0                    ∈ [0, 1]
          ├─ [1] cmd_left                = 1.0 si LEFT else 0.0
          ├─ [2] cmd_right               = 1.0 si RIGHT else 0.0
          ├─ [3] cmd_straight            = 1.0 si STRAIGHT else 0.0
          │       [0,0,0] = LANE_FOLLOW (pas d'intersection)
-         ├─ [4] lane_angle_norm         = angle de cap vers la voie / 90.0    ∈ [-1, 1]  (Karim)
-         ├─ [5] lane_offset_norm        = déviation latérale voie             ∈ [-1, 1]  (Karim)
-         ├─ [6] is_on_road              = 1.0 si voie détectée else 0.0                  (Karim)
-         ├─ [7] nearest_vehicle_norm    = min(dist_véhicule, 50m) / 50m       ∈ [0, 1]  (Franck)
-         ├─ [8] red_light_distance_norm = min(dist_feu_rouge, 50m) / 50m      ∈ [0, 1]  (Franck)
-         ├─ [9] speed_limit_norm        = limite de vitesse mémorisée / 90.0  ∈ [0, 1]  (Franck)
-         ├─ [10] nearest_walker_norm    = min(dist_piéton, 50m) / 50m         ∈ [0, 1]  (Franck)
-         └─ [11] nearest_stop_yield_norm = min(dist_stop_ou_yield, 50m) / 50m ∈ [0, 1]  (Franck)
+         ├─ [4] lane_offset_norm        = déviation latérale voie             ∈ [-1, 1]  (Karim)
+         ├─ [5] is_on_road              = 1.0 si voie détectée else 0.0                  (Karim)
+         ├─ [6] nearest_vehicle_norm    = min(dist_véhicule, 50m) / 50m       ∈ [0, 1]  (Franck)
+         ├─ [7] red_light_distance_norm = min(dist_feu_rouge, 50m) / 50m      ∈ [0, 1]  (Franck)
+         ├─ [8] speed_limit_norm        = limite de vitesse mémorisée / 90.0  ∈ [0, 1]  (Franck)
+         ├─ [9] nearest_walker_norm     = min(dist_piéton, 50m) / 50m         ∈ [0, 1]  (Franck)
+         └─ [10] nearest_stop_yield_norm = min(dist_stop_ou_yield, 50m) / 50m ∈ [0, 1]  (Franck)
 
 [PPO Policy] — Stable-Baselines3 MlpPolicy
          │   2 couches Dense 128, activation tanh
@@ -349,7 +348,7 @@ uv run pytest benchmarks/ai/ -v
 | Fichier | Couverture |
 |---|---|
 | `smoke.py` | reward_fn — triplet `(reward, terminated, components)`, invariant somme des 15 composantes, les 5 termes de sécurité `r_following`/`r_walker`/`r_speeding`/`r_red_light`/`r_stop_yield` + `r_destination`/`r_safe`/`r_jerk` (33 tests) + stubs GT — `src/interfaces/stubs.py`, non utilisés en prod depuis le branchement Franck/Karim (7 tests) |
-| `test_rl_env.py` | CarlaEnv — spaces, reset (dont replanification de route systématique + spawn sûr face aux NPC), step, observation (12 scalaires), reward (dont vitesse orientée-route, destination atteinte, jerk), accumulateur de composantes par épisode, violations feu rouge / stop-yield, render, off_route (59 tests) |
+| `test_rl_env.py` | CarlaEnv — spaces, reset (dont replanification de route systématique + spawn sûr face aux NPC), step, observation (11 scalaires), reward (dont vitesse orientée-route, destination atteinte, jerk), accumulateur de composantes par épisode, violations feu rouge / stop-yield, render, off_route (59 tests) |
 | `test_rl_train.py` | make_model (dont config PPO : réseau, entropy, seed, LR schedule), train (9 tests) |
 | `test_rl_demo.py` | run_episode, _add_hud, record_episode (dont overlay carte du trajet, spawn_idx pour la reproductibilité démo), load_model (18 tests) |
 | `test_run_manager.py` | make_run_dir, save_params, plot_reward_curve (9 tests) |

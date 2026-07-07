@@ -19,11 +19,11 @@ if TYPE_CHECKING:
     from src.perception.pipeline import PerceptionPipeline
 
 # obs = [speed_norm, cmd_left, cmd_right, cmd_straight,
-#         lane_angle_norm, lane_offset_norm, is_on_road,
+#         lane_offset_norm, is_on_road,
 #         nearest_vehicle_norm, red_light_distance_norm, speed_limit_norm,
 #         nearest_walker_norm, nearest_stop_yield_norm]
-_OBS_LOW  = np.array([0., 0., 0., 0., -1., -1., 0., 0., 0., 0., 0., 0.], dtype=np.float32)
-_OBS_HIGH = np.array([1., 1., 1., 1.,  1.,  1., 1., 1., 1., 1., 1., 1.], dtype=np.float32)
+_OBS_LOW  = np.array([0., 0., 0., 0., -1., 0., 0., 0., 0., 0., 0.], dtype=np.float32)
+_OBS_HIGH = np.array([1., 1., 1., 1.,  1., 1., 1., 1., 1., 1., 1.], dtype=np.float32)
 
 _MAX_SPEED_KMH         = 90.0
 _MAX_OBSTACLE_M        = 50.0
@@ -119,6 +119,7 @@ class CarlaEnv(gym.Env):
         self._route_idx: int = 0       # sliding pointer into route.waypoints for efficient off-route check
         self._current_speed_limit_kmh: float = _DEFAULT_SPEED_LIMIT_KMH
         self.off_route_count: int = 0  # steps spent off-route this episode (readable by eval_model)
+        self.last_objects: list = []  # most recent perceive() result (readable by rl_demo for bbox overlays)
 
         collision_sensor.listen(self._on_collision)
         camera.listen(self._on_camera)
@@ -172,11 +173,11 @@ class CarlaEnv(gym.Env):
             self.off_route_count += 1
 
         red_light_violation, self._red_light_flagged = _check_violation(
-            float(obs[8]), speed_kmh, self._red_light_flagged,
+            float(obs[7]), speed_kmh, self._red_light_flagged,
             _RED_LIGHT_VIOLATION_DIST_M, _RED_LIGHT_VIOLATION_SPEED_KMH,
         )
         stop_yield_violation, self._stop_yield_flagged = _check_violation(
-            float(obs[11]), speed_kmh, self._stop_yield_flagged,
+            float(obs[10]), speed_kmh, self._stop_yield_flagged,
             _STOP_YIELD_VIOLATION_DIST_M, _STOP_YIELD_VIOLATION_SPEED_KMH,
         )
 
@@ -185,12 +186,12 @@ class CarlaEnv(gym.Env):
 
         reward, terminated, components = compute_reward(
             speed_kmh=speed_kmh,
-            center_offset=float(obs[5]),    # lane_offset_norm, from Karim's lane detection
-            is_on_road=bool(obs[6] > 0.5),  # from Karim's lane detection
+            center_offset=float(obs[4]),    # lane_offset_norm, from Karim's lane detection
+            is_on_road=bool(obs[5] > 0.5),  # from Karim's lane detection
             collision=self._collision_flag,
             off_route=off_route,
-            nearest_vehicle_m=float(obs[7]) * _MAX_OBSTACLE_M,
-            nearest_walker_m=float(obs[10]) * _MAX_OBSTACLE_M,
+            nearest_vehicle_m=float(obs[6]) * _MAX_OBSTACLE_M,
+            nearest_walker_m=float(obs[9]) * _MAX_OBSTACLE_M,
             speed_limit_kmh=self._current_speed_limit_kmh,
             collision_speed_kmh=self._collision_speed_kmh,
             red_light_violation=red_light_violation,
@@ -221,14 +222,14 @@ class CarlaEnv(gym.Env):
         cmd_right    = 1.0 if cmd == HighLevelCommand.RIGHT    else 0.0
         cmd_straight = 1.0 if cmd == HighLevelCommand.STRAIGHT else 0.0
 
-        # Karim: lane heading, lateral offset, on-road status
-        direction, angle, offset = self._lane_estimate(image)
-        lane_angle_norm = float(np.clip(angle / 90.0, -1.0, 1.0))
+        # Karim: lateral offset, on-road status (lane heading angle is not fed to the model)
+        direction, _angle, offset = self._lane_estimate(image)
         lane_offset_norm = float(np.clip(offset, -1.0, 1.0))
         is_on_road = 1.0 if direction != "NONE" else 0.0
 
         # Franck: nearest vehicle, red light distance, speed limit sign, walker, stop/yield
         objects, _ = self.perception.perceive(image)
+        self.last_objects = objects
 
         nearest_vehicle_norm = _nearest_distance_norm(objects, (ObjectClass.VEHICLE,))
         red_light_distance_norm = _nearest_distance_norm(objects, (ObjectClass.RED_LIGHT,))
@@ -242,7 +243,7 @@ class CarlaEnv(gym.Env):
 
         return np.array(
             [speed_norm, cmd_left, cmd_right, cmd_straight,
-             lane_angle_norm, lane_offset_norm, is_on_road,
+             lane_offset_norm, is_on_road,
              nearest_vehicle_norm, red_light_distance_norm, speed_limit_norm,
              nearest_walker_norm, nearest_stop_yield_norm],
             dtype=np.float32,

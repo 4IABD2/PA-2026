@@ -3,7 +3,7 @@
 Policies
 --------
 straight     : steer=0, full throttle → crashes at intersections / NPCs
-route_follow : P-controller on heading_norm + center_offset → stays on road
+route_follow : P-controller on center_offset → stays on road
 
 Usage:
     uv run python3 scripts/demo_mockup.py --host <carla-ip> [--npcs 15]
@@ -71,21 +71,19 @@ class StraightPolicy:
 
 
 class RouteFollowPolicy:
-    """P-controller on lane_angle_norm + lane_offset_norm — roughly follows the road.
+    """P-controller on lane_offset_norm — roughly follows the road.
 
-    obs[4] = lane_angle_norm  (lane heading angle / 90)
-    obs[5] = lane_offset_norm (lateral deviation from lane centre)
+    obs[4] = lane_offset_norm (lateral deviation from lane centre)
     obs[0] = speed_norm       (speed / 90 km/h)
     """
 
     name = "route_follow"
 
     def predict(self, obs: np.ndarray, deterministic: bool = True):
-        lane_angle_norm  = float(obs[4])
-        lane_offset_norm = float(obs[5])
+        lane_offset_norm = float(obs[4])
         speed_norm       = float(obs[0])
 
-        steer    = float(np.clip(-lane_angle_norm * 1.0 - lane_offset_norm * 0.25, -1.0, 1.0))
+        steer    = float(np.clip(-lane_offset_norm * 0.25, -1.0, 1.0))
         throttle = 0.45 if speed_norm < 0.25 else 0.3
         brake    = 0.0
         return np.array([steer, throttle, brake], dtype=np.float32), None
