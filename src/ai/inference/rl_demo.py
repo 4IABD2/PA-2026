@@ -52,19 +52,18 @@ class HighlightSpec:
 
     detect(obs, action, reward, terminated, truncated) -> bool
 
-    Obs layout (12 scalars):
+    Obs layout (11 scalars):
         [0]  speed_norm              = speed_kmh / 90                 ∈ [0, 1]
         [1]  cmd_left                = 1 if nav says LEFT             ∈ {0, 1}
         [2]  cmd_right               = 1 if nav says RIGHT            ∈ {0, 1}
         [3]  cmd_straight            = 1 if nav says STRAIGHT         ∈ {0, 1}
-        [4]  lane_angle_norm         = lane heading angle / 90        ∈ [-1, 1]
-        [5]  lane_offset_norm        = lateral lane offset            ∈ [-1, 1]
-        [6]  is_on_road              = 1 if lane detected             ∈ {0, 1}
-        [7]  nearest_vehicle_norm    = nearest vehicle / 50m          ∈ [0, 1]
-        [8]  red_light_distance_norm = nearest red light / 50m        ∈ [0, 1]
-        [9]  speed_limit_norm        = current speed limit / 90       ∈ [0, 1]
-        [10] nearest_walker_norm     = nearest pedestrian / 50m       ∈ [0, 1]
-        [11] nearest_stop_yield_norm = nearest stop/yield sign / 50m  ∈ [0, 1]
+        [4]  lane_offset_norm        = lateral lane offset            ∈ [-1, 1]
+        [5]  is_on_road              = 1 if lane detected             ∈ {0, 1}
+        [6]  nearest_vehicle_norm    = nearest vehicle / 50m          ∈ [0, 1]
+        [7]  red_light_distance_norm = nearest red light / 50m        ∈ [0, 1]
+        [8]  speed_limit_norm        = current speed limit / 90       ∈ [0, 1]
+        [9]  nearest_walker_norm     = nearest pedestrian / 50m       ∈ [0, 1]
+        [10] nearest_stop_yield_norm = nearest stop/yield sign / 50m  ∈ [0, 1]
     """
 
     name: str
@@ -87,7 +86,7 @@ DEFAULT_HIGHLIGHT_SPECS: list[HighlightSpec] = [
     ),
     HighlightSpec(
         name="near_obstacle",
-        detect=lambda obs, act, r, done, trunc: bool(obs[7] < 0.15),
+        detect=lambda obs, act, r, done, trunc: bool(obs[6] < 0.15),
         pre_s=2.0, post_s=3.0, cooldown_s=10.0,
     ),
     HighlightSpec(
@@ -102,7 +101,7 @@ DEFAULT_HIGHLIGHT_SPECS: list[HighlightSpec] = [
     ),
     HighlightSpec(
         name="lane_drift",
-        detect=lambda obs, act, r, done, trunc: bool(abs(obs[5]) > 0.6),
+        detect=lambda obs, act, r, done, trunc: bool(abs(obs[4]) > 0.6),
         pre_s=1.5, post_s=2.5, cooldown_s=15.0,
     ),
 ]
@@ -247,6 +246,42 @@ def _add_hud(frame: np.ndarray, info: dict) -> np.ndarray:
     return np.array(img)
 
 
+_EVAL_CLEAR_RADIUS_M = 20.0  # ambient NPCs closer than this to a scenario's spawn are relocated
+
+
+def _clear_spawn_area(env, radius_m: float) -> None:
+    """Relocate ambient NPC vehicles/pedestrians near the ego's spawn point.
+
+    The 18 NPC vehicles + 6 pedestrians spawned once for the whole training+eval
+    session (run_rl_training.py::main()) roam continuously and are still present
+    during every benchmark scenario. A scenario with no setup_fn of its own can
+    otherwise "collide" with one of them by pure luck, unrelated to policy
+    quality. Relocation targets are the farthest available map spawn point from
+    the ego -- a deterministic choice, not a random draw, so repeated evals of
+    the same scenario stay reproducible.
+    """
+    try:
+        actors = env.world.get_actors()
+        nearby = [
+            a for a in list(actors.filter("vehicle.*")) + list(actors.filter("walker.pedestrian.*"))
+            if a.id != env.ego.id
+        ]
+        if not nearby:
+            return
+        spawn_points = env.world.get_map().get_spawn_points()
+        if not spawn_points:
+            return
+        ego_loc = env.ego.get_transform().location
+        farthest = max(spawn_points, key=lambda sp: ego_loc.distance(sp.location))
+        for actor in nearby:
+            if ego_loc.distance(actor.get_location()) < radius_m:
+                actor.set_transform(farthest)
+        for _ in range(10):
+            env.world.tick()
+    except Exception as exc:
+        print(f"    clear_spawn_area failed: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Visual cards for eval_model()
 # ---------------------------------------------------------------------------
@@ -368,7 +403,7 @@ def _draw_obs_panel(
     if w <= 400:
         return
 
-    PW, PH = 215, 196
+    PW, PH = 215, 183
     PAD = 6
     x0 = w - PW - 6
     y0 = 18
@@ -397,20 +432,19 @@ def _draw_obs_panel(
 
     VAL_X = x0 + PAD + 88  # x position for value column
 
-    on_road = obs[6] > 0.5
+    on_road = obs[5] > 0.5
 
     rows = [
         # (label, value_str, value_colour)
         ("OBS SPACE", None,                       HDR),
         ("speed",     f"{obs[0] * 90:5.1f} km/h", VAL),
         ("nav",       nav_cmd,                    nav_col),
-        ("lane angle", f"{obs[4] * 90:+.1f} deg", VAL),
-        ("lane offset", f"{obs[5]:+.3f}",         VAL),
+        ("lane offset", f"{obs[4]:+.3f}",         VAL),
         ("on road",   "YES" if on_road else "NO", (60, 220, 80) if on_road else (60, 60, 220)),
-        ("vehicle",   f"{obs[7] * 50:5.1f} m",    VAL),
-        ("red light", f"{obs[8] * 50:5.1f} m",    VAL),
-        ("walker",    f"{obs[10] * 50:5.1f} m",   VAL),
-        ("stop/yield", f"{obs[11] * 50:5.1f} m",  VAL),
+        ("vehicle",   f"{obs[6] * 50:5.1f} m",    VAL),
+        ("red light", f"{obs[7] * 50:5.1f} m",    VAL),
+        ("walker",    f"{obs[9] * 50:5.1f} m",    VAL),
+        ("stop/yield", f"{obs[10] * 50:5.1f} m",  VAL),
         ("ACTION",    None,                       HDR),
         ("steer",     f"{action[0]:+.3f}",        VAL),
         ("throttle",  f"{action[1]:.3f}",         VAL),
@@ -423,6 +457,108 @@ def _draw_obs_panel(
         if value is not None:
             cv2.putText(frame_bgr, value, (VAL_X, y), FONT, SZ, color, TH)
         y += 13
+
+
+_MINIMAP_SIZE = 130
+_MINIMAP_MARGIN = 6
+
+
+def _draw_minimap(
+    frame_bgr: np.ndarray,
+    route: Route,
+    ego_location,
+    w: int,
+    h: int,
+    cv2,
+) -> None:
+    """Persistent bottom-left minimap: route path + current ego position (in-place, BGR).
+
+    Unlike _draw_route_map_card (a one-time full-screen intro card), this is
+    redrawn every frame so the ego marker tracks real progress along the route.
+    Only drawn when frame width > 400 (matches _draw_obs_panel's own guard) and
+    when a route with waypoints exists.
+    """
+    if w <= 400 or route is None or not route.waypoints:
+        return
+
+    waypoints = route.waypoints
+    size = _MINIMAP_SIZE
+    x0 = _MINIMAP_MARGIN
+    y0 = h - 20 - _MINIMAP_MARGIN - size  # stay clear of _add_hud's bottom bar (rows h-20..h)
+
+    xs = [wp.x for wp in waypoints]
+    ys = [wp.y for wp in waypoints]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    span_x = max(max_x - min_x, 1.0)
+    span_y = max(max_y - min_y, 1.0)
+
+    pad = 10
+    avail = size - 2 * pad
+    scale = min(avail / span_x, avail / span_y)
+
+    def _to_px(x: float, y: float) -> tuple[int, int]:
+        px = x0 + pad + int((x - min_x) * scale)
+        py = y0 + size - pad - int((y - min_y) * scale)  # flip Y for a map-like "up" feel
+        return px, py
+
+    # semi-transparent dark background (78 % opacity), same technique as _draw_obs_panel
+    overlay = frame_bgr.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + size, y0 + size), (18, 18, 22), -1)
+    frame_bgr[:] = cv2.addWeighted(overlay, 0.78, frame_bgr, 0.22, 0)
+
+    points = np.array([_to_px(wp.x, wp.y) for wp in waypoints], dtype=np.int32)
+    cv2.polylines(frame_bgr, [points], isClosed=False, color=(60, 200, 230), thickness=2)
+
+    start_px = _to_px(waypoints[0].x, waypoints[0].y)
+    cv2.circle(frame_bgr, start_px, 4, (80, 220, 80), -1)
+
+    if route.destination is not None:
+        dest_px = _to_px(route.destination.x, route.destination.y)
+        cv2.circle(frame_bgr, dest_px, 4, (60, 60, 220), -1)
+
+    ego_px = _to_px(ego_location.x, ego_location.y)
+    cv2.circle(frame_bgr, ego_px, 5, (255, 255, 255), -1)
+    cv2.circle(frame_bgr, ego_px, 5, (0, 0, 0), 1)
+
+
+_BBOX_COLORS: dict[str, tuple[int, int, int]] = {
+    "vehicle": (0, 255, 0),
+    "walker": (255, 255, 0),
+    "red_light": (0, 0, 255),
+    "yellow_light": (0, 200, 255),
+    "green_light": (0, 255, 128),
+    "stop": (0, 0, 200),
+    "yield": (200, 0, 200),
+}
+_BBOX_SPEED_COLOR = (255, 128, 0)
+_BBOX_DEFAULT_COLOR = (200, 200, 200)
+
+
+def _bbox_color(label: str) -> tuple[int, int, int]:
+    if label.startswith("speed_"):
+        return _BBOX_SPEED_COLOR
+    return _BBOX_COLORS.get(label, _BBOX_DEFAULT_COLOR)
+
+
+def _draw_bboxes(frame_bgr: np.ndarray, objects: list, cv2) -> None:
+    """Draw perception bounding boxes + class + distance labels (in-place, BGR).
+
+    Reimplements demo_perception_live.py's _color()/_draw() logic (Franck's
+    standalone perception demo) so eval/demo videos show the same detections
+    with the same color scheme, without a second perception pass -- objects
+    are whatever CarlaEnv already computed this step (see CarlaEnv.last_objects).
+    """
+    for o in objects:
+        x1, y1, x2, y2 = o.bbox
+        color = _bbox_color(o.class_name.value)
+        cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), color, 2)
+        txt = f"{o.class_name.value} {o.confidence:.0%}"
+        if o.distance_m is not None:
+            txt += f" {o.distance_m:.0f}m"
+        (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(frame_bgr, (x1, max(0, y1 - th - 6)), (x1 + tw, y1), color, -1)
+        cv2.putText(frame_bgr, txt, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
 
 def _write_summary_card(
@@ -590,6 +726,8 @@ def _record_episodes(
                 "params": hud_params or {},
             }
             frame_bgr = cv2.cvtColor(_add_hud(frame, info), cv2.COLOR_RGB2BGR)
+            _draw_bboxes(frame_bgr, getattr(env, "last_objects", []), cv2)
+            _draw_obs_panel(frame_bgr, obs, action, cv2)
             writer.write(frame_bgr)
             if recorder is not None:
                 recorder.push(frame_bgr, obs, action, float(reward), terminated, truncated)
@@ -607,6 +745,7 @@ def _record_scenarios(
 ) -> None:
     for sc_idx, scenario in enumerate(scenarios):
         obs, _ = env.reset(options={"spawn_idx": scenario.spawn_idx})
+        _clear_spawn_area(env, _EVAL_CLEAR_RADIUS_M)
         total_reward = 0.0
 
         for step in range(scenario.max_steps):
@@ -625,6 +764,7 @@ def _record_scenarios(
                     "params": hud_params or {},
                 }
                 frame_bgr = cv2.cvtColor(_add_hud(frame, info), cv2.COLOR_RGB2BGR)
+                _draw_bboxes(frame_bgr, getattr(env, "last_objects", []), cv2)
 
                 label = f"[{sc_idx + 1}/{len(scenarios)}] {scenario.name}"
                 cv2.putText(frame_bgr, label, (4, 11),
@@ -663,7 +803,6 @@ def eval_model(
                         max_dist_from_start, total_reward
         speed         : {mean, max, min, std, pct_moving}           km/h
         center_offset : {mean_abs, max_abs, std, pct_centered}      pct_centered = |offset|<0.2
-        heading       : {mean_abs_deg, max_abs_deg, std_deg}
         obstacle      : {mean_m, min_m}
         steer         : {mean_abs, mean, std}                        mean signed → detect L/R bias
         throttle      : {mean, std}
@@ -674,7 +813,7 @@ def eval_model(
         time series (per step, for plotting):
             trajectory     : [[x, y, yaw], ...]
             rewards_series, speed_series, center_series, steer_series, nav_series
-            throttle_series, brake_series, heading_series, obstacle_series
+            throttle_series, brake_series, obstacle_series
             off_route_series : [0/1, ...]  1 = off-route at that step
             dist_series      : distance from spawn (m) at each step
     """
@@ -708,6 +847,9 @@ def eval_model(
 
             # 2 — reset to scenario spawn
             obs, _ = env.reset(options={"spawn_idx": sc.spawn_idx})
+
+            # 2a — clear ambient NPCs from the spawn area (see _clear_spawn_area docstring)
+            _clear_spawn_area(env, _EVAL_CLEAR_RADIUS_M)
 
             # 2b — replan route to scenario-specific destination (guarantees correct nav commands)
             dest_loc = None
@@ -748,7 +890,6 @@ def eval_model(
             steer_series: list    = []  # action[0] per step
             throttle_series: list = []
             brake_series: list    = []
-            heading_series: list  = []  # degrees
             obstacle_series: list = []  # metres
             nav_series: list      = []  # 0=FOLLOW 1=LEFT 2=RIGHT 3=STRAIGHT
             off_route_series: list = [] # 0/1 per step (1 = off-route)
@@ -767,7 +908,7 @@ def eval_model(
                 total_reward += float(reward)
 
                 speed_kmh = float(obs[0]) * 90.0
-                metrics["center_offsets"].append(float(obs[5]))
+                metrics["center_offsets"].append(float(obs[4]))
                 metrics["speeds"].append(speed_kmh)
                 metrics["rewards"].append(float(reward))
                 metrics["steps"] = step + 1
@@ -783,8 +924,7 @@ def eval_model(
                 steer_series.append(round(float(action[0]), 4))
                 throttle_series.append(round(float(action[1]), 4))
                 brake_series.append(round(float(action[2]), 4))
-                heading_series.append(round(float(obs[4]) * 90.0, 2))
-                obstacle_series.append(round(float(obs[7]) * 50.0, 2))
+                obstacle_series.append(round(float(obs[6]) * 50.0, 2))
                 # nav command encoding
                 if obs[1] > 0.5:   nav_series.append(1)
                 elif obs[2] > 0.5: nav_series.append(2)
@@ -823,6 +963,7 @@ def eval_model(
                         "params": {},
                     }
                     frame_bgr = cv2.cvtColor(_add_hud(frame, info), cv2.COLOR_RGB2BGR)
+                    _draw_bboxes(frame_bgr, getattr(env, "last_objects", []), cv2)
 
                     # scenario label — green = Phase 1, blue = Phase 2
                     label = f"[{sc_idx + 1}/{len(scenarios)}] {sc.name}"
@@ -834,6 +975,9 @@ def eval_model(
 
                     # obs-space + action panel (top-right)
                     _draw_obs_panel(frame_bgr, obs, action, cv2)
+
+                    # persistent route + position minimap (bottom-left)
+                    _draw_minimap(frame_bgr, env.route, ego_loc, out_w, out_h, cv2)
 
                     writer.write(frame_bgr)
 
@@ -873,7 +1017,6 @@ def eval_model(
             # 8 — compute rich stats from collected series
             sp_arr  = np.array(metrics["speeds"],         dtype=np.float32)
             co_arr  = np.array(metrics["center_offsets"], dtype=np.float32)
-            hd_arr  = np.array(heading_series,            dtype=np.float32)
             ob_arr  = np.array(obstacle_series,           dtype=np.float32)
             st_arr  = np.array(steer_series,              dtype=np.float32)
             th_arr  = np.array(throttle_series,           dtype=np.float32)
@@ -913,11 +1056,6 @@ def eval_model(
                     "max_abs":     round(float(_x(np.abs(co_arr))), 4),
                     "std":         round(_s(co_arr), 4),
                     "pct_centered": round(float(np.mean(np.abs(co_arr) < 0.2)), 3),
-                },
-                "heading": {
-                    "mean_abs_deg": round(float(_m(np.abs(hd_arr))), 2),
-                    "max_abs_deg":  round(float(_x(np.abs(hd_arr))), 2),
-                    "std_deg":      round(_s(hd_arr), 2),
                 },
 
                 # ── obstacle ──────────────────────────────────────────────
@@ -960,7 +1098,6 @@ def eval_model(
                 "steer_series":    steer_series,
                 "throttle_series": throttle_series,
                 "brake_series":    brake_series,
-                "heading_series":  heading_series,
                 "obstacle_series": obstacle_series,
                 "nav_series":      nav_series,
                 "off_route_series": off_route_series,
@@ -982,3 +1119,20 @@ def eval_model(
         writer.release()
 
     return results
+
+
+def pick_best_checkpoint(all_results: dict[str, dict[str, dict]]) -> str:
+    """Returns the all_results key (checkpoint label) with the best real
+    benchmark score: highest Phase 1 success count, tie-broken by lowest
+    mean off_route_pct across all scenarios. EvalCallback's own training-time
+    pick (3 noisy eval episodes) is not trustworthy on its own -- see
+    ppo_v6.3_300k's evals/results.json for a real-world case where it picked
+    the worst checkpoint by off_route_pct.
+    """
+    def _score(scenarios: dict[str, dict]) -> tuple[int, float]:
+        successes = sum(1 for m in scenarios.values() if m.get("success") is True)
+        off_route_pcts = [m["off_route_pct"] for m in scenarios.values()]
+        mean_off_route = sum(off_route_pcts) / len(off_route_pcts) if off_route_pcts else 1.0
+        return (successes, -mean_off_route)
+
+    return max(all_results, key=lambda label: _score(all_results[label]))

@@ -23,8 +23,8 @@ Output — one timestamped folder under runs/ :
         demo.mp4                 full inference with HUD overlay (best model)
         evals/                   benchmark eval per checkpoint + best model
 
-Obs (12 scalars): speed | cmd_left | cmd_right | cmd_straight |
-                  lane_angle | lane_offset | is_on_road | nearest_vehicle | red_light_distance |
+Obs (11 scalars): speed | cmd_left | cmd_right | cmd_straight |
+                  lane_offset | is_on_road | nearest_vehicle | red_light_distance |
                   speed_limit | nearest_walker | nearest_stop_yield
 Perception: Franck's PerceptionPipeline (YOLO11s + Depth Anything v2) + Karim's YOLOPv2 lane detection.
 Environment: NPC vehicles (autopilot) + NPC pedestrians (AI walker controllers).
@@ -97,7 +97,7 @@ from src.ai.training.rl_env import (
 )
 from src.ai.training.rl_train import make_model, train, _PPO_DEFAULTS
 from src.ai.training.run_manager import make_run_dir, save_params, plot_reward_curve
-from src.ai.inference.rl_demo import load_model, record_episode, eval_model, Scenario
+from src.ai.inference.rl_demo import load_model, record_episode, eval_model, pick_best_checkpoint, Scenario
 from src.ai.inference.benchmark import _MIN_DIST_M
 from src.ai.rewards.reward_fn import (
     MAX_SPEED_KMH, _W_SPEED, _W_CENTER, _W_ALIVE,
@@ -429,6 +429,7 @@ def main() -> None:
                     # full benchmark eval on up to 10 evenly-spaced checkpoints
                     # spacing = 1 eval per 10k steps → 50k=5, 100k=10, 500k=10
                     all_results: dict = {}
+                    checkpoint_paths: dict = {}
 
                     ckpt_dir = run_dir / "checkpoints"
                     ckpt_files = sorted(ckpt_dir.glob("rl_model_*_steps.zip"))
@@ -457,7 +458,9 @@ def main() -> None:
                                 fps=20,
                                 render_fn=lambda: demo_frame[0],
                             )
-                            all_results[f"{steps_k:04d}k"] = ckpt_results
+                            label = f"{steps_k:04d}k"
+                            all_results[label] = ckpt_results
+                            checkpoint_paths[label] = ckpt
                         print(f"Checkpoint evals → {evals_dir}/checkpoint_*.mp4")
 
                     # benchmark eval on best model
@@ -469,6 +472,7 @@ def main() -> None:
                         render_fn=lambda: demo_frame[0],
                     )
                     all_results["best_model"] = best_results
+                    checkpoint_paths["best_model"] = run_dir / "best_model"
                     print(f"Best model eval → {evals_dir / 'best_model.mp4'}")
 
                     # save all benchmark results to JSON
@@ -478,9 +482,22 @@ def main() -> None:
                         json.dump(all_results, f, indent=2)
                     print(f"Benchmark results → {results_path}")
 
-                    # free-run demo with best model (fixed spawn, no benchmark)
+                    # EvalCallback's best_model.zip is picked from 3 noisy eval
+                    # episodes during training and is not trustworthy on its own
+                    # (see JOURNAL.md, ppo_v6.3_300k) -- replace it with whichever
+                    # candidate actually scores best on the full benchmark above.
+                    winner_label = pick_best_checkpoint(all_results)
+                    winner_model = load_model(str(checkpoint_paths[winner_label]))
+                    winner_model.save(str(run_dir / "best_model"))
+                    winner_scenarios = all_results[winner_label]
+                    winner_successes = sum(1 for m in winner_scenarios.values() if m.get("success") is True)
+                    winner_off_route = sum(m["off_route_pct"] for m in winner_scenarios.values()) / len(winner_scenarios)
+                    print(f"Best model (by benchmark): {winner_label} "
+                          f"(successes={winner_successes}, off_route_pct={winner_off_route:.1%})")
+
+                    # free-run demo with the real best model (fixed spawn, no benchmark)
                     record_episode(
-                        best_model, env,
+                        winner_model, env,
                         output_path=str(run_dir / "demo.mp4"),
                         fps=20,
                         hud_params=hud_params,

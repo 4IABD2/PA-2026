@@ -116,7 +116,7 @@ _ZERO_ACTION = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
 def test_observation_space_shape_and_dtype():
     env = _make_env()
-    assert env.observation_space.shape == (12,)
+    assert env.observation_space.shape == (11,)
     assert env.observation_space.dtype == np.float32
 
 
@@ -140,7 +140,7 @@ def test_reset_returns_obs_and_empty_info():
 
 def test_reset_obs_shape_and_dtype():
     obs, _ = _make_env().reset()
-    assert obs.shape == (12,)
+    assert obs.shape == (11,)
     assert obs.dtype == np.float32
 
 
@@ -291,7 +291,7 @@ def test_step_returns_five_tuple_correct_types():
     env = _make_env()
     env.reset()
     obs, reward, terminated, truncated, info = env.step(_ZERO_ACTION)
-    assert obs.shape == (12,)
+    assert obs.shape == (11,)
     assert isinstance(reward, float)
     assert isinstance(terminated, bool)
     assert isinstance(truncated, bool)
@@ -416,78 +416,71 @@ def test_obs_speed_normalized():
     assert obs[0] == pytest.approx(36.0 / 90.0, abs=1e-4)
 
 
-def test_obs_lane_angle_normalized():
-    # 45° → 45/90 = 0.5
-    env = _make_env(lane_angle=45.0)
-    obs, _ = env.reset()
-    assert obs[4] == pytest.approx(0.5, abs=1e-4)
-
-
 def test_obs_lane_offset_normalized():
     env = _make_env(lane_offset=0.4)
     obs, _ = env.reset()
-    assert obs[5] == pytest.approx(0.4, abs=1e-4)
+    assert obs[4] == pytest.approx(0.4, abs=1e-4)
 
 
 def test_obs_lane_offset_clipped_to_bounds():
     env = _make_env(lane_offset=1.5)
     obs, _ = env.reset()
-    assert obs[5] == pytest.approx(1.0)
+    assert obs[4] == pytest.approx(1.0)
 
 
 def test_obs_is_on_road_when_aligned():
     env = _make_env(on_road=True)
     obs, _ = env.reset()
-    assert obs[6] == pytest.approx(1.0)
+    assert obs[5] == pytest.approx(1.0)
 
 
 def test_obs_is_off_road_when_none():
     env = _make_env(on_road=False)
     obs, _ = env.reset()
-    assert obs[6] == pytest.approx(0.0)
+    assert obs[5] == pytest.approx(0.0)
 
 
 def test_obs_nearest_vehicle_normalized():
     # 25m → 25/50 = 0.5
     env = _make_env(nearest_vehicle_m=25.0)
     obs, _ = env.reset()
-    assert obs[7] == pytest.approx(0.5, abs=1e-4)
+    assert obs[6] == pytest.approx(0.5, abs=1e-4)
 
 
 def test_obs_red_light_detected():
     env = _make_env(red_light_distance_m=10.0)
     obs, _ = env.reset()
-    assert obs[8] == pytest.approx(10.0 / 50.0, abs=1e-4)
+    assert obs[7] == pytest.approx(10.0 / 50.0, abs=1e-4)
 
 
 def test_obs_no_red_light():
     env = _make_env(red_light_distance_m=None)
     obs, _ = env.reset()
-    assert obs[8] == pytest.approx(1.0)
+    assert obs[7] == pytest.approx(1.0)
 
 
 def test_obs_nearest_walker_normalized():
     env = _make_env(nearest_walker_m=15.0)
     obs, _ = env.reset()
-    assert obs[10] == pytest.approx(15.0 / 50.0, abs=1e-4)
+    assert obs[9] == pytest.approx(15.0 / 50.0, abs=1e-4)
 
 
 def test_obs_no_walker_detected():
     env = _make_env(nearest_walker_m=None)
     obs, _ = env.reset()
-    assert obs[10] == pytest.approx(1.0)
+    assert obs[9] == pytest.approx(1.0)
 
 
 def test_obs_nearest_stop_yield_normalized():
     env = _make_env(nearest_stop_yield_m=8.0)
     obs, _ = env.reset()
-    assert obs[11] == pytest.approx(8.0 / 50.0, abs=1e-4)
+    assert obs[10] == pytest.approx(8.0 / 50.0, abs=1e-4)
 
 
 def test_obs_no_stop_yield_detected():
     env = _make_env(nearest_stop_yield_m=None)
     obs, _ = env.reset()
-    assert obs[11] == pytest.approx(1.0)
+    assert obs[10] == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -655,3 +648,21 @@ def test_episode_reward_components_includes_jerk_penalty():
     assert truncated is True
     # r_jerk = -delta * 0.1, summed: step1 -0.1 + step2 0.0
     assert info["r_jerk"] == pytest.approx(-0.1, abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# last_objects
+# ---------------------------------------------------------------------------
+
+
+def test_last_objects_initialized_empty():
+    env = _make_env()
+    assert env.last_objects == []
+
+
+def test_last_objects_populated_after_get_obs():
+    env = _make_env(nearest_vehicle_m=25.0)
+    env.reset()
+    assert len(env.last_objects) == 1
+    assert env.last_objects[0].class_name == ObjectClass.VEHICLE
+    assert env.last_objects[0].distance_m == 25.0

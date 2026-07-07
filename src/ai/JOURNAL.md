@@ -948,3 +948,131 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Prochaine étape** :
 - Signaler à Karim ce bug potentiel sur son module, au cas où d'autres membres de l'équipe auraient un nom Windows accentué.
 - Sinon, rien de plus à faire avant de lancer `ppo_v6`.
+
+---
+
+## 2026-07-07 (suite) — Confusion identifiée sur les collisions en 1 step de `curve_left`/`lane_change`
+
+**Avancement** :
+- Investigation du todo en attente sur les collisions suspectes en 1 step des scénarios `curve_left` et `lane_change` du benchmark. Aucun des deux n'a de `setup_fn` (pas de PNJ dédié). En creusant `eval_model()`/`_record_scenarios()` (`src/ai/inference/rl_demo.py`), confirmation qu'aucun PNJ n'est jamais nettoyé ou vérifié avant l'enregistrement d'un scénario.
+- Les 18 véhicules + 6 piétons PNJ sont spawnés une seule fois pour toute la session (training + éval) et errent en continu en pilote automatique pendant les 13 scénarios de chaque évaluation de checkpoint. Une collision en 1 step sur un scénario sans `setup_fn` est donc très probablement un PNJ ambiant qui se trouvait par hasard à cet endroit précis à ce moment précis — un problème de chance, pas de qualité de la policy ni de mauvais choix de `spawn_idx`.
+- **Fix** : nouvelle fonction `_clear_spawn_area(env, radius_m)` dans `rl_demo.py`, appelée juste après le reset de chaque scénario (dans `eval_model()` et `_record_scenarios()`) — repère tout PNJ à moins de 20m du point de spawn et le téléporte au point de spawn de la carte le plus éloigné de l'ego. Sélection déterministe (pas aléatoire) pour garder les évaluations reproductibles d'un run à l'autre. Aucun PNJ n'est restauré ensuite — les scénarios qui ont vraiment besoin de trafic proche spawnent déjà le leur via `setup_fn`.
+- 169 tests (`uv run pytest benchmarks/ -q`), tout vert (6 nouveaux tests pour `_clear_spawn_area`).
+
+**Difficultés** :
+- Aucune — bug de conception plutôt qu'un vrai bug : la fonctionnalité de nettoyage n'avait simplement jamais été prévue lors de l'écriture initiale du pipeline d'éval.
+
+**Décisions** :
+- Rayon de nettoyage fixé à 20m (plus large que les 10m utilisés pour la sécurité de spawn à l'entraînement, car ici il faut couvrir tout l'enregistrement du scénario, pas juste l'instant du spawn).
+- Appliqué uniformément à tous les scénarios (pas de champ optionnel par scénario) — la malchance de position PNJ peut toucher n'importe quel spawn fixe, pas seulement les deux repérés initialement.
+
+**Benchmarks** : 169 tests, tout vert.
+
+**Prochaine étape** :
+- Reste dans la liste : décider quoi faire du choix de `best_model`, HUD démo, mini-carte GPS + overlay bounding-box sur les vidéos, passage à Town2 (avec, à cette occasion, une réflexion sur un éventuel frame-skip pour accélérer l'entraînement).
+
+---
+
+## 2026-07-07 (suite) — `best_model.zip` remplacé par une vraie sélection sur le benchmark complet
+
+**Avancement** :
+- Fix du problème identifié lors de l'analyse `ppo_v6.3_300k` : `best_model.zip` était choisi par `EvalCallback` (Stable-Baselines3) sur seulement 3 épisodes bruités pendant l'entraînement, puis servait tel quel pour la vidéo démo finale — c'est ce choix bruité qui avait donné un `off_route_pct` de 31.4% (pire que le checkpoint 120k à 8.4%).
+- `scripts/run_rl_training.py` évalue déjà tous les checkpoints + `best_model` sur les 13 scénarios du vrai benchmark juste après l'entraînement (`evals/results.json`) — aucune éval CARLA supplémentaire nécessaire, juste exploiter ce qui est déjà calculé.
+- **Fix** : nouvelle fonction pure `pick_best_checkpoint(all_results)` dans `rl_demo.py` — classe les candidats par nombre de scénarios Phase 1 réussis, puis départage par le plus petit `off_route_pct` moyen (la métrique qui a servi à démontrer le problème). Le script recharge le vrai gagnant, écrase `best_model.zip` sur le disque avec ses poids, et l'utilise pour la vidéo démo finale — la convention "`best_model.zip` = le meilleur du run" est maintenant vraie pour de bon.
+- 173 tests (`uv run pytest benchmarks/ -q`), tout vert (4 nouveaux tests pour `pick_best_checkpoint`).
+
+**Difficultés** :
+- Aucune — la donnée nécessaire (`all_results`) existait déjà, il ne restait qu'à l'exploiter correctement plutôt que de faire confiance au choix de `EvalCallback`.
+
+**Décisions** :
+- Le mécanisme de sélection interne de `EvalCallback` reste actif pendant l'entraînement (il produit toujours un `best_model.zip` intermédiaire) — seul le fichier final sur le disque est écrasé après coup par le vrai gagnant, pas de changement côté SB3 lui-même.
+- Règle de score fixe (pas configurable) : succès Phase 1 d'abord, `off_route_pct` en départage — reflète exactement le raisonnement déjà utilisé pour diagnostiquer le problème sur `ppo_v6.3`, pas besoin de plus compliqué pour l'instant.
+
+**Benchmarks** : 173 tests, tout vert.
+
+**Prochaine étape** :
+- Reste dans la liste : HUD démo, mini-carte GPS + overlay bounding-box sur les vidéos, passage à Town2 (avec réflexion sur un éventuel frame-skip).
+
+---
+
+## 2026-07-07 (suite) — Panneau obs-space ajouté à la démo libre
+
+**Avancement** :
+- La démo libre (`demo.mp4`, chemin `_record_episodes()` de `rl_demo.py`) n'affichait que les barres `_add_hud` (paramètres, épisode/step, reward, vitesse, action) — contrairement aux vidéos d'éval qui affichent en plus le panneau obs-space en haut à droite (commande nav, angle/offset de voie, on-road, distances véhicule/feu/piéton/stop, actions brutes).
+- **Fix** : ajout de l'appel à `_draw_obs_panel()` (déjà existant, déjà utilisé par `eval_model()`) dans `_record_episodes()`, à l'identique — même position relative à `_add_hud`, aucun nouveau paramètre.
+- 174 tests (`uv run pytest benchmarks/ -q`), tout vert (1 nouveau test).
+
+**Difficultés** :
+- Aucune — ajout d'un seul appel à une fonction déjà existante et déjà testée en usage (via `eval_model`).
+
+**Décisions** :
+- Test par vérification d'appel (spy sur `_draw_obs_panel`) plutôt que par inspection de pixels — le comportement du panneau lui-même (garde largeur > 400, contenu affiché) est déjà la responsabilité de `_draw_obs_panel`, inchangée ici ; seule l'ajout du point d'appel est dans le périmètre de ce fix.
+
+**Benchmarks** : 174 tests, tout vert.
+
+**Prochaine étape** :
+- Reste dans la liste : mini-carte GPS + overlay bounding-box sur les vidéos eval/démo, passage à Town2 (avec réflexion sur un éventuel frame-skip).
+
+---
+
+## 2026-07-07 (suite) — Mini-carte GPS persistante ajoutée aux vidéos d'éval
+
+**Avancement** :
+- Les vidéos d'éval (`eval_model()`, celles utilisées pour `evals/results.json`) n'avaient aucune vue carte pendant la conduite — seule la démo libre avait une carte plein écran, affichée une seule fois avant le départ (`_draw_route_map_card`).
+- **Fix** : nouvelle fonction `_draw_minimap()` dans `rl_demo.py` — mini-carte 130×130px en bas à gauche, redessinée à chaque step (contrairement à la carte plein écran, statique) : trajectoire planifiée, marqueur de départ, marqueur de destination, et un point qui suit la position réelle du véhicule. Positionnée pour ne chevaucher ni le panneau obs-space (haut droite) ni la barre HUD du bas.
+- Portée volontairement limitée à `eval_model()` — pas ajoutée à la compilation démo des 13 scénarios (`_record_scenarios()`), qui reste inchangée pour l'instant.
+- 178 tests (`uv run pytest benchmarks/ -q`), tout vert (4 nouveaux tests pour `_draw_minimap`).
+
+**Difficultés** :
+- Aucune — réutilisation directe des techniques déjà en place (fond semi-transparent de `_draw_obs_panel`, mise à l'échelle + inversion Y de `_draw_route_map_card`).
+
+**Décisions** :
+- Position et taille fixes, pas de paramètre configurable — même convention que `_draw_obs_panel`, un widget de taille fixe quelle que soit la résolution de la vidéo.
+
+**Benchmarks** : 178 tests, tout vert.
+
+**Prochaine étape** :
+- Reste dans la liste : overlay bounding-box sur les vidéos eval/démo, passage à Town2 (avec réflexion sur un éventuel frame-skip).
+
+---
+
+## 2026-07-07 (suite) — Overlay bounding-box ajouté aux vidéos eval/démo
+
+**Avancement** :
+- Aucune des vidéos enregistrées (éval, démo libre, compilation démo) n'affichait les détections de la pipeline de perception (Franck) — seul `demo_perception_live.py`, son script de démo autonome, dessine des bounding boxes.
+- Vérifié avant de coder : la caméra d'entraînement (perception) et la caméra d'enregistrement (vidéo) sont toutes les deux spawnées avec la même transform/résolution/FOV et tickent en synchro — les objets détectés sur l'une s'alignent pixel pour pixel sur les frames enregistrées par l'autre, sans repasser par la perception une deuxième fois.
+- **Fix** : `CarlaEnv` expose maintenant `last_objects` (les détections du step courant, déjà calculées dans `_get_obs()` mais jusqu'ici jetées). `rl_demo.py` gagne `_draw_bboxes()`, qui reprend telles quelles les couleurs et le format de labels de `demo_perception_live.py`. Appelée dans les trois chemins d'enregistrement : `eval_model()`, `_record_episodes()` (démo libre) et `_record_scenarios()` (compilation démo).
+- 185 tests (`uv run pytest benchmarks/ -q`), tout vert (7 nouveaux tests).
+
+**Difficultés** :
+- Aucune — la seule vraie question (est-ce que les deux caméras voient bien la même chose) a été vérifiée par lecture du code de spawn des capteurs avant d'écrire quoi que ce soit, plutôt que supposé.
+
+**Décisions** :
+- Pas de deuxième appel à la perception pour la vidéo — réutilisation de `last_objects`, calculé une seule fois par step.
+- Couleurs reprises telles quelles de `demo_perception_live.py` (tuples "BGR" au sens du commentaire de ce fichier) — appliquées ici sur de vraies frames BGR (contrairement à ce script qui les applique sur du RGB), donc le rendu est correct dans nos vidéos même si ce n'est peut-être pas le cas dans la démo live de Franck (pas dans le périmètre de ce fix).
+
+**Benchmarks** : 185 tests, tout vert.
+
+**Prochaine étape** :
+- Reste dans la liste : passage à Town2 (avec réflexion sur un éventuel frame-skip pour accélérer l'entraînement).
+
+---
+
+## 2026-07-07 (suite) — Observation réduite à 11 paramètres, retrait de l'angle de voie
+
+**Avancement** :
+- `lane_angle_norm` retiré de l'observation donnée au modèle — passage de 12 à 11 paramètres. Tout ce qui suivait dans le vecteur (offset, on_road, véhicule, feu, limite vitesse, piéton, stop/yield) décale d'un cran.
+- Répercuté partout où l'observation est lue par position (`rl_env.py`, le panneau obs-space et les détecteurs de highlights de `rl_demo.py`, le contrôleur mock `demo_mockup.py`, la doc de `run_rl_training.py` et le README).
+- Deux conséquences assumées : le contrôleur `RouteFollowPolicy` (démo mock, pas le modèle entraîné) ne pilote plus que sur l'offset latéral (`steer = -offset * 0.25`, terme d'angle retiré) ; les stats "heading" (angle moyen/max/std) de `eval_model()` ont disparu des résultats, plus de source pour les calculer.
+- 184 tests (`uv run pytest benchmarks/ -q`), tout vert.
+
+**Difficultés** :
+- Aucune — changement mécanique une fois la liste complète des points de lecture positionnelle établie (`obs[N]` apparaît dans 6 fichiers).
+
+**Décisions** :
+- Pas de tentative de recalculer le cap ailleurs pour préserver les stats "heading" — cohérent avec le fait qu'on ne le donne plus au modèle du tout.
+
+**Benchmarks** : 184 tests, tout vert.
+
+**Prochaine étape** :
+- Reste dans la liste : passage à Town02 (Stage A : `_EXPECTED_MAP` dans `launch_training.py`, en attente de l'explo de spawn côté utilisateur).
