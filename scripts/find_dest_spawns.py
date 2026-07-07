@@ -21,9 +21,9 @@ import carla
 
 
 PROBE_SCENARIOS = [
-    ("turn_left",         0),
-    ("turn_right",        70),
-    ("junction_straight", 31),
+    ("turn_left",         79),
+    ("turn_right",        81),
+    ("junction_straight", 47),
 ]
 
 # How far (metres) to walk forward looking for a junction.
