@@ -9,6 +9,7 @@ from src.interfaces.navigation_types import HighLevelCommand, Waypoint, Route
 class Navigation:
 
     def __init__(self, vehicle, carla_map):
+        self.end_wp = None
         self.vehicle = vehicle
         self.carla_map = carla_map
         self.index_way = 0
@@ -64,8 +65,8 @@ class Navigation:
 
     def manual_a_star(self, graph, start_location, end_location):
         start_wp = self.carla_map.get_waypoint(start_location)
-        end_wp = self.carla_map.get_waypoint(end_location)
-        return self.a_star(graph, start_wp, end_wp)
+        self.end_wp = self.carla_map.get_waypoint(end_location)
+        return self.a_star(graph, start_wp, self.end_wp)
 
     def get_control(self, target_waypoint: Waypoint):
         v_transform = self.vehicle.get_transform()
@@ -96,20 +97,7 @@ class Navigation:
         control.hand_brake = False
         return control
 
-    @staticmethod
-    def control_to_only_direction(control) -> HighLevelCommand:
-        if control.steer < -0.1:
-            return "left"
-        elif control.steer > 0.1:
-            return "right"
-        else:
-            return "straight"
-
     def plan(self, start, destination) -> Route:
-        # The road network never changes for a given map — building it is
-        # expensive (generates waypoints for the whole town + plots them),
-        # so it's cached after the first plan() call instead of rebuilt on
-        # every reset (CarlaEnv.reset() now replans on every episode).
         if self._graph is None:
             self._graph = self.extract_road_network(self.carla_map)
         path = self.manual_a_star(self._graph, start, destination)
@@ -125,10 +113,120 @@ class Navigation:
         ]
         return Route(waypoints=waypoints, destination=destination)
 
+    @staticmethod
+    def control_to_only_direction(control) -> HighLevelCommand:
+        if control.steer < -0.4:
+            return HighLevelCommand.LEFT
+        elif control.steer > 0.4:
+            return HighLevelCommand.RIGHT
+        else:
+            return HighLevelCommand.STRAIGHT
+
     def next_command(
         self, vehicle_position: Waypoint, route: Route
     ) -> HighLevelCommand:
-        print(f"newt command: {self.index_way}")
-        control = self.get_control(route.waypoints[self.index_way])
-        self.index_way += 1
+        if not route.waypoints:
+            return HighLevelCommand.LANE_FOLLOW
+
+        def read_vehicle_pos():
+            x = getattr(vehicle_position, "x", None)
+            y = getattr(vehicle_position, "y", None)
+            z = getattr(vehicle_position, "z", None)
+            yaw = getattr(vehicle_position, "yaw_deg", None)
+
+            if (
+                yaw is None
+                and hasattr(vehicle_position, "rotation")
+                and hasattr(vehicle_position.rotation, "yaw")
+            ):
+                yaw = vehicle_position.rotation.yaw
+
+            if x is None or y is None or z is None or yaw is None:
+                try:
+                    t = self.vehicle.get_transform()
+                    loc = t.location
+                    rot = t.rotation
+                    x = x if x is not None else loc.x
+                    y = y if y is not None else loc.y
+                    z = z if z is not None else loc.z
+                    yaw = yaw if yaw is not None else rot.yaw
+                except Exception:
+                    # last-resort zeroes
+                    x = 0.0 if x is None else x
+                    y = 0.0 if y is None else y
+                    z = 0.0 if z is None else z
+                    yaw = 0.0 if yaw is None else yaw
+
+            return float(x), float(y), float(z), float(yaw)
+
+        vx, vy, vz, yaw_deg = read_vehicle_pos()
+
+        if getattr(self, "end_wp", None) is not None:
+            try:
+                end_loc = self.end_wp.transform.location
+                dist_end = math.hypot(end_loc.x - vx, end_loc.y - vy)
+                if dist_end < 3.0:
+                    return HighLevelCommand.LANE_FOLLOW
+            except Exception:
+                # ignore if end_wp is malformed
+                pass
+
+        def dist2(a_x, a_y, a_z, b: Waypoint) -> float:
+            dx = a_x - b.x
+            dy = a_y - b.y
+            dz = a_z - b.z
+            return dx * dx + dy * dy + dz * dz
+
+        yaw_rad = math.radians(yaw_deg)
+        fwd_x = math.cos(yaw_rad)
+        fwd_y = math.sin(yaw_rad)
+
+        lookahead_m = 8.0
+        try:
+            vel = self.vehicle.get_velocity()
+            speed = math.hypot(vel.x, vel.y, vel.z)
+            lookahead_m = max(6.0, min(25.0, speed * 2.0))
+        except Exception:
+            speed = 0.0
+        lookahead2 = lookahead_m * lookahead_m
+
+        start_idx = min(max(0, self.index_way), len(route.waypoints) - 1)
+
+        best_idx = start_idx
+        best_dist2 = dist2(vx, vy, vz, route.waypoints[start_idx])
+
+        ahead_candidates = []
+        for i in range(start_idx, len(route.waypoints)):
+            wp = route.waypoints[i]
+            dx = wp.x - vx
+            dy = wp.y - vy
+            dot = fwd_x * dx + fwd_y * dy
+            d2 = dx * dx + dy * dy
+            if dot > 0:
+                ahead_candidates.append((i, d2))
+                if d2 <= lookahead2:
+                    best_idx = i
+                    best_dist2 = d2
+                    break
+            if d2 < best_dist2:
+                best_dist2 = d2
+                best_idx = i
+
+        if ahead_candidates and best_idx == start_idx:
+            best_ahead = min(ahead_candidates, key=lambda it: it[1])
+            best_idx = best_ahead[0]
+
+        if best_idx >= self.index_way:
+            self.index_way = best_idx
+
+        target_idx = min(self.index_way + 1, len(route.waypoints) - 1)
+        target_wp = route.waypoints[target_idx]
+
+        dist_to_target = math.sqrt(dist2(vx, vy, vz, target_wp))
+        if dist_to_target < 1.5 and self.index_way < len(route.waypoints) - 1:
+            self.index_way = min(self.index_way + 1, len(route.waypoints) - 1)
+            target_idx = min(self.index_way + 1, len(route.waypoints) - 1)
+            target_wp = route.waypoints[target_idx]
+
+        control = self.get_control(target_wp)
         return self.control_to_only_direction(control)
