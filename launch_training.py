@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_EXPECTED_MAP = "Town10HD_Opt"
+_EXPECTED_MAP = "Town02"
 _YOLO_WEIGHTS = Path("src/perception/yolo/weights/best.pt")
 
 _STEP_PRESETS: dict[str, int] = {
@@ -58,7 +58,7 @@ def check_carla(host: str, port: int) -> "carla.Client":
 
 def check_map(client: "carla.Client") -> None:
     world = client.get_world()
-    current_map = world.get_map().name  # e.g. "Carla/Maps/Town10HD_Opt"
+    current_map = world.get_map().name  # e.g. "Carla/Maps/Town02"
     if _EXPECTED_MAP in current_map:
         print(f"[OK]   Map loaded: {current_map}")
         return

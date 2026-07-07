@@ -184,9 +184,9 @@ def _success_reached_dest(m: dict) -> bool:
 # spawn_idx values are filled after running:
 #     uv run python3 scripts/explore_spawns.py --host <carla-ip>
 #
-# Town10HD_Opt — 155 spawn points.
-# Last filled: 2026-06-07 via scripts/explore_spawns.py --host 100.97.91.60
-# speed_zone / pedestrian : NOT FOUND in Town10HD_Opt — set manually when available.
+# Town02 — 101 spawn points.
+# Last filled: 2026-07-07 via scripts/explore_spawns.py + scripts/find_dest_spawns.py --host localhost
+# pedestrian / lane_change : NOT FOUND in Town02 — set manually when available.
 # ---------------------------------------------------------------------------
 
 BENCHMARK_SCENARIOS: list[Scenario] = [
@@ -196,7 +196,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="straight",
         description="Straight road - lane centering and speed control",
-        spawn_idx=6,
+        spawn_idx=13,
         max_steps=300,
         phase=1,
         expected="stay centered, maintain constant speed",
@@ -205,7 +205,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="curve_left",
         description="Left curve - heading correction",
-        spawn_idx=8,
+        spawn_idx=35,
         max_steps=300,
         phase=1,
         expected="follow the curve without leaving the lane",
@@ -214,7 +214,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="curve_right",
         description="Right curve - heading correction",
-        spawn_idx=32,
+        spawn_idx=31,
         max_steps=300,
         phase=1,
         expected="follow the curve without leaving the lane",
@@ -235,33 +235,35 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="turn_left",
         description="Junction - turn left on nav command",
-        spawn_idx=0,
+        spawn_idx=79,
         max_steps=350,
         phase=1,
         expected="turn left at junction, reach destination",
-        dest_spawn_idx=140,   # 69.7 m away, snap dist 0.9 m — verified via find_dest_spawns.py
+        dest_spawn_idx=63,    # 30.5 m away, snap dist 14.7 m — verified via find_dest_spawns.py
         target_radius=15.0,
         success_fn=_success_reached_dest,
     ),
     Scenario(
         name="turn_right",
         description="Junction - turn right on nav command",
-        spawn_idx=70,
+        spawn_idx=81,
         max_steps=350,
         phase=1,
         expected="turn right at junction, reach destination",
-        dest_spawn_idx=68,    # 58.3 m away, snap dist 9.7 m — best right-branch candidate
+        dest_spawn_idx=49,    # 56.5 m away, snap dist 2.8 m — best right-branch candidate
+                              # (find_dest_spawns.py's own top pick, idx=85, had snap dist 29.3m —
+                              # picked this closer-snapped alternative from the same branch instead)
         target_radius=15.0,
         success_fn=_success_reached_dest,
     ),
     Scenario(
         name="junction_straight",
         description="T-junction - go straight on nav command",
-        spawn_idx=31,
+        spawn_idx=47,
         max_steps=350,
         phase=1,
         expected="cross the junction straight, reach destination",
-        dest_spawn_idx=119,   # 71.6 m away, snap dist 3.1 m — verified via find_dest_spawns.py
+        dest_spawn_idx=49,    # 85.6 m away, snap dist 2.8 m — verified via find_dest_spawns.py
         target_radius=15.0,
         success_fn=_success_reached_dest,
     ),
@@ -271,7 +273,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="npc_follow",
         description="Follow a slow vehicle ahead",
-        spawn_idx=6,
+        spawn_idx=13,
         max_steps=300,
         phase=1,
         expected="slow down, maintain safe following distance",
@@ -281,7 +283,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="npc_crossing",
         description="Vehicle crossing the road at junction",
-        spawn_idx=0,
+        spawn_idx=79,
         max_steps=300,
         phase=1,
         expected="brake or avoid the crossing vehicle",
@@ -294,7 +296,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="red_light",
         description="Red light - full stop expected",
-        spawn_idx=126,
+        spawn_idx=60,
         max_steps=300,
         phase=2,
         expected="full stop before the stop line",
@@ -302,7 +304,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="speed_zone",
         description="30 km/h speed zone - respect the limit",
-        spawn_idx=0,    # NOT FOUND in Town10HD_Opt — set manually
+        spawn_idx=8,
         max_steps=300,
         phase=2,
         expected="speed <= 30 km/h in the zone",
@@ -325,7 +327,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="emergency_stop",
         description="Sudden obstacle at 8m - emergency braking",
-        spawn_idx=6,
+        spawn_idx=13,
         max_steps=200,
         phase=2,
         expected="full stop in under 2 seconds",
@@ -334,7 +336,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="lane_change",
         description="Overtake a slow vehicle - lane change",
-        spawn_idx=9,
+        spawn_idx=0,    # NOT FOUND in Town02 — set manually
         max_steps=300,
         phase=2,
         expected="change lane and return",

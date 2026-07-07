@@ -175,7 +175,7 @@ PA-2026/
 │   ├── run_rl_training.py       ← Lance le training Phase 1 (CARLA + PPO + artifacts + eval)
 │   ├── run_eval.py              ← Évalue un modèle sur les 13 scénarios benchmark → vidéo + JSON
 │   ├── analyze_run.py           ← Analyse une run (courbe binée + benchmark + totaux, données brutes)
-│   ├── explore_spawns.py        ← Explore et classe les spawn points Town10HD_Opt
+│   ├── explore_spawns.py        ← Explore et classe les spawn points Town02
 │   └── find_dest_spawns.py      ← Trouve les dest_spawn_idx par direction de carrefour
 ├── runs/                        ← Artifacts d'entraînement horodatés (gitignored)
 │   └── YYYY-MM-DD_HH-MM_tag/
@@ -528,7 +528,7 @@ uv run python3 scripts/run_eval.py --model runs/<dir>/best_model.zip --host <ip-
 # Sortie : eval_best_model.mp4 + eval_best_model.json (trajectoires, stats, off_route_pct...)
 ```
 
-**Utilitaires spawn (Town10HD_Opt) :**
+**Utilitaires spawn (Town02) :**
 ```bash
 # Identifier et classer les spawn points
 uv run python3 scripts/explore_spawns.py --host <ip-carla>
