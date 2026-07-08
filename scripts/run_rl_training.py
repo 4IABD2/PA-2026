@@ -95,6 +95,7 @@ from src.perception.pipeline import PerceptionPipeline
 from src.lane_detection.lane_perception import estimate as lane_estimate
 from src.ai.training.rl_env import (
     CarlaEnv,
+    _OBS_LOW,
     _OFF_ROUTE_M,
     _MAX_OBSTACLE_M,
     _WARMUP_TICKS,
@@ -328,7 +329,7 @@ def main() -> None:
             "timesteps": args.timesteps,
             "max_episode_steps": args.max_episode_steps,
             "host": args.host,
-            "obs": "12-scalars-traffic",
+            "obs": f"{len(_OBS_LOW)}-scalars-traffic",
             "reward": {
                 "max_speed_kmh": MAX_SPEED_KMH,
                 "w_speed": _W_SPEED,

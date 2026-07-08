@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.analyze_run import (
     analyze,
     _bin_training_curve,
+    _by_scenario_benchmark,
     _load_monitor_csv,
     _summarize_benchmark,
     _totals,
@@ -165,3 +166,62 @@ def test_analyze_includes_benchmark_when_results_json_present(tmp_path):
     )
     data = analyze(tmp_path)
     assert data["benchmark"]["best_model"]["p1_success"] == 1
+
+
+def test_totals_computes_reward_length_correlation(tmp_path):
+    csv_path = tmp_path / "training_log.monitor.csv"
+    # length and reward move in opposite directions -> strong negative correlation
+    _write_monitor_csv(
+        csv_path, [], [[-100.0, 1000], [-50.0, 500], [-10.0, 100], [-1.0, 10]]
+    )
+    df = _load_monitor_csv(csv_path)
+    totals = _totals(df)
+    assert totals["reward_length_correlation"] < -0.9
+
+
+def test_by_scenario_benchmark_flags_scenario_dead_in_every_checkpoint():
+    results = {
+        "0012k": {"straight": {"steps": 1}, "curve_left": {"steps": 187}},
+        "0024k": {"straight": {"steps": 1}, "curve_left": {"steps": 210}},
+        "0036k": {"straight": {"steps": 2}, "curve_left": {"steps": 5}},
+    }
+    by_scenario = _by_scenario_benchmark(results)
+    assert by_scenario["straight"]["likely_broken_spawn"] is True
+    assert by_scenario["straight"]["steps_by_checkpoint"] == {
+        "0012k": 1,
+        "0024k": 1,
+        "0036k": 2,
+    }
+    assert by_scenario["curve_left"]["likely_broken_spawn"] is False
+
+
+def test_by_scenario_benchmark_requires_at_least_two_checkpoints():
+    results = {
+        "0012k": {"straight": {"steps": 1}},
+    }
+    by_scenario = _by_scenario_benchmark(results)
+    assert by_scenario["straight"]["likely_broken_spawn"] is False
+
+
+def test_analyze_includes_benchmark_by_scenario_when_results_json_present(tmp_path):
+    csv_path = tmp_path / "training_log.monitor.csv"
+    _write_monitor_csv(csv_path, [], [[-5.0, 3000]])
+    evals_dir = tmp_path / "evals"
+    evals_dir.mkdir()
+    (evals_dir / "results.json").write_text(
+        json.dumps(
+            {
+                "0012k": {"straight": {"steps": 1}},
+                "0024k": {"straight": {"steps": 1}},
+            }
+        )
+    )
+    data = analyze(tmp_path)
+    assert data["benchmark_by_scenario"]["straight"]["likely_broken_spawn"] is True
+
+
+def test_analyze_writes_no_benchmark_by_scenario_when_results_json_missing(tmp_path):
+    csv_path = tmp_path / "training_log.monitor.csv"
+    _write_monitor_csv(csv_path, [], [[-5.0, 3000]])
+    data = analyze(tmp_path)
+    assert data["benchmark_by_scenario"] == {}

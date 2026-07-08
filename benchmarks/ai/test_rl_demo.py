@@ -209,7 +209,8 @@ def test_record_episode_calls_draw_obs_panel_per_frame(tmp_path, monkeypatch):
     output = str(tmp_path / "demo.mp4")
     record_episode(_model(), env, output_path=output, fps=5, max_steps=2)
 
-    assert spy.call_count == 2  # once per recorded frame
+    # once for the 1s starting pause frame + once per recorded driving frame
+    assert spy.call_count == 3
     frame_bgr_arg, obs_arg, action_arg, cv2_arg = spy.call_args[0]
     assert frame_bgr_arg.shape == (88, 200, 3)
     np.testing.assert_array_equal(obs_arg, np.zeros(7, dtype=np.float32))
@@ -310,8 +311,9 @@ def test_record_episode_writes_route_map_card_frames(tmp_path, monkeypatch):
         _model(), env, output_path=output, fps=10, max_steps=2, route_map_seconds=1.0
     )
 
-    # fps(10) * route_map_seconds(1.0) = 10 map-card frames + 2 driving frames (max_steps=2)
-    assert len(written_frames) == 10 + 2
+    # fps(10) * route_map_seconds(1.0) = 10 map-card frames, fps(10) * 1s pause = 10 pause
+    # frames, + 2 driving frames (max_steps=2)
+    assert len(written_frames) == 10 + 10 + 2
 
 
 def test_record_episode_no_route_attribute_skips_map_card(tmp_path, monkeypatch):
@@ -336,7 +338,34 @@ def test_record_episode_no_route_attribute_skips_map_card(tmp_path, monkeypatch)
         _model(), env, output_path=output, fps=10, max_steps=2, route_map_seconds=1.0
     )
 
-    assert len(written_frames) == 2  # only the 2 driving frames, no map card
+    # fps(10) * 1s pause = 10 pause frames + 2 driving frames, no map card
+    assert len(written_frames) == 10 + 2
+
+
+def test_record_episode_pause_frames_precede_driving_frames(tmp_path, monkeypatch):
+    written_frames = []
+
+    class _FakeWriter:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def write(self, frame):
+            written_frames.append(frame.copy())
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(cv2, "VideoWriter", _FakeWriter)
+
+    env = _recording_env()
+    output = str(tmp_path / "demo.mp4")
+    record_episode(_model(), env, output_path=output, fps=5, max_steps=1)
+
+    # fps(5) * 1s pause = 5 identical pause frames, then 1 driving frame
+    assert len(written_frames) == 5 + 1
+    pause_frames = written_frames[:5]
+    for f in pause_frames[1:]:
+        np.testing.assert_array_equal(f, pause_frames[0])
 
 
 # ---------------------------------------------------------------------------
@@ -605,7 +634,8 @@ def test_record_episode_calls_draw_bboxes_with_last_objects(tmp_path, monkeypatc
     output = str(tmp_path / "demo.mp4")
     record_episode(_model(), env, output_path=output, fps=5, max_steps=2)
 
-    assert spy.call_count == 2
+    # once for the 1s starting pause frame + once per recorded driving frame
+    assert spy.call_count == 3
     frame_bgr_arg, objects_arg, cv2_arg = spy.call_args[0]
     assert objects_arg == env.last_objects
     assert cv2_arg is cv2

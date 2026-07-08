@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 
+from src.ai.inference.benchmark import BENCHMARK_SCENARIOS
+
 
 def _load_monitor_csv(csv_path: Path) -> pd.DataFrame:
     # comment="#" matches the convention already used by run_manager.py's
@@ -65,6 +67,7 @@ def _totals(df: pd.DataFrame) -> dict:
         "total_episodes": int(len(df)),
         "total_steps": int(df["cum_steps"].iloc[-1]),
         "crash_rate": float((df["l"] < 300).mean()),
+        "reward_length_correlation": float(df["r"].corr(df["l"])),
     }
 
 
@@ -94,17 +97,51 @@ def _summarize_benchmark(results: dict) -> dict:
     return summary
 
 
+def _by_scenario_benchmark(results: dict) -> dict:
+    """Per-scenario view across checkpoints (the opposite axis from
+    _summarize_benchmark, which aggregates per-checkpoint across scenarios).
+
+    A scenario stuck at steps <= 3 in every single checkpoint, regardless of
+    how much training happened, is a broken spawn point -- not a policy
+    failure. Requires >= 2 checkpoints so a single-checkpoint smoke run can't
+    trigger a false positive.
+    """
+    scenario_names: list[str] = []
+    for scenarios in results.values():
+        for name in scenarios:
+            if name not in scenario_names:
+                scenario_names.append(name)
+
+    by_scenario: dict = {}
+    for name in scenario_names:
+        steps_by_checkpoint = {
+            ckpt: scenarios[name]["steps"]
+            for ckpt, scenarios in results.items()
+            if name in scenarios and "steps" in scenarios[name]
+        }
+        likely_broken_spawn = len(steps_by_checkpoint) >= 2 and all(
+            s <= 3 for s in steps_by_checkpoint.values()
+        )
+        by_scenario[name] = {
+            "steps_by_checkpoint": steps_by_checkpoint,
+            "likely_broken_spawn": likely_broken_spawn,
+        }
+    return by_scenario
+
+
 def analyze(run_dir: Path) -> dict:
     df = _load_monitor_csv(run_dir / "training_log.monitor.csv")
     data: dict = {
         "training_curve": _bin_training_curve(df),
         "totals": _totals(df),
         "benchmark": {},
+        "benchmark_by_scenario": {},
     }
     results_path = run_dir / "evals" / "results.json"
     if results_path.exists():
         results = json.loads(results_path.read_text())
         data["benchmark"] = _summarize_benchmark(results)
+        data["benchmark_by_scenario"] = _by_scenario_benchmark(results)
     return data
 
 
@@ -139,8 +176,25 @@ def _print_summary(data: dict) -> None:
         print()
     t = data["totals"]
     print(
-        f"Total: {t['total_episodes']} episodes, {t['total_steps']} steps, {t['crash_rate']:.0%} crash rate"
+        f"Total: {t['total_episodes']} episodes, {t['total_steps']} steps, "
+        f"{t['crash_rate']:.0%} crash rate, "
+        f"reward/length correlation={t['reward_length_correlation']:+.3f}"
     )
+
+    flagged = {
+        name: info
+        for name, info in data.get("benchmark_by_scenario", {}).items()
+        if info["likely_broken_spawn"]
+    }
+    if flagged:
+        spawn_idx_by_name = {sc.name: sc.spawn_idx for sc in BENCHMARK_SCENARIOS}
+        print("\n=== Possible broken spawns ===")
+        for name, info in flagged.items():
+            spawn_idx = spawn_idx_by_name.get(name, "?")
+            steps = info["steps_by_checkpoint"]
+            print(
+                f"  {name} (spawn_idx={spawn_idx}): dies in <=3 steps every checkpoint — {steps}"
+            )
 
 
 def main() -> None:
