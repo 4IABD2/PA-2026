@@ -27,11 +27,9 @@ class Main:
 
     def __init__(self):
         parser = argparse.ArgumentParser(description="Benchmark evaluation on CARLA")
-        parser.add_argument("--model", required=True, help="Path to .zip model file")
         parser.add_argument("--host", default="localhost")
         parser.add_argument("--port", type=int, default=2000)
         args = parser.parse_args()
-
 
         print(f"Connecting to CARLA at {args.host}:{args.port} …")
         client = carla.Client(args.host, args.port)
@@ -41,8 +39,9 @@ class Main:
         bp = world.get_blueprint_library().find("vehicle.tesla.model3")
         ego = world.spawn_actor(bp, world.get_map().get_spawn_points()[0])
 
-        camera = _spawn_sensor(world, ego, "sensor.camera.rgb",
-                               image_size_x=_CAM_W, image_size_y=_CAM_H)
+        camera = _spawn_sensor(
+            world, ego, "sensor.camera.rgb", image_size_x=_CAM_W, image_size_y=_CAM_H
+        )
         col_sensor = _spawn_sensor(world, ego, "sensor.other.collision")
         self.sensors = [camera, col_sensor]
 
@@ -58,21 +57,30 @@ class Main:
         route = nav.plan(ego.get_transform().location, spawn_pts[-1].location)
 
         self.env = CarlaEnv(
-            world=world, ego_vehicle=ego, nav=nav, route=route,
-            perception=perception, lane_estimate_fn=lane_estimate,
-            camera=camera, collision_sensor=col_sensor,
+            world=world,
+            ego_vehicle=ego,
+            nav=nav,
+            route=route,
+            perception=perception,
+            lane_estimate_fn=lane_estimate,
+            camera=camera,
+            collision_sensor=col_sensor,
             max_episode_steps=500,
         )
 
         self.demo_frame = [None]
         self.demo_cam = _spawn_sensor(
-            world, ego, "sensor.camera.rgb",
-            image_size_x=_DEMO_CAM_W, image_size_y=_DEMO_CAM_H,
+            world,
+            ego,
+            "sensor.camera.rgb",
+            image_size_x=_DEMO_CAM_W,
+            image_size_y=_DEMO_CAM_H,
         )
 
         def _on_frame(raw):
             arr = np.frombuffer(raw.raw_data, dtype="uint8").reshape(
-                raw.height, raw.width, 4)
+                raw.height, raw.width, 4
+            )
             self.demo_frame[0] = arr[:, :, [2, 1, 0]]
 
         self.demo_cam.listen(_on_frame)
@@ -80,13 +88,15 @@ class Main:
         for _ in range(5):
             world.tick()
 
-
     def run(self):
-        obs = [0 for x in range(12)]
+        action = [1.0, 0.0, 0.0]
         while True:
+            if action[-1] < 0.0:
+                action[-1] = 0.0
+            obs, reward, terminated, truncated, _ = self.env.step(action)
+            print(obs)
             action = client_bindings.launch_request(obs)
             print(action)
-            obs, reward, terminated, truncated, _ = self.env.step(action)
 
             try:
                 spectator = self.env.world.get_spectator()
