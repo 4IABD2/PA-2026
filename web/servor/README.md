@@ -17,5 +17,7 @@ make
 # run application
 
 ```bash
+cp ../best_model.onnx ./best_model.onnx
+cp ../best_model.onnx.data ./best_model.onnx.data
 ./application
 ```
