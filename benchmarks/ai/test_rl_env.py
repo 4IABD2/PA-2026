@@ -11,7 +11,6 @@ from src.ai.training.rl_env import CarlaEnv
 from src.interfaces.navigation_types import HighLevelCommand, Route, Waypoint
 from src.interfaces.perception_types import DetectedObject, ObjectClass
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -56,18 +55,51 @@ def _make_env(
     world.get_actors.return_value.filter.return_value = []  # no nearby NPCs by default
 
     nav.next_command.return_value = cmd
-    nav.plan.return_value = Route(waypoints=[], destination=Waypoint(0.0, 0.0, 0.0, 0.0))
+    nav.plan.return_value = Route(
+        waypoints=[], destination=Waypoint(0.0, 0.0, 0.0, 0.0)
+    )
 
     # Franck's perception mock
     perception = Mock()
-    objects = [DetectedObject(class_name=ObjectClass.VEHICLE, bbox=(0, 0, 10, 10), confidence=0.9, distance_m=nearest_vehicle_m)]
+    objects = [
+        DetectedObject(
+            class_name=ObjectClass.VEHICLE,
+            bbox=(0, 0, 10, 10),
+            confidence=0.9,
+            distance_m=nearest_vehicle_m,
+        )
+    ]
     if red_light_distance_m is not None:
-        objects.append(DetectedObject(class_name=ObjectClass.RED_LIGHT, bbox=(100, 0, 120, 30), confidence=0.95, distance_m=red_light_distance_m))
+        objects.append(
+            DetectedObject(
+                class_name=ObjectClass.RED_LIGHT,
+                bbox=(100, 0, 120, 30),
+                confidence=0.95,
+                distance_m=red_light_distance_m,
+            )
+        )
     if nearest_walker_m is not None:
-        objects.append(DetectedObject(class_name=ObjectClass.WALKER, bbox=(200, 0, 220, 60), confidence=0.9, distance_m=nearest_walker_m))
+        objects.append(
+            DetectedObject(
+                class_name=ObjectClass.WALKER,
+                bbox=(200, 0, 220, 60),
+                confidence=0.9,
+                distance_m=nearest_walker_m,
+            )
+        )
     if nearest_stop_yield_m is not None:
-        objects.append(DetectedObject(class_name=ObjectClass.STOP, bbox=(300, 0, 320, 40), confidence=0.9, distance_m=nearest_stop_yield_m))
-    perception.perceive.return_value = (objects, np.zeros((720, 1280), dtype=np.float32))
+        objects.append(
+            DetectedObject(
+                class_name=ObjectClass.STOP,
+                bbox=(300, 0, 320, 40),
+                confidence=0.9,
+                distance_m=nearest_stop_yield_m,
+            )
+        )
+    perception.perceive.return_value = (
+        objects,
+        np.zeros((720, 1280), dtype=np.float32),
+    )
 
     # Karim's lane estimate mock
     direction = "ALIGNE" if on_road else "NONE"
@@ -236,7 +268,9 @@ def test_safe_spawn_accepts_immediately_when_no_nearby_actors():
     env = _make_env()
     only = _make_spawn(distance_to_nearest=0.0)  # would be unsafe if actors existed
     env.world.get_map.return_value.get_spawn_points.return_value = [only]
-    env.world.get_actors.return_value.filter.return_value = []  # no vehicles, no walkers
+    env.world.get_actors.return_value.filter.return_value = (
+        []
+    )  # no vehicles, no walkers
     env.np_random = Mock(integers=Mock(side_effect=[0]))
 
     env.reset()
@@ -323,7 +357,9 @@ def test_collision_speed_resets_on_reset():
 
 
 def test_red_light_violation_penalized_once_not_twice():
-    env = _make_env(speed_mps=10.0, red_light_distance_m=3.0)  # 36 km/h, close red light
+    env = _make_env(
+        speed_mps=10.0, red_light_distance_m=3.0
+    )  # 36 km/h, close red light
     env.reset()
     _, reward1, _, _, _ = env.step(_ZERO_ACTION)
     _, reward2, _, _, _ = env.step(_ZERO_ACTION)
@@ -335,8 +371,18 @@ def test_red_light_violation_rearms_after_moving_away():
     env.reset()
     env.step(_ZERO_ACTION)
     assert env._red_light_flagged is True
-    far_objects = [DetectedObject(class_name=ObjectClass.RED_LIGHT, bbox=(0, 0, 1, 1), confidence=0.9, distance_m=40.0)]
-    env.perception.perceive.return_value = (far_objects, np.zeros((720, 1280), dtype=np.float32))
+    far_objects = [
+        DetectedObject(
+            class_name=ObjectClass.RED_LIGHT,
+            bbox=(0, 0, 1, 1),
+            confidence=0.9,
+            distance_m=40.0,
+        )
+    ]
+    env.perception.perceive.return_value = (
+        far_objects,
+        np.zeros((720, 1280), dtype=np.float32),
+    )
     env.step(_ZERO_ACTION)
     assert env._red_light_flagged is False
 
@@ -538,7 +584,9 @@ def test_episode_reward_components_reported_on_collision():
     _, _, terminated, _, info = env.step(_ZERO_ACTION)
     assert terminated is True
     assert info["r_collision"] != 0.0
-    assert info["r_speed"] == pytest.approx(0.0)  # collision step zeroes every other component
+    assert info["r_speed"] == pytest.approx(
+        0.0
+    )  # collision step zeroes every other component
 
 
 def test_episode_reward_components_has_all_fifteen_keys_when_reported():
@@ -547,9 +595,21 @@ def test_episode_reward_components_has_all_fifteen_keys_when_reported():
     _, _, _, truncated, info = env.step(_ZERO_ACTION)
     assert truncated is True
     expected_keys = {
-        "r_speed", "r_center", "r_alive", "r_offroad", "r_stall", "r_off_route",
-        "r_following", "r_walker", "r_speeding", "r_red_light", "r_stop_yield", "r_collision",
-        "r_destination", "r_safe", "r_jerk",
+        "r_speed",
+        "r_center",
+        "r_alive",
+        "r_offroad",
+        "r_stall",
+        "r_off_route",
+        "r_following",
+        "r_walker",
+        "r_speeding",
+        "r_red_light",
+        "r_stop_yield",
+        "r_collision",
+        "r_destination",
+        "r_safe",
+        "r_jerk",
     }
     assert set(info.keys()) == expected_keys
 
@@ -575,7 +635,9 @@ def test_progress_speed_falls_back_to_raw_speed_without_route():
 
 
 def test_progress_speed_zero_when_perpendicular_to_route():
-    env = _make_env(speed_mps=10.0)  # velocity along +x (see _make_env's vel.x=speed_mps)
+    env = _make_env(
+        speed_mps=10.0
+    )  # velocity along +x (see _make_env's vel.x=speed_mps)
     wp = Waypoint(x=0.0, y=0.0, z=0.0, yaw_deg=90.0)  # route heads along +y
     env.route = Route(waypoints=[wp], destination=wp)
     env._route_idx = 0
@@ -584,7 +646,9 @@ def test_progress_speed_zero_when_perpendicular_to_route():
 
 def test_progress_speed_full_credit_when_aligned_with_route():
     env = _make_env(speed_mps=10.0)
-    wp = Waypoint(x=0.0, y=0.0, z=0.0, yaw_deg=0.0)  # route heads along +x, same as velocity
+    wp = Waypoint(
+        x=0.0, y=0.0, z=0.0, yaw_deg=0.0
+    )  # route heads along +x, same as velocity
     env.route = Route(waypoints=[wp], destination=wp)
     env._route_idx = 0
     assert env._progress_speed_kmh() == pytest.approx(36.0)
@@ -596,23 +660,33 @@ def test_reached_destination_false_when_close_but_not_travelled():
     # Route is assigned after reset(): reset() unconditionally replans the
     # route from the (mocked) nav, which would otherwise clobber a route
     # assigned beforehand.
-    env.route = Route(waypoints=[], destination=Waypoint(x=5.0, y=0.0, z=0.0, yaw_deg=0.0))
-    _set_ego_location(env, 5.0, 0.0)  # 5m from dest (< 15m radius), only 5m travelled (< 25m)
+    env.route = Route(
+        waypoints=[], destination=Waypoint(x=5.0, y=0.0, z=0.0, yaw_deg=0.0)
+    )
+    _set_ego_location(
+        env, 5.0, 0.0
+    )  # 5m from dest (< 15m radius), only 5m travelled (< 25m)
     assert env._reached_destination() is False
 
 
 def test_reached_destination_false_when_travelled_but_far_from_dest():
     env = _make_env()
     env.reset()
-    env.route = Route(waypoints=[], destination=Waypoint(x=500.0, y=0.0, z=0.0, yaw_deg=0.0))
-    _set_ego_location(env, 100.0, 0.0)  # 100m travelled (>= 25m), but 400m from dest (>= 15m)
+    env.route = Route(
+        waypoints=[], destination=Waypoint(x=500.0, y=0.0, z=0.0, yaw_deg=0.0)
+    )
+    _set_ego_location(
+        env, 100.0, 0.0
+    )  # 100m travelled (>= 25m), but 400m from dest (>= 15m)
     assert env._reached_destination() is False
 
 
 def test_reached_destination_true_when_both_conditions_met():
     env = _make_env()
     env.reset()
-    env.route = Route(waypoints=[], destination=Waypoint(x=100.0, y=0.0, z=0.0, yaw_deg=0.0))
+    env.route = Route(
+        waypoints=[], destination=Waypoint(x=100.0, y=0.0, z=0.0, yaw_deg=0.0)
+    )
     _set_ego_location(env, 95.0, 0.0)  # 95m travelled (>= 25m), 5m from dest (< 15m)
     assert env._reached_destination() is True
 
@@ -620,7 +694,9 @@ def test_reached_destination_true_when_both_conditions_met():
 def test_step_terminates_on_reached_destination():
     env = _make_env()
     env.reset()
-    env.route = Route(waypoints=[], destination=Waypoint(x=100.0, y=0.0, z=0.0, yaw_deg=0.0))
+    env.route = Route(
+        waypoints=[], destination=Waypoint(x=100.0, y=0.0, z=0.0, yaw_deg=0.0)
+    )
     _set_ego_location(env, 95.0, 0.0)
     _, reward, terminated, truncated, info = env.step(_ZERO_ACTION)
     assert terminated is True
@@ -643,8 +719,10 @@ def test_prev_steer_tracks_last_action_and_resets():
 def test_episode_reward_components_includes_jerk_penalty():
     env = _make_env(max_episode_steps=2)
     env.reset()
-    env.step(np.array([1.0, 0.0, 0.0], dtype=np.float32))    # steer 0.0 -> 1.0, delta=1.0
-    _, _, _, truncated, info = env.step(np.array([1.0, 0.0, 0.0], dtype=np.float32))  # 1.0 -> 1.0, delta=0.0
+    env.step(np.array([1.0, 0.0, 0.0], dtype=np.float32))  # steer 0.0 -> 1.0, delta=1.0
+    _, _, _, truncated, info = env.step(
+        np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    )  # 1.0 -> 1.0, delta=0.0
     assert truncated is True
     # r_jerk = -delta * 0.1, summed: step1 -0.1 + step2 0.0
     assert info["r_jerk"] == pytest.approx(-0.1, abs=1e-3)

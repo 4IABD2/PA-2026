@@ -9,16 +9,16 @@ _W_CENTER = 0.3
 _W_ALIVE = 0.01
 _P_OFFROAD = -0.25
 _P_COLLISION_BASE = -5.0
-_P_COLLISION_SPEED_SCALE = -0.20   # per km/h of speed at the moment of impact
-_P_STALL = -0.20       # breaks the lazy-policy attractor (staying still = 0 risk)
-_P_OFF_ROUTE = -0.5    # calibrated independently from _P_OFFROAD, which was deliberately
-                       # lowered in the v4 batch to avoid worsening the "crash fast" shortcut
-                       # diagnosed at the time — the two are no longer meant to be equal
+_P_COLLISION_SPEED_SCALE = -0.20  # per km/h of speed at the moment of impact
+_P_STALL = -0.20  # breaks the lazy-policy attractor (staying still = 0 risk)
+_P_OFF_ROUTE = -0.5  # calibrated independently from _P_OFFROAD, which was deliberately
+# lowered in the v4 batch to avoid worsening the "crash fast" shortcut
+# diagnosed at the time — the two are no longer meant to be equal
 
 _W_FOLLOWING = 0.2
-_SAFE_HEADWAY_S = 2.0             # standard "2-second rule" following distance
+_SAFE_HEADWAY_S = 2.0  # standard "2-second rule" following distance
 
-_W_WALKER_PROXIMITY = 0.3         # higher than _W_FOLLOWING: pedestrian safety takes priority
+_W_WALKER_PROXIMITY = 0.3  # higher than _W_FOLLOWING: pedestrian safety takes priority
 _WALKER_DANGER_M = 10.0
 
 _W_SPEEDING = 0.3
@@ -32,9 +32,21 @@ _W_SAFE_DRIVING = 0.05
 _W_JERK = 0.1
 
 REWARD_COMPONENT_KEYS: tuple[str, ...] = (
-    "r_speed", "r_center", "r_alive", "r_offroad", "r_stall", "r_off_route",
-    "r_following", "r_walker", "r_speeding", "r_red_light", "r_stop_yield", "r_collision",
-    "r_destination", "r_safe", "r_jerk",
+    "r_speed",
+    "r_center",
+    "r_alive",
+    "r_offroad",
+    "r_stall",
+    "r_off_route",
+    "r_following",
+    "r_walker",
+    "r_speeding",
+    "r_red_light",
+    "r_stop_yield",
+    "r_collision",
+    "r_destination",
+    "r_safe",
+    "r_jerk",
 )
 
 
@@ -63,7 +75,9 @@ def _walker_penalty(distance_m: float) -> float:
     return -(1.0 - distance_m / _WALKER_DANGER_M) * _W_WALKER_PROXIMITY
 
 
-def _speeding_penalty(speed_kmh: float, speed_limit_kmh: float | None, max_speed_kmh: float) -> float:
+def _speeding_penalty(
+    speed_kmh: float, speed_limit_kmh: float | None, max_speed_kmh: float
+) -> float:
     """Penalise exceeding the detected speed limit, proportional to the overshoot."""
     if speed_limit_kmh is None:
         return 0.0
@@ -154,7 +168,9 @@ def compute_reward(
     """
     if collision:
         components = {key: 0.0 for key in REWARD_COMPONENT_KEYS}
-        components["r_collision"] = _P_COLLISION_BASE + _P_COLLISION_SPEED_SCALE * collision_speed_kmh
+        components["r_collision"] = (
+            _P_COLLISION_BASE + _P_COLLISION_SPEED_SCALE * collision_speed_kmh
+        )
         return components["r_collision"], True, components
 
     if reached_destination:
@@ -162,7 +178,9 @@ def compute_reward(
         components["r_destination"] = _P_DEST_REACHED
         return components["r_destination"], True, components
 
-    effective_speed_for_r_speed = speed_kmh if progress_speed_kmh is None else progress_speed_kmh
+    effective_speed_for_r_speed = (
+        speed_kmh if progress_speed_kmh is None else progress_speed_kmh
+    )
 
     components = {
         "r_speed": (effective_speed_for_r_speed / max_speed_kmh) * _W_SPEED,
@@ -178,7 +196,13 @@ def compute_reward(
         "r_stop_yield": _P_STOP_YIELD_VIOLATION if stop_yield_violation else 0.0,
         "r_collision": 0.0,
         "r_destination": 0.0,
-        "r_safe": _safe_driving_bonus(speed_kmh, nearest_vehicle_m, nearest_walker_m, speed_limit_kmh, max_speed_kmh),
+        "r_safe": _safe_driving_bonus(
+            speed_kmh,
+            nearest_vehicle_m,
+            nearest_walker_m,
+            speed_limit_kmh,
+            max_speed_kmh,
+        ),
         "r_jerk": -steer_delta * _W_JERK,
     }
     return sum(components.values()), False, components

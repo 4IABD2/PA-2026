@@ -15,14 +15,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import matplotlib; matplotlib.use("Agg")
+import matplotlib
+
+matplotlib.use("Agg")
 
 import carla
 
-
 PROBE_SCENARIOS = [
-    ("turn_left",         79),
-    ("turn_right",        81),
+    ("turn_left", 79),
+    ("turn_right", 81),
     ("junction_straight", 47),
 ]
 
@@ -159,21 +160,28 @@ def main() -> None:
             continue
 
         for direction, candidates in sorted(branches.items()):
-            marker = "→" if sc_name == f"turn_{direction}" or \
-                     (sc_name == "junction_straight" and direction == "straight") \
-                     else " "
+            marker = (
+                "→"
+                if sc_name == f"turn_{direction}"
+                or (sc_name == "junction_straight" and direction == "straight")
+                else " "
+            )
             for dest_idx, snap_dist in candidates:
                 dist_from_ego = spawn_pts[dest_idx].location.distance(
                     spawn_pts[sc_spawn].location
                 )
-                print(f"  {marker} {direction:8s}  dest_spawn_idx={dest_idx:4d}"
-                      f"   {dist_from_ego:6.1f} m from ego"
-                      f"   (snap dist {snap_dist:.1f} m)")
+                print(
+                    f"  {marker} {direction:8s}  dest_spawn_idx={dest_idx:4d}"
+                    f"   {dist_from_ego:6.1f} m from ego"
+                    f"   (snap dist {snap_dist:.1f} m)"
+                )
 
         # Print recommended value for this scenario
-        desired = ("left"     if "turn_left"  in sc_name else
-                   "right"    if "turn_right" in sc_name else
-                   "straight")
+        desired = (
+            "left"
+            if "turn_left" in sc_name
+            else "right" if "turn_right" in sc_name else "straight"
+        )
         candidates = branches.get(desired, [])
         if candidates:
             rec = candidates[0][0]

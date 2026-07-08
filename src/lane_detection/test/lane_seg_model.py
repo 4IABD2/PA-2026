@@ -40,7 +40,7 @@ class LaneModel:
     def detect(self, bgr):
         h, w = bgr.shape[:2]
         with torch.no_grad():
-            out = self.model(self._preprocess(bgr))["out"]      # 1x3xH'xW'
+            out = self.model(self._preprocess(bgr))["out"]  # 1x3xH'xW'
         pred = out.argmax(1).squeeze().cpu().numpy().astype(np.uint8)
         pred = cv2.resize(pred, (w, h), interpolation=cv2.INTER_NEAREST)
         lanes = (pred == 1).astype(np.uint8) * 255
@@ -50,6 +50,7 @@ class LaneModel:
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) > 1:
         m = LaneModel()
         img = cv2.imread(sys.argv[1])

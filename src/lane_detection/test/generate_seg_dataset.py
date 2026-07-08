@@ -29,8 +29,8 @@ import numpy as np
 from utils import IMAGE_WIDTH, IMAGE_HEIGHT, FPS, carla_to_bgr
 from carla_integration import setup_world, spawn_vehicle, cleanup_actors
 
-ROADLINE_TAG = 24      # tag semantique des lignes de voie
-ROAD_TAG = 1           # tag semantique de la route (zone roulable)
+ROADLINE_TAG = 24  # tag semantique des lignes de voie
+ROAD_TAG = 1  # tag semantique de la route (zone roulable)
 
 DEFAULT_OUTPUT = "../../dataset/lane_seg_dataset"
 DEFAULT_FRAMES = 2000
@@ -49,7 +49,9 @@ def _spawn_camera(world, vehicle, blueprint_id):
 
 def _semantic_tags(image):
     """Le canal R de l'image semantique brute contient l'ID du tag."""
-    arr = np.frombuffer(image.raw_data, dtype=np.uint8).reshape((image.height, image.width, 4))
+    arr = np.frombuffer(image.raw_data, dtype=np.uint8).reshape(
+        (image.height, image.width, 4)
+    )
     return arr[:, :, 2]
 
 
@@ -85,7 +87,8 @@ def generate(output, num_frames):
         for _ in range(30):
             world.tick()
             try:
-                rgb_q.get(timeout=2.0); seg_q.get(timeout=2.0)
+                rgb_q.get(timeout=2.0)
+                seg_q.get(timeout=2.0)
             except queue.Empty:
                 pass
 
@@ -97,7 +100,8 @@ def generate(output, num_frames):
                 rgb_img = rgb_q.get(timeout=2.0)
                 seg_img = seg_q.get(timeout=2.0)
             except queue.Empty:
-                print("[WARN] image manquante"); continue
+                print("[WARN] image manquante")
+                continue
 
             frame = carla_to_bgr(rgb_img)
             tags = _semantic_tags(seg_img)
@@ -120,7 +124,8 @@ def generate(output, num_frames):
         print("[INFO] nettoyage")
         for cam in (rgb_cam, seg_cam):
             if cam is not None:
-                cam.stop(); cam.destroy()
+                cam.stop()
+                cam.destroy()
         cleanup_actors(world, None, vehicle, original)
         print("[INFO] fin")
 
@@ -131,15 +136,24 @@ def run_towns(output, towns, frames_per_town):
     client.set_timeout(60.0)
     for i, town in enumerate(towns):
         print(f"\n===== TOWN {i + 1}/{len(towns)} : {town} =====")
-        client.load_world(town)          # bloquant jusqu'au chargement
-        generate(output, frames_per_town)   # gere sync + stabilisation + cleanup
+        client.load_world(town)  # bloquant jusqu'au chargement
+        generate(output, frames_per_town)  # gere sync + stabilisation + cleanup
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--output", default=DEFAULT_OUTPUT)
-    p.add_argument("--frames", type=int, default=DEFAULT_FRAMES, help="frames par Town si --towns, sinon total")
-    p.add_argument("--towns", default="", help="liste de Town separees par des virgules (ex: Town01,Town03,Town05)")
+    p.add_argument(
+        "--frames",
+        type=int,
+        default=DEFAULT_FRAMES,
+        help="frames par Town si --towns, sinon total",
+    )
+    p.add_argument(
+        "--towns",
+        default="",
+        help="liste de Town separees par des virgules (ex: Town01,Town03,Town05)",
+    )
     args = p.parse_args()
     if args.towns:
         run_towns(args.output, [t.strip() for t in args.towns.split(",")], args.frames)

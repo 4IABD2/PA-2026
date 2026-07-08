@@ -17,16 +17,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import carla
 
-
 # ---------------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------------
+
 
 def _dist(a: carla.Location, b: carla.Location) -> float:
     return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
 
 
-def _yaw_change(wp: carla.Waypoint, ahead_m: float = 30.0, step_m: float = 2.0) -> float:
+def _yaw_change(
+    wp: carla.Waypoint, ahead_m: float = 30.0, step_m: float = 2.0
+) -> float:
     """Total absolute yaw variation over the next ahead_m metres — high = curve."""
     cur = wp
     yaws = [cur.transform.rotation.yaw]
@@ -44,7 +46,9 @@ def _yaw_change(wp: carla.Waypoint, ahead_m: float = 30.0, step_m: float = 2.0) 
     return sum(diffs)
 
 
-def _yaw_change_signed(wp: carla.Waypoint, ahead_m: float = 30.0, step_m: float = 2.0) -> float:
+def _yaw_change_signed(
+    wp: carla.Waypoint, ahead_m: float = 30.0, step_m: float = 2.0
+) -> float:
     """Net yaw change over next ahead_m metres. Positive = right turn, negative = left turn."""
     cur = wp
     yaw_start = cur.transform.rotation.yaw
@@ -58,7 +62,9 @@ def _yaw_change_signed(wp: carla.Waypoint, ahead_m: float = 30.0, step_m: float 
     return ((cur.transform.rotation.yaw - yaw_start + 180) % 360) - 180
 
 
-def _junction_turn_dirs(wp: carla.Waypoint, ahead_m: float = 25.0, step_m: float = 2.0) -> set[str]:
+def _junction_turn_dirs(
+    wp: carla.Waypoint, ahead_m: float = 25.0, step_m: float = 2.0
+) -> set[str]:
     """Returns available turn directions {'left', 'right', 'straight'} at the next junction.
 
     Walks ahead_m to find the junction, then checks all exit branches.
@@ -105,7 +111,9 @@ def _nearest_traffic_light(loc: carla.Location, lights) -> float:
     return min(_dist(loc, tl.get_location()) for tl in lights)
 
 
-def _nearest_speed_limit(loc: carla.Location, speed_limit_actors, radius: float = 30.0) -> int | None:
+def _nearest_speed_limit(
+    loc: carla.Location, speed_limit_actors, radius: float = 30.0
+) -> int | None:
     """Returns speed limit in km/h if a sign is within radius, else None.
 
     Speed limit actors have type_id like 'traffic.speed_limit.30'.
@@ -131,6 +139,7 @@ def _has_lane_change(wp: carla.Waypoint) -> bool:
 # Spawn classifier
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SpawnInfo:
     idx: int
@@ -142,7 +151,7 @@ class SpawnInfo:
     junction_dist_m: float
     tl_dist_m: float
     curve_deg: float
-    curve_dir: str = ""           # 'left', 'right', or 'straight'
+    curve_dir: str = ""  # 'left', 'right', or 'straight'
     junction_dirs: set = field(default_factory=set)
     speed_limit: int | None = None
     lane_change: bool = False
@@ -185,8 +194,9 @@ def _analyse_spawns(world: carla.World) -> list[SpawnInfo]:
     infos = []
     for idx, sp in enumerate(spawn_pts):
         loc = sp.location
-        wp = cmap.get_waypoint(loc, project_to_road=True,
-                               lane_type=carla.LaneType.Driving)
+        wp = cmap.get_waypoint(
+            loc, project_to_road=True, lane_type=carla.LaneType.Driving
+        )
         if wp is None:
             continue
 
@@ -238,7 +248,10 @@ def _analyse_spawns(world: carla.World) -> list[SpawnInfo]:
 # Selection
 # ---------------------------------------------------------------------------
 
-def _best(infos: list[SpawnInfo], tag: str, exclude: set[int], n: int = 1) -> list[SpawnInfo]:
+
+def _best(
+    infos: list[SpawnInfo], tag: str, exclude: set[int], n: int = 1
+) -> list[SpawnInfo]:
     candidates = [i for i in infos if tag in i.tags and i.idx not in exclude]
     candidates.sort(key=lambda i: (len(i.tags), i.junction_dist_m))
     chosen = candidates[:n]
@@ -252,19 +265,27 @@ def _pick_all(infos: list[SpawnInfo]) -> dict[str, SpawnInfo | None]:
     result: dict[str, SpawnInfo | None] = {}
 
     # Phase 1 — pick in dependency order to avoid reusing good spawns
-    for tag in ("straight", "curve_left", "curve_right",
-                "turn_left", "turn_right", "junction_straight",
-                "traffic_light", "speed_zone", "multi_lane"):
+    for tag in (
+        "straight",
+        "curve_left",
+        "curve_right",
+        "turn_left",
+        "turn_right",
+        "junction_straight",
+        "traffic_light",
+        "speed_zone",
+        "multi_lane",
+    ):
         chosen = _best(infos, tag, exclude, n=1)
         result[tag] = chosen[0] if chosen else None
 
     # NPC scenarios reuse base spawns (no exclusion)
-    result["npc_follow"]   = result.get("straight")
+    result["npc_follow"] = result.get("straight")
     result["npc_crossing"] = result.get("turn_left") or result.get("near_junction")
-    result["red_light"]    = result.get("traffic_light")
-    result["pedestrian"]   = None   # needs manual identification (crosswalk geometry)
+    result["red_light"] = result.get("traffic_light")
+    result["pedestrian"] = None  # needs manual identification (crosswalk geometry)
     result["emergency_stop"] = result.get("straight")
-    result["lane_change"]  = result.get("multi_lane")
+    result["lane_change"] = result.get("multi_lane")
 
     return result
 
@@ -272,6 +293,7 @@ def _pick_all(infos: list[SpawnInfo]) -> dict[str, SpawnInfo | None]:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -298,19 +320,19 @@ def main() -> None:
 
     # Ordered list matching BENCHMARK_SCENARIOS
     scenario_order = [
-        ("straight",          "Phase 1 — route droite"),
-        ("curve_left",        "Phase 1 — virage gauche"),
-        ("curve_right",       "Phase 1 — virage droit"),
-        ("turn_left",         "Phase 1 — carrefour gauche"),
-        ("turn_right",        "Phase 1 — carrefour droit"),
+        ("straight", "Phase 1 — route droite"),
+        ("curve_left", "Phase 1 — virage gauche"),
+        ("curve_right", "Phase 1 — virage droit"),
+        ("turn_left", "Phase 1 — carrefour gauche"),
+        ("turn_right", "Phase 1 — carrefour droit"),
         ("junction_straight", "Phase 1 — carrefour tout droit"),
-        ("npc_follow",        "Phase 1 — NPC lent devant  (=straight)"),
-        ("npc_crossing",      "Phase 1 — NPC qui coupe   (=turn_left)"),
-        ("red_light",         "Phase 2 — feu rouge        (=traffic_light)"),
-        ("speed_zone",        "Phase 2 — zone 30 km/h"),
-        ("pedestrian",        "Phase 2 — piéton (manual)"),
-        ("emergency_stop",    "Phase 2 — frein urgence    (=straight)"),
-        ("lane_change",       "Phase 2 — dépassement      (=multi_lane)"),
+        ("npc_follow", "Phase 1 — NPC lent devant  (=straight)"),
+        ("npc_crossing", "Phase 1 — NPC qui coupe   (=turn_left)"),
+        ("red_light", "Phase 2 — feu rouge        (=traffic_light)"),
+        ("speed_zone", "Phase 2 — zone 30 km/h"),
+        ("pedestrian", "Phase 2 — piéton (manual)"),
+        ("emergency_stop", "Phase 2 — frein urgence    (=straight)"),
+        ("lane_change", "Phase 2 — dépassement      (=multi_lane)"),
     ]
 
     for sc_name, label in scenario_order:
@@ -323,9 +345,11 @@ def main() -> None:
             tl = f"{sp.tl_dist_m:.0f}m" if sp.tl_dist_m < 999 else "—"
             jd = f"{sp.junction_dist_m:.0f}m" if sp.junction_dist_m < 999 else "—"
             sl = f"{sp.speed_limit}" if sp.speed_limit else "—"
-            detail = (f"curve={sp.curve_deg:.0f}°{sp.curve_dir[0].upper()}  "
-                      f"junc={jd}  tl={tl}  limit={sl}  "
-                      f"dirs={sorted(sp.junction_dirs) or '—'}")
+            detail = (
+                f"curve={sp.curve_deg:.0f}°{sp.curve_dir[0].upper()}  "
+                f"junc={jd}  tl={tl}  limit={sl}  "
+                f"dirs={sorted(sp.junction_dirs) or '—'}"
+            )
         print(f"  {sc_name:<22} idx={idx_str:<5} {label}")
         if sp:
             print(f"  {'':22}     ({detail})")
@@ -340,8 +364,13 @@ def main() -> None:
         note = ""
         if sp is None:
             note = "  # NOT FOUND — set manually"
-        elif sc_name in ("npc_follow", "npc_crossing", "red_light",
-                         "emergency_stop", "lane_change"):
+        elif sc_name in (
+            "npc_follow",
+            "npc_crossing",
+            "red_light",
+            "emergency_stop",
+            "lane_change",
+        ):
             note = "  # reuses above"
         print(f"  {sc_name:<22} spawn_idx={idx},{note}")
 

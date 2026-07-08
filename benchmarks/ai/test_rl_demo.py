@@ -10,8 +10,15 @@ import pytest
 from pathlib import Path
 
 from src.ai.inference.rl_demo import (
-    load_model, run_episode, _add_hud, record_episode, _draw_route_map_card,
-    _clear_spawn_area, _EVAL_CLEAR_RADIUS_M, pick_best_checkpoint, _draw_minimap,
+    load_model,
+    run_episode,
+    _add_hud,
+    record_episode,
+    _draw_route_map_card,
+    _clear_spawn_area,
+    _EVAL_CLEAR_RADIUS_M,
+    pick_best_checkpoint,
+    _draw_minimap,
     _draw_bboxes,
 )
 from src.interfaces.navigation_types import Route, Waypoint
@@ -43,7 +50,9 @@ def _env(*steps):
 
 
 def test_run_episode_returns_three_tuple():
-    total_reward, steps, reason = run_episode(_model(), _env((0.1, False, False)), max_steps=1)
+    total_reward, steps, reason = run_episode(
+        _model(), _env((0.1, False, False)), max_steps=1
+    )
     assert isinstance(total_reward, float)
     assert isinstance(steps, int)
     assert reason in {"collision", "truncated", "max_steps"}
@@ -101,9 +110,13 @@ def test_run_episode_stops_at_max_steps():
 
 def _hud_info(**kwargs):
     base = {
-        "episode": 1, "step": 10, "max_steps": 100,
-        "reward": 0.5, "total_reward": 3.2,
-        "speed_kmh": 30.0, "action": [0.0, 0.3, 0.0],
+        "episode": 1,
+        "step": 10,
+        "max_steps": 100,
+        "reward": 0.5,
+        "total_reward": 3.2,
+        "speed_kmh": 30.0,
+        "action": [0.0, 0.3, 0.0],
         "params": {"lr": "3e-4"},
     }
     return {**base, **kwargs}
@@ -169,16 +182,22 @@ def test_record_episode_passes_spawn_idx_as_reset_options(tmp_path):
     # reset_seed, breaking demo reproducibility.
     env = _recording_env()
     output = str(tmp_path / "demo.mp4")
-    record_episode(_model(), env, output_path=output, fps=5, max_steps=3,
-                    reset_seed=42, spawn_idx=0)
+    record_episode(
+        _model(),
+        env,
+        output_path=output,
+        fps=5,
+        max_steps=3,
+        reset_seed=42,
+        spawn_idx=0,
+    )
     env.reset.assert_called_with(seed=42, options={"spawn_idx": 0})
 
 
 def test_record_episode_reset_options_none_without_spawn_idx(tmp_path):
     env = _recording_env()
     output = str(tmp_path / "demo.mp4")
-    record_episode(_model(), env, output_path=output, fps=5, max_steps=3,
-                    reset_seed=42)
+    record_episode(_model(), env, output_path=output, fps=5, max_steps=3, reset_seed=42)
     env.reset.assert_called_with(seed=42, options=None)
 
 
@@ -258,8 +277,10 @@ def test_draw_minimap_narrow_frame_is_noop():
 
 
 def test_draw_minimap_no_destination_does_not_crash():
-    waypoints = [Waypoint(x=0.0, y=0.0, z=0.0, yaw_deg=0.0),
-                 Waypoint(x=10.0, y=5.0, z=0.0, yaw_deg=0.0)]
+    waypoints = [
+        Waypoint(x=0.0, y=0.0, z=0.0, yaw_deg=0.0),
+        Waypoint(x=10.0, y=5.0, z=0.0, yaw_deg=0.0),
+    ]
     route = Route(waypoints=waypoints, destination=None)
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
     ego_location = Mock(x=5.0, y=2.0)
@@ -285,8 +306,9 @@ def test_record_episode_writes_route_map_card_frames(tmp_path, monkeypatch):
     env = _recording_env()
     env.route = _route([(0.0, 0.0), (10.0, 5.0), (20.0, 0.0)])
     output = str(tmp_path / "demo.mp4")
-    record_episode(_model(), env, output_path=output, fps=10, max_steps=2,
-                    route_map_seconds=1.0)
+    record_episode(
+        _model(), env, output_path=output, fps=10, max_steps=2, route_map_seconds=1.0
+    )
 
     # fps(10) * route_map_seconds(1.0) = 10 map-card frames + 2 driving frames (max_steps=2)
     assert len(written_frames) == 10 + 2
@@ -310,8 +332,9 @@ def test_record_episode_no_route_attribute_skips_map_card(tmp_path, monkeypatch)
     env = _recording_env()
     del env.route  # simulate a gym.Env with no `.route` attribute (e.g. not a CarlaEnv)
     output = str(tmp_path / "demo.mp4")
-    record_episode(_model(), env, output_path=output, fps=10, max_steps=2,
-                    route_map_seconds=1.0)
+    record_episode(
+        _model(), env, output_path=output, fps=10, max_steps=2, route_map_seconds=1.0
+    )
 
     assert len(written_frames) == 2  # only the 2 driving frames, no map card
 
@@ -350,8 +373,8 @@ def _clear_area_env(ego_id=1):
 def _wire_actors(env, vehicles=None, walkers=None):
     """Wires env.world.get_actors().filter(pattern) to return `vehicles` for
     a vehicle.* pattern and `walkers` for a walker.pedestrian.* pattern."""
-    env.world.get_actors.return_value.filter.side_effect = (
-        lambda pattern: list(walkers or []) if "walker" in pattern else list(vehicles or [])
+    env.world.get_actors.return_value.filter.side_effect = lambda pattern: (
+        list(walkers or []) if "walker" in pattern else list(vehicles or [])
     )
 
 
@@ -375,7 +398,10 @@ def test_clear_spawn_area_relocates_actor_within_radius():
     _wire_actors(env, vehicles=[near_vehicle])
     near_spawn = _spawn_at(dist=10.0)
     far_spawn = _spawn_at(dist=200.0)
-    env.world.get_map.return_value.get_spawn_points.return_value = [near_spawn, far_spawn]
+    env.world.get_map.return_value.get_spawn_points.return_value = [
+        near_spawn,
+        far_spawn,
+    ]
 
     _clear_spawn_area(env, radius_m=20.0)
 
@@ -387,7 +413,9 @@ def test_clear_spawn_area_leaves_distant_actor_untouched():
     env, _ = _clear_area_env()
     far_vehicle = _actor_at(2, dist=25.0)
     _wire_actors(env, vehicles=[far_vehicle])
-    env.world.get_map.return_value.get_spawn_points.return_value = [_spawn_at(dist=100.0)]
+    env.world.get_map.return_value.get_spawn_points.return_value = [
+        _spawn_at(dist=100.0)
+    ]
 
     _clear_spawn_area(env, radius_m=20.0)
 
@@ -399,7 +427,10 @@ def test_clear_spawn_area_relocates_nearby_walker():
     near_walker = _actor_at(3, dist=1.0)
     _wire_actors(env, walkers=[near_walker])
     far_spawn = _spawn_at(dist=200.0)
-    env.world.get_map.return_value.get_spawn_points.return_value = [_spawn_at(dist=10.0), far_spawn]
+    env.world.get_map.return_value.get_spawn_points.return_value = [
+        _spawn_at(dist=10.0),
+        far_spawn,
+    ]
 
     _clear_spawn_area(env, radius_m=20.0)
 
@@ -410,7 +441,9 @@ def test_clear_spawn_area_excludes_ego_from_nearby_actors():
     env, _ = _clear_area_env(ego_id=1)
     ego_as_actor = _actor_at(1, dist=0.0)  # would be "within radius" of itself
     _wire_actors(env, vehicles=[ego_as_actor])
-    env.world.get_map.return_value.get_spawn_points.return_value = [_spawn_at(dist=100.0)]
+    env.world.get_map.return_value.get_spawn_points.return_value = [
+        _spawn_at(dist=100.0)
+    ]
 
     _clear_spawn_area(env, radius_m=20.0)
 
@@ -420,7 +453,9 @@ def test_clear_spawn_area_excludes_ego_from_nearby_actors():
 def test_clear_spawn_area_no_nearby_actors_is_noop():
     env, _ = _clear_area_env()
     _wire_actors(env, vehicles=[], walkers=[])
-    env.world.get_map.return_value.get_spawn_points.return_value = [_spawn_at(dist=100.0)]
+    env.world.get_map.return_value.get_spawn_points.return_value = [
+        _spawn_at(dist=100.0)
+    ]
 
     _clear_spawn_area(env, radius_m=20.0)
 
@@ -456,15 +491,19 @@ def _candidate(successes, off_route_pcts):
 def test_pick_best_checkpoint_prefers_more_successes():
     all_results = {
         "0060k": _candidate(successes=1, off_route_pcts=[0.5, 0.5]),
-        "0120k": _candidate(successes=2, off_route_pcts=[0.9, 0.9]),  # worse off_route, more successes
+        "0120k": _candidate(
+            successes=2, off_route_pcts=[0.9, 0.9]
+        ),  # worse off_route, more successes
     }
     assert pick_best_checkpoint(all_results) == "0120k"
 
 
 def test_pick_best_checkpoint_breaks_ties_on_lower_off_route_pct():
     all_results = {
-        "0060k": _candidate(successes=1, off_route_pcts=[0.5, 0.3]),   # mean 0.4
-        "0120k": _candidate(successes=1, off_route_pcts=[0.1, 0.1]),   # mean 0.1 -- lower, wins
+        "0060k": _candidate(successes=1, off_route_pcts=[0.5, 0.3]),  # mean 0.4
+        "0120k": _candidate(
+            successes=1, off_route_pcts=[0.1, 0.1]
+        ),  # mean 0.1 -- lower, wins
     }
     assert pick_best_checkpoint(all_results) == "0120k"
 
@@ -488,8 +527,14 @@ def test_pick_best_checkpoint_all_phase2_falls_back_to_off_route_pct():
 
 
 def test_draw_bboxes_draws_something():
-    objects = [DetectedObject(class_name=ObjectClass.VEHICLE, bbox=(10, 10, 50, 50),
-                               confidence=0.9, distance_m=12.0)]
+    objects = [
+        DetectedObject(
+            class_name=ObjectClass.VEHICLE,
+            bbox=(10, 10, 50, 50),
+            confidence=0.9,
+            distance_m=12.0,
+        )
+    ]
     frame = np.zeros((200, 300, 3), dtype=np.uint8)
     before = frame.copy()
 
@@ -508,11 +553,21 @@ def test_draw_bboxes_empty_list_is_noop():
 
 
 def test_draw_bboxes_handles_every_color_class_without_crashing():
-    classes = [ObjectClass.VEHICLE, ObjectClass.WALKER, ObjectClass.RED_LIGHT,
-               ObjectClass.YELLOW_LIGHT, ObjectClass.GREEN_LIGHT, ObjectClass.STOP,
-               ObjectClass.YIELD, ObjectClass.SPEED_30, ObjectClass.UNKNOWN]
+    classes = [
+        ObjectClass.VEHICLE,
+        ObjectClass.WALKER,
+        ObjectClass.RED_LIGHT,
+        ObjectClass.YELLOW_LIGHT,
+        ObjectClass.GREEN_LIGHT,
+        ObjectClass.STOP,
+        ObjectClass.YIELD,
+        ObjectClass.SPEED_30,
+        ObjectClass.UNKNOWN,
+    ]
     objects = [
-        DetectedObject(class_name=c, bbox=(5, 5, 40, 40), confidence=0.8, distance_m=10.0)
+        DetectedObject(
+            class_name=c, bbox=(5, 5, 40, 40), confidence=0.8, distance_m=10.0
+        )
         for c in classes
     ]
     frame = np.zeros((200, 300, 3), dtype=np.uint8)
@@ -521,8 +576,14 @@ def test_draw_bboxes_handles_every_color_class_without_crashing():
 
 
 def test_draw_bboxes_no_distance_omits_suffix():
-    objects = [DetectedObject(class_name=ObjectClass.VEHICLE, bbox=(10, 10, 50, 50),
-                               confidence=0.9, distance_m=None)]
+    objects = [
+        DetectedObject(
+            class_name=ObjectClass.VEHICLE,
+            bbox=(10, 10, 50, 50),
+            confidence=0.9,
+            distance_m=None,
+        )
+    ]
     frame = np.zeros((200, 300, 3), dtype=np.uint8)
 
     _draw_bboxes(frame, objects, cv2)  # must not raise formatting None as a float
@@ -533,8 +594,14 @@ def test_record_episode_calls_draw_bboxes_with_last_objects(tmp_path, monkeypatc
     monkeypatch.setattr("src.ai.inference.rl_demo._draw_bboxes", spy)
 
     env = _recording_env()
-    env.last_objects = [DetectedObject(class_name=ObjectClass.VEHICLE, bbox=(0, 0, 5, 5),
-                                        confidence=0.5, distance_m=None)]
+    env.last_objects = [
+        DetectedObject(
+            class_name=ObjectClass.VEHICLE,
+            bbox=(0, 0, 5, 5),
+            confidence=0.5,
+            distance_m=None,
+        )
+    ]
     output = str(tmp_path / "demo.mp4")
     record_episode(_model(), env, output_path=output, fps=5, max_steps=2)
 

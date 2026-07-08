@@ -33,7 +33,12 @@ def test_pilotnet_output_shapes_and_ranges():
 
 def test_pilotnet_trainable():
     """Sanity: the model can fit a tiny synthetic dataset (loss decreases)."""
-    from src.ai.phase0.config import IMAGE_CHANNELS, IMAGE_HEIGHT, IMAGE_WIDTH, LOSS_WEIGHTS
+    from src.ai.phase0.config import (
+        IMAGE_CHANNELS,
+        IMAGE_HEIGHT,
+        IMAGE_WIDTH,
+        LOSS_WEIGHTS,
+    )
     from src.ai.phase0.models.v1_pilotnet_speed import build_pilotnet_speed
 
     tf.keras.utils.set_random_seed(0)

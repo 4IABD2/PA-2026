@@ -25,8 +25,16 @@ from utils import LaneDetector, draw_overlay, ROI_VERTICES
 
 
 def _label(img, text):
-    cv2.putText(img, text, (12, 28), cv2.FONT_HERSHEY_SIMPLEX,
-                0.8, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(
+        img,
+        text,
+        (12, 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
     return img
 
 
@@ -43,11 +51,11 @@ def _windows_panel(detector, masked, debug):
     if debug is not None:
         if debug.get("left_px") is not None:
             xs, ys = debug["left_px"]
-            panel[ys, xs] = (0, 0, 255)          # gauche = rouge
+            panel[ys, xs] = (0, 0, 255)  # gauche = rouge
         if debug.get("right_px") is not None:
             xs, ys = debug["right_px"]
-            panel[ys, xs] = (255, 0, 0)          # droite = bleu
-        for (x_low, y_low, x_high, y_high, side) in debug.get("windows", []):
+            panel[ys, xs] = (255, 0, 0)  # droite = bleu
+        for x_low, y_low, x_high, y_high, side in debug.get("windows", []):
             col = (0, 255, 0)
             cv2.rectangle(panel, (x_low, y_low), (x_high, y_high), col, 1)
     return _label(panel, "sliding windows")
@@ -69,8 +77,9 @@ def process_image(detector, path, out_dir, reset_each=True):
     original = _label(frame.copy(), "original")
     mask_panel = _mask_panel(detector, masked)
     win_panel = _windows_panel(detector, masked, result["debug"])
-    overlay = _label(draw_overlay(frame, result, labels=None),
-                     f"overlay [{result['status']}]")
+    overlay = _label(
+        draw_overlay(frame, result, labels=None), f"overlay [{result['status']}]"
+    )
 
     panel = np.hstack([original, mask_panel, win_panel, overlay])
 
@@ -84,10 +93,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("path", help="image .png ou dossier de frames")
     parser.add_argument("--out", default="debug_out", help="dossier de sortie")
-    parser.add_argument("--limit", type=int, default=0,
-                        help="si dossier : nombre max d'images (0 = toutes)")
-    parser.add_argument("--sequence", action="store_true",
-                        help="traite le dossier comme une video (garde l'historique entre frames)")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="si dossier : nombre max d'images (0 = toutes)",
+    )
+    parser.add_argument(
+        "--sequence",
+        action="store_true",
+        help="traite le dossier comme une video (garde l'historique entre frames)",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -95,7 +111,7 @@ def main():
     if os.path.isdir(args.path):
         paths = sorted(glob.glob(os.path.join(args.path, "*.png")))
         if args.limit > 0:
-            paths = paths[:args.limit]
+            paths = paths[: args.limit]
     else:
         paths = [args.path]
 

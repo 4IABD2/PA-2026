@@ -22,21 +22,33 @@ if TYPE_CHECKING:
 #         lane_offset_norm, is_on_road,
 #         nearest_vehicle_norm, red_light_distance_norm, speed_limit_norm,
 #         nearest_walker_norm, nearest_stop_yield_norm]
-_OBS_LOW  = np.array([0., 0., 0., 0., -1., 0., 0., 0., 0., 0., 0.], dtype=np.float32)
-_OBS_HIGH = np.array([1., 1., 1., 1.,  1., 1., 1., 1., 1., 1., 1.], dtype=np.float32)
+_OBS_LOW = np.array(
+    [0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32
+)
+_OBS_HIGH = np.array(
+    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32
+)
 
-_MAX_SPEED_KMH         = 90.0
-_MAX_OBSTACLE_M        = 50.0
-_WARMUP_TICKS          = 5     # ticks after teleport so physics settles and sensors fill
-_OFF_ROUTE_M           = 15.0  # metres from nearest route waypoint before off_route penalty fires
-_ROUTE_GRACE_STEPS     = 20    # steps after reset where off-route is not penalised (car joins route)
+_MAX_SPEED_KMH = 90.0
+_MAX_OBSTACLE_M = 50.0
+_WARMUP_TICKS = 5  # ticks after teleport so physics settles and sensors fill
+_OFF_ROUTE_M = 15.0  # metres from nearest route waypoint before off_route penalty fires
+_ROUTE_GRACE_STEPS = (
+    20  # steps after reset where off-route is not penalised (car joins route)
+)
 _DEFAULT_SPEED_LIMIT_KMH = 50.0
 
-_SPAWN_SAFETY_MIN_DIST_M   = 10.0  # minimum clearance from any NPC/pedestrian for a random spawn to be "safe"
-_SPAWN_SAFETY_MAX_ATTEMPTS = 10    # random spawn draws tried before falling back to the best one seen
+_SPAWN_SAFETY_MIN_DIST_M = (
+    10.0  # minimum clearance from any NPC/pedestrian for a random spawn to be "safe"
+)
+_SPAWN_SAFETY_MAX_ATTEMPTS = (
+    10  # random spawn draws tried before falling back to the best one seen
+)
 
-_DEST_REACHED_RADIUS_M    = 15.0  # matches _OFF_ROUTE_M's "close enough" scale
-_MIN_TRAVEL_FOR_DEST_M    = 25.0  # matches benchmark.py's _MIN_DIST_M "must have actually driven" convention
+_DEST_REACHED_RADIUS_M = 15.0  # matches _OFF_ROUTE_M's "close enough" scale
+_MIN_TRAVEL_FOR_DEST_M = (
+    25.0  # matches benchmark.py's _MIN_DIST_M "must have actually driven" convention
+)
 
 _SPEED_LIMIT_KMH: dict[ObjectClass, float] = {
     ObjectClass.SPEED_30: 30.0,
@@ -52,8 +64,11 @@ _STOP_YIELD_VIOLATION_SPEED_KMH = 5.0
 
 
 def _check_violation(
-    distance_norm: float, speed_kmh: float, flagged: bool,
-    dist_threshold_m: float, speed_threshold_kmh: float,
+    distance_norm: float,
+    speed_kmh: float,
+    flagged: bool,
+    dist_threshold_m: float,
+    speed_threshold_kmh: float,
 ) -> tuple[bool, bool]:
     """Returns (violation_just_happened, new_flagged_state).
 
@@ -73,7 +88,8 @@ def _nearest_distance_norm(objects: list, classes: tuple) -> float:
     Returns 1.0 (== _MAX_OBSTACLE_M or further away) if none is detected.
     """
     dists = [
-        o.distance_m for o in objects
+        o.distance_m
+        for o in objects
         if o.class_name in classes and o.distance_m is not None
     ]
     return float(np.clip(min(dists) / _MAX_OBSTACLE_M, 0.0, 1.0)) if dists else 1.0
@@ -101,7 +117,9 @@ class CarlaEnv(gym.Env):
         self._lane_estimate = lane_estimate_fn
         self.max_episode_steps = max_episode_steps
 
-        self.observation_space = spaces.Box(low=_OBS_LOW, high=_OBS_HIGH, dtype=np.float32)
+        self.observation_space = spaces.Box(
+            low=_OBS_LOW, high=_OBS_HIGH, dtype=np.float32
+        )
         self.action_space = spaces.Box(
             low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
             high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
@@ -111,31 +129,41 @@ class CarlaEnv(gym.Env):
         self._collision_speed_kmh: float = 0.0
         self._red_light_flagged: bool = False
         self._stop_yield_flagged: bool = False
-        self._episode_reward_components: dict[str, float] = {k: 0.0 for k in REWARD_COMPONENT_KEYS}
+        self._episode_reward_components: dict[str, float] = {
+            k: 0.0 for k in REWARD_COMPONENT_KEYS
+        }
         self._episode_start_location: "carla.Location | None" = None
         self._prev_steer: float = 0.0
         self._last_image: np.ndarray | None = None
         self._step_count: int = 0
-        self._route_idx: int = 0       # sliding pointer into route.waypoints for efficient off-route check
+        self._route_idx: int = (
+            0  # sliding pointer into route.waypoints for efficient off-route check
+        )
         self._current_speed_limit_kmh: float = _DEFAULT_SPEED_LIMIT_KMH
-        self.off_route_count: int = 0  # steps spent off-route this episode (readable by eval_model)
-        self.last_objects: list = []  # most recent perceive() result (readable by rl_demo for bbox overlays)
+        self.off_route_count: int = (
+            0  # steps spent off-route this episode (readable by eval_model)
+        )
+        self.last_objects: list = (
+            []
+        )  # most recent perceive() result (readable by rl_demo for bbox overlays)
 
         collision_sensor.listen(self._on_collision)
         camera.listen(self._on_camera)
 
-    def reset(self, *, seed: int | None = None, options: dict | None = None) -> tuple[np.ndarray, dict]:
+    def reset(
+        self, *, seed: int | None = None, options: dict | None = None
+    ) -> tuple[np.ndarray, dict]:
         super().reset(seed=seed)
         spawn_idx = (options or {}).get("spawn_idx")
         self._teleport_to_spawn(spawn_idx)
-        if hasattr(self.nav, 'index_way'):
+        if hasattr(self.nav, "index_way"):
             self.nav.index_way = 0
         # Replan route from new position so nav commands are correct at every
         # spawn. Must run unconditionally: during normal training, SB3 calls
         # reset() with no options (spawn_idx=None) after every episode, so
         # skipping this when spawn_idx is None left the route — and thus every
         # nav command fed to the policy — stale from the very first episode.
-        if hasattr(self.nav, 'plan'):
+        if hasattr(self.nav, "plan"):
             try:
                 spawn_pts = self.world.get_map().get_spawn_points()
                 dest = spawn_pts[-1].location
@@ -168,17 +196,25 @@ class CarlaEnv(gym.Env):
 
         obs = self._get_obs()
         speed_kmh = self._speed_kmh()
-        off_route = self._is_off_route() if self._step_count > _ROUTE_GRACE_STEPS else False
+        off_route = (
+            self._is_off_route() if self._step_count > _ROUTE_GRACE_STEPS else False
+        )
         if off_route:
             self.off_route_count += 1
 
         red_light_violation, self._red_light_flagged = _check_violation(
-            float(obs[7]), speed_kmh, self._red_light_flagged,
-            _RED_LIGHT_VIOLATION_DIST_M, _RED_LIGHT_VIOLATION_SPEED_KMH,
+            float(obs[7]),
+            speed_kmh,
+            self._red_light_flagged,
+            _RED_LIGHT_VIOLATION_DIST_M,
+            _RED_LIGHT_VIOLATION_SPEED_KMH,
         )
         stop_yield_violation, self._stop_yield_flagged = _check_violation(
-            float(obs[10]), speed_kmh, self._stop_yield_flagged,
-            _STOP_YIELD_VIOLATION_DIST_M, _STOP_YIELD_VIOLATION_SPEED_KMH,
+            float(obs[10]),
+            speed_kmh,
+            self._stop_yield_flagged,
+            _STOP_YIELD_VIOLATION_DIST_M,
+            _STOP_YIELD_VIOLATION_SPEED_KMH,
         )
 
         steer_delta = abs(steer - self._prev_steer)
@@ -186,7 +222,9 @@ class CarlaEnv(gym.Env):
 
         reward, terminated, components = compute_reward(
             speed_kmh=speed_kmh,
-            center_offset=float(obs[4]),    # lane_offset_norm, from Karim's lane detection
+            center_offset=float(
+                obs[4]
+            ),  # lane_offset_norm, from Karim's lane detection
             is_on_road=bool(obs[5] > 0.5),  # from Karim's lane detection
             collision=self._collision_flag,
             off_route=off_route,
@@ -204,11 +242,17 @@ class CarlaEnv(gym.Env):
             self._episode_reward_components[key] += value
 
         truncated = self._step_count >= self.max_episode_steps
-        info = dict(self._episode_reward_components) if (terminated or truncated) else {}
+        info = (
+            dict(self._episode_reward_components) if (terminated or truncated) else {}
+        )
         return obs, reward, terminated, truncated, info
 
     def _get_obs(self) -> np.ndarray:
-        image = self._last_image if self._last_image is not None else np.zeros((720, 1280, 3), dtype=np.uint8)
+        image = (
+            self._last_image
+            if self._last_image is not None
+            else np.zeros((720, 1280, 3), dtype=np.uint8)
+        )
 
         # Speed (onboard sensor)
         speed_norm = float(np.clip(self._speed_kmh() / _MAX_SPEED_KMH, 0.0, 1.0))
@@ -216,10 +260,12 @@ class CarlaEnv(gym.Env):
         # Navigation command from Victor's GPS
         v_transform = self.ego.get_transform()
         v_loc = v_transform.location
-        vehicle_wp = Waypoint(x=v_loc.x, y=v_loc.y, z=v_loc.z, yaw_deg=v_transform.rotation.yaw)
+        vehicle_wp = Waypoint(
+            x=v_loc.x, y=v_loc.y, z=v_loc.z, yaw_deg=v_transform.rotation.yaw
+        )
         cmd = self.nav.next_command(vehicle_wp, self.route)
-        cmd_left     = 1.0 if cmd == HighLevelCommand.LEFT     else 0.0
-        cmd_right    = 1.0 if cmd == HighLevelCommand.RIGHT    else 0.0
+        cmd_left = 1.0 if cmd == HighLevelCommand.LEFT else 0.0
+        cmd_right = 1.0 if cmd == HighLevelCommand.RIGHT else 0.0
         cmd_straight = 1.0 if cmd == HighLevelCommand.STRAIGHT else 0.0
 
         # Karim: lateral offset, on-road status (lane heading angle is not fed to the model)
@@ -232,20 +278,35 @@ class CarlaEnv(gym.Env):
         self.last_objects = objects
 
         nearest_vehicle_norm = _nearest_distance_norm(objects, (ObjectClass.VEHICLE,))
-        red_light_distance_norm = _nearest_distance_norm(objects, (ObjectClass.RED_LIGHT,))
+        red_light_distance_norm = _nearest_distance_norm(
+            objects, (ObjectClass.RED_LIGHT,)
+        )
         nearest_walker_norm = _nearest_distance_norm(objects, (ObjectClass.WALKER,))
-        nearest_stop_yield_norm = _nearest_distance_norm(objects, (ObjectClass.STOP, ObjectClass.YIELD))
+        nearest_stop_yield_norm = _nearest_distance_norm(
+            objects, (ObjectClass.STOP, ObjectClass.YIELD)
+        )
 
         speed_signs = [o for o in objects if o.class_name in _SPEED_LIMIT_KMH]
         if speed_signs:
             self._current_speed_limit_kmh = _SPEED_LIMIT_KMH[speed_signs[0].class_name]
-        speed_limit_norm = float(np.clip(self._current_speed_limit_kmh / _MAX_SPEED_KMH, 0.0, 1.0))
+        speed_limit_norm = float(
+            np.clip(self._current_speed_limit_kmh / _MAX_SPEED_KMH, 0.0, 1.0)
+        )
 
         return np.array(
-            [speed_norm, cmd_left, cmd_right, cmd_straight,
-             lane_offset_norm, is_on_road,
-             nearest_vehicle_norm, red_light_distance_norm, speed_limit_norm,
-             nearest_walker_norm, nearest_stop_yield_norm],
+            [
+                speed_norm,
+                cmd_left,
+                cmd_right,
+                cmd_straight,
+                lane_offset_norm,
+                is_on_road,
+                nearest_vehicle_norm,
+                red_light_distance_norm,
+                speed_limit_norm,
+                nearest_walker_norm,
+                nearest_stop_yield_norm,
+            ],
             dtype=np.float32,
         )
 
@@ -264,6 +325,7 @@ class CarlaEnv(gym.Env):
         self.ego.set_transform(spawn)
         try:
             from carla import Vector3D  # noqa: PLC0415
+
             self.ego.set_target_velocity(Vector3D(0, 0, 0))
         except ModuleNotFoundError:
             self.ego.set_target_velocity(None)
@@ -305,6 +367,7 @@ class CarlaEnv(gym.Env):
     def _apply_control(self, steer: float, throttle: float, brake: float) -> None:
         try:
             from carla import VehicleControl  # noqa: PLC0415
+
             control = VehicleControl(throttle=throttle, steer=steer, brake=brake)
         except ModuleNotFoundError:
             control = None  # tests: ego is a Mock, accepts any argument
@@ -343,7 +406,11 @@ class CarlaEnv(gym.Env):
         # len(waypoints), so a route with a valid destination but no waypoints
         # (the common case right after a fresh plan()) would otherwise be
         # incorrectly treated as "no route".
-        if self.route is None or self.route.destination is None or self._episode_start_location is None:
+        if (
+            self.route is None
+            or self.route.destination is None
+            or self._episode_start_location is None
+        ):
             return False
         loc = self.ego.get_transform().location
         dest = self.route.destination
@@ -352,7 +419,10 @@ class CarlaEnv(gym.Env):
             (loc.x - self._episode_start_location.x) ** 2
             + (loc.y - self._episode_start_location.y) ** 2
         )
-        return dist_to_dest < _DEST_REACHED_RADIUS_M and dist_travelled >= _MIN_TRAVEL_FOR_DEST_M
+        return (
+            dist_to_dest < _DEST_REACHED_RADIUS_M
+            and dist_travelled >= _MIN_TRAVEL_FOR_DEST_M
+        )
 
     def _is_off_route(self) -> bool:
         """True if ego is more than _OFF_ROUTE_M metres from the nearest route waypoint.
@@ -376,7 +446,7 @@ class CarlaEnv(gym.Env):
                 min_dist_sq = d_sq
                 min_idx = i
         self._route_idx = min_idx
-        return min_dist_sq > _OFF_ROUTE_M ** 2
+        return min_dist_sq > _OFF_ROUTE_M**2
 
     def _on_collision(self, event) -> None:
         self._collision_flag = True
