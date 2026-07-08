@@ -12,7 +12,9 @@ import carla
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Load a specific CARLA map on the server.")
+    parser = argparse.ArgumentParser(
+        description="Load a specific CARLA map on the server."
+    )
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=2000)
     parser.add_argument("--town", required=True, help="e.g. Town02")

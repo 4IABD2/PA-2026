@@ -30,13 +30,13 @@ WEIGHTS_URL = "https://github.com/CAIC-AD/YOLOPv2/releases/download/V0.0.1/yolop
 WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
 WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, "yolopv2.pt")
 
-INF_W, INF_H = 640, 480          # entree du modele (multiple de 32, ratio 4:3)
-MIN_LANE_W = 120                 # largeur mini (px) d'une voie ego plausible en bas
-MAX_LANE_FRAC = 0.55             # largeur maxi (frac w) d'une voie ego
-EGO_BAND_FRAC = 0.90             # bande basse pour identifier les lignes ego
-CLUSTER_GAP = 20                 # ecart (px) qui separe deux lignes distinctes
+INF_W, INF_H = 640, 480  # entree du modele (multiple de 32, ratio 4:3)
+MIN_LANE_W = 120  # largeur mini (px) d'une voie ego plausible en bas
+MAX_LANE_FRAC = 0.55  # largeur maxi (frac w) d'une voie ego
+EGO_BAND_FRAC = 0.90  # bande basse pour identifier les lignes ego
+CLUSTER_GAP = 20  # ecart (px) qui separe deux lignes distinctes
 ALIGN_DEADZONE = 0.06
-LOOKAHEAD_FRAC = 0.50            # point vise : fraction du bas vers le haut (0=bas, 1=haut)
+LOOKAHEAD_FRAC = 0.50  # point vise : fraction du bas vers le haut (0=bas, 1=haut)
 
 
 def _ensure_weights():
@@ -50,7 +50,7 @@ def _ensure_weights():
 
 def _lane_clusters(track, w, h):
     """Centres des lignes (clusters de colonnes) sur une bande basse de l'image."""
-    band = track[int(EGO_BAND_FRAC * h):, :]
+    band = track[int(EGO_BAND_FRAC * h) :, :]
     cols = np.where(band.sum(axis=0) > 0)[0]
     if len(cols) == 0:
         return np.array([])
@@ -91,14 +91,21 @@ def build_lane_result(lanes, drivable, w, h):
     bords de la voie ego en bas (paire la plus centree sur la voiture), on suit
     chacun vers le haut puis on ajuste une droite par cote (robuste aux
     pointilles). Partage modele pre-entraine / fine-tune."""
-    result = {"status": "NO_LANE", "drivable": drivable, "lanes": lanes,
-              "center_line": None, "trajectory": None,
-              "offset": 0.0, "direction": "NONE"}
+    result = {
+        "status": "NO_LANE",
+        "drivable": drivable,
+        "lanes": lanes,
+        "center_line": None,
+        "trajectory": None,
+        "offset": 0.0,
+        "direction": "NONE",
+    }
 
     # relie verticalement les pointilles pour le SUIVI (l'affichage 'lanes'
     # garde le masque original)
-    track = cv2.morphologyEx(lanes, cv2.MORPH_CLOSE,
-                             cv2.getStructuringElement(cv2.MORPH_RECT, (3, 25)))
+    track = cv2.morphologyEx(
+        lanes, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 25))
+    )
 
     # 1. bords de la voie ego (paire de lignes la plus centree sur la voiture)
     ego = _ego_init(track, w, h)
@@ -119,15 +126,19 @@ def build_lane_result(lanes, drivable, w, h):
             cl = xs[np.abs(xs - left_x) < win]
             cr = xs[np.abs(xs - right_x) < win]
             if len(cl):
-                left_x = float(np.median(cl)); lxs.append(left_x); lys.append(float(y))
+                left_x = float(np.median(cl))
+                lxs.append(left_x)
+                lys.append(float(y))
             if len(cr):
-                right_x = float(np.median(cr)); rxs.append(right_x); rys.append(float(y))
+                right_x = float(np.median(cr))
+                rxs.append(right_x)
+                rys.append(float(y))
     if len(lxs) < 4 or len(rxs) < 4:
         return result
 
-    fl = np.polyfit(lys, lxs, 1)               # droite par cote (degre 1, stable)
+    fl = np.polyfit(lys, lxs, 1)  # droite par cote (degre 1, stable)
     fr = np.polyfit(rys, rxs, 1)
-    ys_line = np.linspace(h - 1, int(0.45 * h), 30)        # du bas vers le haut
+    ys_line = np.linspace(h - 1, int(0.45 * h), 30)  # du bas vers le haut
     cxs = 0.5 * (np.polyval(fl, ys_line) + np.polyval(fr, ys_line))
     center = np.stack([cxs, ys_line], axis=1)
     result["center_line"] = center.astype(np.int32)
@@ -135,19 +146,28 @@ def build_lane_result(lanes, drivable, w, h):
     idx = int(np.clip(round(LOOKAHEAD_FRAC * (len(center) - 1)), 0, len(center) - 1))
     aim_x, aim_y = center[idx]
     offset = (aim_x - w / 2.0) / (w / 2.0)
-    direction = ("DROITE" if offset > ALIGN_DEADZONE else
-                 "GAUCHE" if offset < -ALIGN_DEADZONE else "ALIGNE")
+    direction = (
+        "DROITE"
+        if offset > ALIGN_DEADZONE
+        else "GAUCHE" if offset < -ALIGN_DEADZONE else "ALIGNE"
+    )
 
     car = np.array([w / 2.0, h - 1.0])
     target = np.array([aim_x, aim_y])
     ctrl = np.array([w / 2.0, (car[1] + target[1]) / 2.0])
     ts = np.linspace(0, 1, 16)[:, None]
-    bez = (1 - ts) ** 2 * car + 2 * (1 - ts) * ts * ctrl + ts ** 2 * target
+    bez = (1 - ts) ** 2 * car + 2 * (1 - ts) * ts * ctrl + ts**2 * target
     ahead = center[idx:]
     traj = np.vstack([bez, ahead]) if len(ahead) else bez
 
-    result.update({"status": "OK", "trajectory": traj.astype(np.int32),
-                   "offset": float(offset), "direction": direction})
+    result.update(
+        {
+            "status": "OK",
+            "trajectory": traj.astype(np.int32),
+            "offset": float(offset),
+            "direction": direction,
+        }
+    )
     return result
 
 
@@ -183,9 +203,15 @@ class LaneModel:
 
     def detect(self, bgr):
         h, w = bgr.shape[:2]
-        result = {"status": "NO_LANE", "drivable": None, "lanes": None,
-                  "center_line": None, "trajectory": None,
-                  "offset": 0.0, "direction": "NONE"}
+        result = {
+            "status": "NO_LANE",
+            "drivable": None,
+            "lanes": None,
+            "center_line": None,
+            "trajectory": None,
+            "offset": 0.0,
+            "direction": "NONE",
+        }
 
         with torch.no_grad():
             out = self.model(self._preprocess(bgr))
@@ -199,9 +225,9 @@ class LaneModel:
 # ---------------------------------------------------------------------------
 # Rendu
 # ---------------------------------------------------------------------------
-DRIVABLE_COLOR = (0, 180, 0)     # vert (zone roulable)
-LANE_COLOR = (0, 0, 255)         # rouge (lignes de voie)
-TRAJ_COLOR = (0, 255, 255)       # jaune (trajectoire)
+DRIVABLE_COLOR = (0, 180, 0)  # vert (zone roulable)
+LANE_COLOR = (0, 0, 255)  # rouge (lignes de voie)
+TRAJ_COLOR = (0, 255, 255)  # jaune (trajectoire)
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
@@ -228,19 +254,39 @@ def draw_overlay(bgr, result):
     overlay[0:80, 0:w] = cv2.addWeighted(bar, 0.4, np.zeros_like(bar), 0.6, 0)
     if status == "OK":
         d = result["direction"]
-        label, col = {"GAUCHE": ("<<<  ALLER A GAUCHE", (0, 200, 255)),
-                      "DROITE": ("ALLER A DROITE  >>>", (0, 200, 255)),
-                      "ALIGNE": ("ALIGNE  OK", (0, 255, 0))}[d]
+        label, col = {
+            "GAUCHE": ("<<<  ALLER A GAUCHE", (0, 200, 255)),
+            "DROITE": ("ALLER A DROITE  >>>", (0, 200, 255)),
+            "ALIGNE": ("ALIGNE  OK", (0, 255, 0)),
+        }[d]
         cv2.putText(overlay, label, (15, 38), FONT, 0.95, col, 2, cv2.LINE_AA)
-        cv2.putText(overlay, f"offset={result['offset']:+.2f}", (15, 70),
-                    FONT, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(
+            overlay,
+            f"offset={result['offset']:+.2f}",
+            (15, 70),
+            FONT,
+            0.7,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
     else:
-        cv2.putText(overlay, "VOIE NON DETECTEE", (15, 50), FONT, 1.0, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.putText(
+            overlay,
+            "VOIE NON DETECTEE",
+            (15, 50),
+            FONT,
+            1.0,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA,
+        )
     return overlay
 
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) > 1:
         m = LaneModel()
         img = cv2.imread(sys.argv[1])

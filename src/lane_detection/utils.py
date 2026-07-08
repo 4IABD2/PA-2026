@@ -1,4 +1,3 @@
-
 import numpy as np
 
 IMAGE_WIDTH = 800

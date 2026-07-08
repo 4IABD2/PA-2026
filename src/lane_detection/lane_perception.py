@@ -12,12 +12,14 @@ import torch
 try:
     from src.lane_detection.lane_geometry import lane_geometry
 except ImportError:
-    from lane_geometry import lane_geometry  # standalone execution from src/lane_detection/
+    from lane_geometry import (
+        lane_geometry,
+    )  # standalone execution from src/lane_detection/
 
 WEIGHTS_URL = "https://github.com/CAIC-AD/YOLOPv2/releases/download/V0.0.1/yolopv2.pt"
 WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
 WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, "yolopv2.pt")
-INF_W, INF_H = 640, 480   # model input size (multiple of 32, 4:3 ratio)
+INF_W, INF_H = 640, 480  # model input size (multiple of 32, 4:3 ratio)
 
 DRIVABLE_COLOR = (0, 180, 0)
 LANE_COLOR = (0, 0, 255)
@@ -69,7 +71,7 @@ class LaneDetector:
         """RGB image -> lane geometry dict (see lane_geometry)."""
         h, w = rgb.shape[:2]
         with torch.no_grad():
-            out = self.model(self._preprocess(rgb))     # (det, drivable_seg, lane_seg)
+            out = self.model(self._preprocess(rgb))  # (det, drivable_seg, lane_seg)
         drivable = self._mask(out[1], w, h)
         lanes = self._mask(out[2], w, h)
         return lane_geometry(lanes, drivable, w, h)
@@ -81,9 +83,9 @@ _DETECTOR = None
 
 def estimate(rgb, detector=None):
     """Input: RGB image. Output: (direction, angle, offset).
-       direction in {"GAUCHE","DROITE","ALIGNE","NONE"}; angle in degrees
-       (sign: <0 left, >0 right); offset = lateral position in [-1, 1]
-       (0 = lane centre, -1/+1 = left/right edge). Model loaded once (singleton)."""
+    direction in {"GAUCHE","DROITE","ALIGNE","NONE"}; angle in degrees
+    (sign: <0 left, >0 right); offset = lateral position in [-1, 1]
+    (0 = lane centre, -1/+1 = left/right edge). Model loaded once (singleton)."""
     global _DETECTOR
     if detector is None:
         if _DETECTOR is None:
@@ -116,25 +118,47 @@ def draw_overlay(bgr, result):
     overlay[0:80, 0:w] = cv2.addWeighted(bar, 0.4, np.zeros_like(bar), 0.6, 0)
     if status == "OK":
         d = result["direction"]
-        label, col = {"GAUCHE": ("<<<  TURN LEFT", (0, 200, 255)),
-                      "DROITE": ("TURN RIGHT  >>>", (0, 200, 255)),
-                      "ALIGNE": ("ALIGNED  OK", (0, 255, 0))}[d]
+        label, col = {
+            "GAUCHE": ("<<<  TURN LEFT", (0, 200, 255)),
+            "DROITE": ("TURN RIGHT  >>>", (0, 200, 255)),
+            "ALIGNE": ("ALIGNED  OK", (0, 255, 0)),
+        }[d]
         cv2.putText(overlay, label, (15, 38), FONT, 0.95, col, 2, cv2.LINE_AA)
-        cv2.putText(overlay, f"angle={result['angle']:+.1f} deg", (15, 70),
-                    FONT, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(
+            overlay,
+            f"angle={result['angle']:+.1f} deg",
+            (15, 70),
+            FONT,
+            0.7,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
     else:
-        cv2.putText(overlay, "LANE NOT DETECTED", (15, 50), FONT, 1.0, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.putText(
+            overlay,
+            "LANE NOT DETECTED",
+            (15, 50),
+            FONT,
+            1.0,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA,
+        )
     return overlay
 
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) > 1:
         bgr = cv2.imread(sys.argv[1])
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         det = LaneDetector()
         res = det.detect(rgb)
-        print("direction =", res["direction"], "| angle =", round(res["angle"], 1), "deg")
+        print(
+            "direction =", res["direction"], "| angle =", round(res["angle"], 1), "deg"
+        )
         cv2.imwrite("perception_out.png", draw_overlay(bgr, res))
         print("written: perception_out.png")
     else:

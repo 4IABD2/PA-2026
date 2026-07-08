@@ -10,7 +10,6 @@ import pytest
 
 from src.ai.training.run_manager import make_run_dir, save_params, plot_reward_curve
 
-
 # ---------------------------------------------------------------------------
 # make_run_dir
 # ---------------------------------------------------------------------------
@@ -31,6 +30,7 @@ def test_make_run_dir_name_contains_date(tmp_path):
     run_dir = make_run_dir(base=str(tmp_path))
     # name starts with YYYY-MM-DD
     import re
+
     assert re.match(r"\d{4}-\d{2}-\d{2}", run_dir.name)
 
 
@@ -61,6 +61,7 @@ def test_save_params_content_is_valid_json(tmp_path):
 def test_save_params_handles_non_serializable_values(tmp_path):
     def dummy_schedule(x):
         return x
+
     params = {"learning_rate": dummy_schedule, "gamma": 0.99}
     save_params(tmp_path, params)  # must not raise
     loaded = json.loads((tmp_path / "params.json").read_text())

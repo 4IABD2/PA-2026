@@ -64,13 +64,17 @@ def check_map(client: "carla.Client") -> None:
         return
 
     print(f"[WARN] Current map is '{current_map}', expected '{_EXPECTED_MAP}'.")
-    print("       The 13-scenario benchmark's spawn points only make sense on this map.")
+    print(
+        "       The 13-scenario benchmark's spawn points only make sense on this map."
+    )
     if _ask_yes_no(f"       Load {_EXPECTED_MAP} now?", default_yes=True):
         print(f"       Loading {_EXPECTED_MAP} (this can take a moment)...")
         client.load_world(_EXPECTED_MAP)
         print(f"[OK]   Map loaded: {_EXPECTED_MAP}")
     else:
-        print("[WARN] Continuing with the current map — benchmark results will be meaningless.")
+        print(
+            "[WARN] Continuing with the current map — benchmark results will be meaningless."
+        )
 
 
 def check_gpu() -> None:
@@ -80,8 +84,12 @@ def check_gpu() -> None:
         print(f"[OK]   GPU detected: {torch.cuda.get_device_name(0)}")
         return
 
-    print("[WARN] No GPU detected — YOLO, Depth Anything v2 and YOLOPv2 will all run on CPU.")
-    print("       This can make training 10-50x slower. Check your NVIDIA drivers / CUDA install.")
+    print(
+        "[WARN] No GPU detected — YOLO, Depth Anything v2 and YOLOPv2 will all run on CPU."
+    )
+    print(
+        "       This can make training 10-50x slower. Check your NVIDIA drivers / CUDA install."
+    )
     if not _ask_yes_no("       Continue anyway?", default_yes=False):
         sys.exit(1)
 
@@ -137,11 +145,16 @@ def main() -> None:
     tag = ask_tag()
 
     cmd = [
-        sys.executable, "scripts/run_rl_training.py",
-        "--timesteps", str(timesteps),
-        "--tag", tag,
-        "--host", args.host,
-        "--port", str(args.port),
+        sys.executable,
+        "scripts/run_rl_training.py",
+        "--timesteps",
+        str(timesteps),
+        "--tag",
+        tag,
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
     ]
     print(f"\nLaunching: {' '.join(cmd)}\n")
     subprocess.run(cmd, check=True)

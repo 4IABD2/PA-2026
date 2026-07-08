@@ -53,4 +53,3 @@ def cleanup_actors(world, camera, vehicle, original_settings):
 
     if world is not None and original_settings is not None:
         world.apply_settings(original_settings)
-

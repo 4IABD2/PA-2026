@@ -14,14 +14,9 @@ from utils import (
     IMAGE_WIDTH,
     IMAGE_HEIGHT,
 )
-from carla_integration import (
-    setup_world,
-    spawn_vehicle,
-    spawn_camera,
-    cleanup_actors
-)
+from carla_integration import setup_world, spawn_vehicle, spawn_camera, cleanup_actors
 
-DEFAULT_OUTPUT_DIR = ("../dataset/lane_dataset")
+DEFAULT_OUTPUT_DIR = "../dataset/lane_dataset"
 DEFAULT_NUM_FRAMES = 1000
 
 # Queue pour afficher les overlays en temps réel
@@ -56,7 +51,6 @@ def start_overlay_display():
 
 def stop_overlay_display():
     overlay_display_queue.put(None)
-
 
 
 def setup_directories(output_dir):
@@ -175,7 +169,9 @@ def generate_dataset(output_dir, num_frames):
             # pour pouvoir filtrer ces frames plus tard si besoin.
             result = detector.detect(frame, skip=False)
 
-            row = save_frame_data(frame_id, rgb_dir, canny_dir, overlay_dir, frame, result, labels)
+            row = save_frame_data(
+                frame_id, rgb_dir, canny_dir, overlay_dir, frame, result, labels
+            )
             rows.append(row)
 
             log_frame_info(frame_id, num_frames, labels, result["status"])

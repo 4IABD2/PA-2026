@@ -2,21 +2,21 @@ import math
 import cv2
 import numpy as np
 
-MIN_LANE_W = 120          # largeur mini (px) d'une voie ego plausible en bas d'image
-MAX_LANE_FRAC = 0.55      # largeur maxi (frac w) d'une voie ego
+MIN_LANE_W = 120  # largeur mini (px) d'une voie ego plausible en bas d'image
+MAX_LANE_FRAC = 0.55  # largeur maxi (frac w) d'une voie ego
 DEFAULT_LANE_FRAC = 0.30  # largeur de voie supposee si un seul bord detecte
-EGO_BAND_FRAC = 0.90      # bande basse utilisee pour identifier les lignes ego
-CLUSTER_GAP = 20          # ecart (px) qui separe deux lignes distinctes
-TRACK_WIN_FRAC = 0.06     # demi-fenetre (frac w) de suivi d'un bord vers le haut
-TOP_FRAC = 0.45           # on arrete l'analyse a cette hauteur (horizon)
-DASH_BRIDGE = 25          # fermeture verticale (px) : relie les pointilles pour le suivi
-LOOKAHEAD_FRAC = 0.50     # point vise : fraction du bas (0) vers le haut (1)
-ANGLE_DEADZONE = 3.0      # |angle| (deg) en dessous duquel on considere "ALIGNE"
+EGO_BAND_FRAC = 0.90  # bande basse utilisee pour identifier les lignes ego
+CLUSTER_GAP = 20  # ecart (px) qui separe deux lignes distinctes
+TRACK_WIN_FRAC = 0.06  # demi-fenetre (frac w) de suivi d'un bord vers le haut
+TOP_FRAC = 0.45  # on arrete l'analyse a cette hauteur (horizon)
+DASH_BRIDGE = 25  # fermeture verticale (px) : relie les pointilles pour le suivi
+LOOKAHEAD_FRAC = 0.50  # point vise : fraction du bas (0) vers le haut (1)
+ANGLE_DEADZONE = 3.0  # |angle| (deg) en dessous duquel on considere "ALIGNE"
 
 
 def _lane_clusters(track, w, h):
     """Centres des lignes (clusters de colonnes) sur une bande basse de l'image."""
-    band = track[int(EGO_BAND_FRAC * h):, :]
+    band = track[int(EGO_BAND_FRAC * h) :, :]
     cols = np.where(band.sum(axis=0) > 0)[0]
     if len(cols) == 0:
         return np.array([])
@@ -58,13 +58,23 @@ def _ego_init(track, w, h):
 
 def lane_geometry(lanes, drivable, w, h):
 
-    result = {"status": "NO_LANE", "drivable": drivable, "lanes": lanes,
-              "center_line": None, "trajectory": None,
-              "offset": 0.0, "direction": "NONE", "angle": 0.0}
+    result = {
+        "status": "NO_LANE",
+        "drivable": drivable,
+        "lanes": lanes,
+        "center_line": None,
+        "trajectory": None,
+        "offset": 0.0,
+        "direction": "NONE",
+        "angle": 0.0,
+    }
 
     # relie verticalement les pointilles pour le SUIVI (l'affichage garde l'original)
-    track = cv2.morphologyEx(lanes, cv2.MORPH_CLOSE,
-                             cv2.getStructuringElement(cv2.MORPH_RECT, (3, DASH_BRIDGE)))
+    track = cv2.morphologyEx(
+        lanes,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (3, DASH_BRIDGE)),
+    )
 
     ego = _ego_init(track, w, h)
     if ego is None:
@@ -80,16 +90,20 @@ def lane_geometry(lanes, drivable, w, h):
             cl = xs[np.abs(xs - left_x) < win]
             cr = xs[np.abs(xs - right_x) < win]
             if len(cl):
-                left_x = float(np.median(cl)); lxs.append(left_x); lys.append(float(y))
+                left_x = float(np.median(cl))
+                lxs.append(left_x)
+                lys.append(float(y))
             if len(cr):
-                right_x = float(np.median(cr)); rxs.append(right_x); rys.append(float(y))
+                right_x = float(np.median(cr))
+                rxs.append(right_x)
+                rys.append(float(y))
     if len(lxs) < 4 or len(rxs) < 4:
         return result
 
     # une droite par cote : l'ajustement traverse les trous des pointilles
     fl = np.polyfit(lys, lxs, 1)
     fr = np.polyfit(rys, rxs, 1)
-    ys_line = np.linspace(h - 1, int(TOP_FRAC * h), 30)        # du bas vers le haut
+    ys_line = np.linspace(h - 1, int(TOP_FRAC * h), 30)  # du bas vers le haut
     cxs = 0.5 * (np.polyval(fl, ys_line) + np.polyval(fr, ys_line))
     center = np.stack([cxs, ys_line], axis=1)
     result["center_line"] = center.astype(np.int32)
@@ -99,18 +113,27 @@ def lane_geometry(lanes, drivable, w, h):
     aim_x, aim_y = center[idx]
     offset = (aim_x - w / 2.0) / (w / 2.0)
     angle = math.degrees(math.atan2(aim_x - w / 2.0, (h - 1) - aim_y))
-    direction = ("DROITE" if angle > ANGLE_DEADZONE else
-                 "GAUCHE" if angle < -ANGLE_DEADZONE else "ALIGNE")
+    direction = (
+        "DROITE"
+        if angle > ANGLE_DEADZONE
+        else "GAUCHE" if angle < -ANGLE_DEADZONE else "ALIGNE"
+    )
 
     # trajectoire : de la voiture (bas, centre) vers le point vise puis le centre
     car = np.array([w / 2.0, h - 1.0])
     target = np.array([aim_x, aim_y])
     ctrl = np.array([w / 2.0, (car[1] + target[1]) / 2.0])
     ts = np.linspace(0, 1, 16)[:, None]
-    bez = (1 - ts) ** 2 * car + 2 * (1 - ts) * ts * ctrl + ts ** 2 * target
+    bez = (1 - ts) ** 2 * car + 2 * (1 - ts) * ts * ctrl + ts**2 * target
     traj = np.vstack([bez, center[idx:]])
 
-    result.update({"status": "OK", "trajectory": traj.astype(np.int32),
-                   "offset": float(offset), "direction": direction,
-                   "angle": float(angle)})
+    result.update(
+        {
+            "status": "OK",
+            "trajectory": traj.astype(np.int32),
+            "offset": float(offset),
+            "direction": direction,
+            "angle": float(angle),
+        }
+    )
     return result
