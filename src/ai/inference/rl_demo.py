@@ -793,6 +793,7 @@ def record_episode(
             )
         else:
             route_map_frames = int(fps * route_map_seconds)
+            pause_frames = int(fps * 1.0)
             _record_episodes(
                 model,
                 env,
@@ -808,6 +809,7 @@ def record_episode(
                 out_w,
                 out_h,
                 route_map_frames,
+                pause_frames,
             )
     finally:
         writer.release()
@@ -834,6 +836,7 @@ def _record_episodes(
     out_w,
     out_h,
     route_map_frames,
+    pause_frames,
 ) -> None:
     reset_options = {"spawn_idx": spawn_idx} if spawn_idx is not None else None
     obs, _ = env.reset(seed=reset_seed, options=reset_options)
@@ -843,6 +846,25 @@ def _record_episodes(
         map_card = _draw_route_map_card(route, out_w, out_h, cv2)
         for _ in range(route_map_frames):
             writer.write(map_card)
+
+    # hold on the starting position for 1 second before driving begins
+    frame = _get_frame()
+    if frame is not None:
+        info = {
+            "episode": 1,
+            "step": 0,
+            "max_steps": max_steps,
+            "reward": 0.0,
+            "total_reward": 0.0,
+            "speed_kmh": float(obs[0]) * 90.0,
+            "action": [0.0, 0.0, 0.0],
+            "params": hud_params or {},
+        }
+        frame_bgr = cv2.cvtColor(_add_hud(frame, info), cv2.COLOR_RGB2BGR)
+        _draw_bboxes(frame_bgr, getattr(env, "last_objects", []), cv2)
+        _draw_obs_panel(frame_bgr, obs, [0.0, 0.0, 0.0], cv2)
+        for _ in range(pause_frames):
+            writer.write(frame_bgr)
 
     episode, total_reward, step = 0, 0.0, 0
 
@@ -1045,6 +1067,49 @@ def eval_model(
                     obs = env._get_obs()
                 except Exception as exc:
                     print(f"    setup_fn failed: {exc}")
+
+            # 3b — hold on the starting position for 1 second before driving begins
+            frame = _get_frame()
+            if frame is not None:
+                pause_ego_loc = env.ego.get_transform().location
+                info = {
+                    "episode": sc_idx + 1,
+                    "step": 0,
+                    "max_steps": sc.max_steps,
+                    "reward": 0.0,
+                    "total_reward": 0.0,
+                    "speed_kmh": float(obs[0]) * 90.0,
+                    "action": [0.0, 0.0, 0.0],
+                    "params": {},
+                }
+                frame_bgr = cv2.cvtColor(_add_hud(frame, info), cv2.COLOR_RGB2BGR)
+                _draw_bboxes(frame_bgr, getattr(env, "last_objects", []), cv2)
+
+                label = f"[{sc_idx + 1}/{len(scenarios)}] {sc.name}"
+                label_color = (80, 200, 60) if sc.phase == 1 else (200, 140, 0)
+                cv2.putText(
+                    frame_bgr,
+                    label,
+                    (4, 11),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.42,
+                    (0, 0, 0),
+                    2,
+                )
+                cv2.putText(
+                    frame_bgr,
+                    label,
+                    (4, 11),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.42,
+                    label_color,
+                    1,
+                )
+
+                _draw_obs_panel(frame_bgr, obs, [0.0, 0.0, 0.0], cv2)
+                _draw_minimap(frame_bgr, env.route, pause_ego_loc, out_w, out_h, cv2)
+                for _ in range(fps):
+                    writer.write(frame_bgr)
 
             # 4 — record scenario steps
             _start = env.ego.get_transform().location

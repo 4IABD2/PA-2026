@@ -1076,3 +1076,69 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 
 **Prochaine étape** :
 - Reste dans la liste : passage à Town02 (Stage A : `_EXPECTED_MAP` dans `launch_training.py`, en attente de l'explo de spawn côté utilisateur).
+
+---
+
+## 2026-07-08 — Pause d'1 seconde avant le départ sur les vidéos démo et éval
+
+**Avancement** :
+- Les vidéos (démo libre et les 13 scénarios d'éval) démarraient la conduite dès la toute première frame — aucun moment pour voir la position de départ avant que la voiture bouge.
+- **Fix** : `_record_episodes()` et `eval_model()` gardent maintenant la première frame (juste après le reset, avant toute action) à l'écran pendant 1 seconde, avec le même empilement d'overlays que chaque step normal (HUD, bounding boxes, panneau obs-space, label de scénario et mini-carte pour l'éval).
+- 185 tests (`uv run pytest benchmarks/ -q`), tout vert (1 nouveau test).
+
+**Difficultés** :
+- Deux tests existants (`test_record_episode_writes_route_map_card_frames`, `test_record_episode_no_route_attribute_skips_map_card`) faisaient une assertion exacte sur le nombre de frames écrites — mis à jour pour compter la nouvelle pause.
+- Deux autres tests, non prévus au départ, se sont cassés en cours de route (`test_record_episode_calls_draw_obs_panel_per_frame`, `test_record_episode_calls_draw_bboxes_with_last_objects`) : ils comptaient les appels à `_draw_obs_panel`/`_draw_bboxes` en espionnant ces fonctions, et la frame de pause déclenche elle aussi ces deux appels (même empilement d'overlays qu'un step normal) — mis à jour de 2 à 3 appels attendus.
+
+**Décisions** :
+- Pause non configurable, fixée à 1 seconde — correspond à la demande telle quelle, pas besoin de plus pour l'instant.
+- Pas de nouvelle fonction partagée entre les deux call sites malgré la duplication partielle — les deux empilements d'overlays diffèrent déjà (l'éval a le label de scénario et la mini-carte, pas la démo libre), extraire un helper commun aurait ajouté de l'indirection pour deux call sites seulement.
+
+**Benchmarks** : 185 tests, tout vert.
+
+**Prochaine étape** :
+- Outil interactif d'inspection des spawn points (en cours).
+- Reste dans la liste : passage à Town2 (Stage A fait, calibration Town02 faite — reste à traiter les points de spawn identifiés comme mauvais, ex. spawn_idx=13).
+
+---
+
+## 2026-07-08 (suite) — Outil interactif d'inspection des spawn points
+
+**Avancement** :
+- Depuis la découverte que `spawn_idx=13` sur Town02 tue l'agent en 1 step (confirmé sur 3 scénarios différents dans `ppo_v7_120k`), besoin d'un moyen de vérifier visuellement un point de spawn avant de le committer dans `BENCHMARK_SCENARIOS` — jusqu'ici on faisait confiance aveuglément aux heuristiques géométriques de `explore_spawns.py`.
+- **Nouveau script** `scripts/inspect_spawns.py` : téléporte un véhicule statique (pas d'autopilot, pas de PNJ) sur un `spawn_idx` donné, affiche la caméra live dans une fenêtre pygame avec les heuristiques déjà calculées par `explore_spawns.py` (angle de virage, distance jonction/feu, limite de vitesse, tags) superposées à l'écran. Navigation au clavier : flèches/n-p pour suivant/précédent, chiffres + Entrée pour sauter directement à un index.
+- Réutilise entièrement l'infra existante : `CameraSensor`/`write_rgb` (collecte dataset), la transform caméra partagée de l'équipe, et `_analyse_spawns()`/`SpawnInfo` de `explore_spawns.py` — aucune nouvelle logique de géométrie.
+
+**Difficultés** :
+- `_analyse_spawns()` peut sauter des indices (si `get_waypoint()` échoue pour ce point) — le mapping index→heuristiques doit se faire par dictionnaire (`{info.idx: info}`), pas par position dans la liste, sinon les heuristiques affichées auraient correspondu au mauvais spawn_idx.
+
+**Décisions** :
+- Aucun test automatisé — outil interactif dépendant de CARLA, sans surface testable hors-ligne, cohérent avec `demo_perception_live.py` et `explore_spawns.py` (ni l'un ni l'autre n'a de test).
+- Pas de mécanisme "marquer bon/mauvais" intégré — l'utilisateur inspecte visuellement et remonte les index à la main, plus simple que de construire un flux d'annotation pour un usage ponctuel.
+
+**Benchmarks** : sans objet (script sans test).
+
+**Prochaine étape** :
+- Utiliser l'outil pour identifier tous les spawn points problématiques de Town02 (à commencer par spawn_idx=13) et corriger `BENCHMARK_SCENARIOS` en conséquence.
+
+---
+
+## 2026-07-08 (suite) — Détection automatique des spawns cassés et du reward-hacking dans analyze_run.py
+
+**Avancement** :
+- Deux patterns trouvés à la main en diagnostiquant `ppo_v7_120k` (spawn cassé = mort en ≤3 steps sur tous les checkpoints d'un même scénario ; reward qui monte pendant que les épisodes s'effondrent en durée = signal de reward-hacking) sont maintenant calculés automatiquement par `scripts/analyze_run.py`, dans le même esprit "données brutes, pas d'interprétation" que le reste du fichier.
+- Nouvelle fonction `_by_scenario_benchmark()` : vue par scénario à travers tous les checkpoints (l'axe inverse de `_summarize_benchmark`), avec un flag `likely_broken_spawn` (steps ≤3 sur au moins 2 checkpoints, tous systématiquement). `_totals()` gagne `reward_length_correlation` (corrélation de Pearson reward/durée d'épisode sur tout le run).
+- Corrigé au passage : `params.json` affichait un label `"obs"` figé en dur (`"12-scalars-traffic"`), jamais mis à jour après le retrait de l'angle de voie — maintenant dérivé dynamiquement de `len(_OBS_LOW)`.
+- 190 tests (`uv run pytest benchmarks/ -q`), tout vert (5 nouveaux tests).
+
+**Difficultés** :
+- Aucune — patterns déjà bien définis depuis le diagnostic manuel de `ppo_v7_120k`, juste à les rendre automatiques.
+
+**Décisions** :
+- Le flag `likely_broken_spawn` reste une donnée calculée, pas une action automatique — cohérent avec la philosophie déjà en place de `analyze_run.py` ("computes; a human still writes the diagnosis").
+- Seuil de ≤3 steps et minimum de 2 checkpoints fixés en dur, pas configurables — mêmes constantes que celles déjà utilisées à la main pendant le diagnostic, pas besoin de plus pour l'instant.
+
+**Benchmarks** : 190 tests, tout vert.
+
+**Prochaine étape** :
+- Reste dans la liste : merger `fix/nav-reward-speed`, investiguer le faux bonus +10 sur spawn_idx=13, utiliser `inspect_spawns.py` pour identifier tous les spawns cassés de Town02.
