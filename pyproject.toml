@@ -3,7 +3,7 @@ name = "pa-2026"
 version = "0.1.0"
 description = "Voiture autonome dans CARLA - projet annuel 4IABD2"
 readme = "README.md"
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.10,<3.13"
 dependencies = [
     "matplotlib==3.10.8",
     "tensorflow",
@@ -21,6 +21,7 @@ dependencies = [
     "torch>=2.7",
     "torchvision>=0.22",
     "pygame>=2.5",
+    "pybind11>=3.0.4",
 ]
 
 [dependency-groups]
@@ -51,3 +52,8 @@ torchvision = [
 [tool.black]
 line-length = 88
 target-version = ["py310"]
+
+[build-system]
+requires = ["setuptools", "pybind11"]
+build-backend = "setuptools.build_meta"
+
