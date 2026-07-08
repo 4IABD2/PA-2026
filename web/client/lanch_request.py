@@ -1,7 +1,10 @@
 import sys
 
-sys.path.insert(0, "build_py")
-import client_bindings
+sys.path.insert(0, "/home/victor/Documents/esgi/pa/PA-2026/web/client/build_py")
+import pprint
+print('executable:', sys.executable)
+pprint.pprint(sys.path)
+
 import client_bindings
 import random
 
