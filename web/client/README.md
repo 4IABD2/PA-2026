@@ -25,7 +25,7 @@ sudo apt install pybind11-dev
 ```bash
 mkdir build_py
 cd build_py
-cmake .. -G "Unix Makefiles" -Dpybind11_DIR="$(uv run python -m pybind11 --cmakedir)"
+cmake .. -G "Unix Makefiles" -Dpybind11_DIR="$(uv run -m pybind11 --cmakedir)"
 make
 ```
 
