@@ -10,7 +10,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.analyze_run import analyze, _bin_training_curve, _load_monitor_csv, _summarize_benchmark, _totals
+from scripts.analyze_run import (
+    analyze,
+    _bin_training_curve,
+    _load_monitor_csv,
+    _summarize_benchmark,
+    _totals,
+)
 
 
 def _write_monitor_csv(path: Path, header_extra: list[str], rows: list[list]) -> None:
@@ -47,7 +53,8 @@ def test_bin_training_curve_splits_by_cumulative_steps(tmp_path):
 def test_bin_training_curve_includes_reward_component_means(tmp_path):
     csv_path = tmp_path / "training_log.monitor.csv"
     _write_monitor_csv(
-        csv_path, ["r_speed", "r_collision"],
+        csv_path,
+        ["r_speed", "r_collision"],
         [[-5.0, 3000, 1.0, -5.0], [3.0, 4000, 3.0, 0.0]],
     )
     df = _load_monitor_csv(csv_path)
@@ -86,17 +93,34 @@ def test_totals_computes_crash_rate(tmp_path):
 def test_summarize_benchmark_counts_phase1_success():
     results = {
         "0010k": {
-            "straight": {"success": True, "speed": {"mean": 20.0}, "off_route_pct": 0.1,
-                        "throttle": {"mean": 0.5}, "brake": {"mean": 0.0}},
-            "turn_left": {"success": False, "speed": {"mean": 10.0}, "off_route_pct": 0.3,
-                         "throttle": {"mean": 0.6}, "brake": {"mean": 0.0}},
-            "red_light": {"success": None, "speed": {"mean": 15.0}, "off_route_pct": 0.2,
-                         "throttle": {"mean": 0.4}, "brake": {"mean": 0.0}},
+            "straight": {
+                "success": True,
+                "speed": {"mean": 20.0},
+                "off_route_pct": 0.1,
+                "throttle": {"mean": 0.5},
+                "brake": {"mean": 0.0},
+            },
+            "turn_left": {
+                "success": False,
+                "speed": {"mean": 10.0},
+                "off_route_pct": 0.3,
+                "throttle": {"mean": 0.6},
+                "brake": {"mean": 0.0},
+            },
+            "red_light": {
+                "success": None,
+                "speed": {"mean": 15.0},
+                "off_route_pct": 0.2,
+                "throttle": {"mean": 0.4},
+                "brake": {"mean": 0.0},
+            },
         },
     }
     summary = _summarize_benchmark(results)
     assert summary["0010k"]["p1_success"] == 1
-    assert summary["0010k"]["p1_total"] == 2  # straight + turn_left have a success_fn (not None); red_light doesn't
+    assert (
+        summary["0010k"]["p1_total"] == 2
+    )  # straight + turn_left have a success_fn (not None); red_light doesn't
 
 
 def test_summarize_benchmark_computes_throttle_brake_means():
@@ -124,10 +148,20 @@ def test_analyze_includes_benchmark_when_results_json_present(tmp_path):
     _write_monitor_csv(csv_path, [], [[-5.0, 3000]])
     evals_dir = tmp_path / "evals"
     evals_dir.mkdir()
-    (evals_dir / "results.json").write_text(json.dumps({
-        "best_model": {"straight": {"success": True, "speed": {"mean": 30.0},
-                                    "off_route_pct": 0.05, "throttle": {"mean": 0.8},
-                                    "brake": {"mean": 0.0}}},
-    }))
+    (evals_dir / "results.json").write_text(
+        json.dumps(
+            {
+                "best_model": {
+                    "straight": {
+                        "success": True,
+                        "speed": {"mean": 30.0},
+                        "off_route_pct": 0.05,
+                        "throttle": {"mean": 0.8},
+                        "brake": {"mean": 0.0},
+                    }
+                },
+            }
+        )
+    )
     data = analyze(tmp_path)
     assert data["benchmark"]["best_model"]["p1_success"] == 1

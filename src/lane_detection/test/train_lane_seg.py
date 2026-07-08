@@ -19,16 +19,20 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision.models.segmentation import (
-    lraspp_mobilenet_v3_large, LRASPP_MobileNet_V3_Large_Weights)
+    lraspp_mobilenet_v3_large,
+    LRASPP_MobileNet_V3_Large_Weights,
+)
 
 TRAIN_W, TRAIN_H = 512, 384
-NUM_CLASSES = 3                      # 0 fond, 1 ligne, 2 roulable
+NUM_CLASSES = 3  # 0 fond, 1 ligne, 2 roulable
 WEIGHTS_OUT = os.path.join(os.path.dirname(__file__), "weights", "lane_seg.pt")
 MEAN = torch.tensor([0.485, 0.456, 0.406])[:, None, None]
 STD = torch.tensor([0.229, 0.224, 0.225])[:, None, None]
-_LANE_DILATE = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))    # epaissit les lignes
-_LANE_BRIDGE = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 21))   # relie les pointilles
-FILL_DASHES = True            # relier les tirets en lignes CONTINUES dans le label
+_LANE_DILATE = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))  # epaissit les lignes
+_LANE_BRIDGE = cv2.getStructuringElement(
+    cv2.MORPH_RECT, (3, 21)
+)  # relie les pointilles
+FILL_DASHES = True  # relier les tirets en lignes CONTINUES dans le label
 
 
 def _fill_dashes(lane):
@@ -36,8 +40,9 @@ def _fill_dashes(lane):
     suit la direction des segments). On ne garde que les lignes obliques/verticales
     (les voies) et on exclut l'horizontal (passages pietons)."""
     out = lane.copy()
-    lines = cv2.HoughLinesP(lane, 1, np.pi / 180, threshold=20,
-                            minLineLength=15, maxLineGap=80)
+    lines = cv2.HoughLinesP(
+        lane, 1, np.pi / 180, threshold=20, minLineLength=15, maxLineGap=80
+    )
     if lines is not None:
         for x1, y1, x2, y2 in lines[:, 0]:
             if abs(y2 - y1) > abs(x2 - x1) * 0.6:
@@ -50,7 +55,9 @@ class SegDataset(Dataset):
         self.root = root
         self.rgb = sorted(glob.glob(os.path.join(root, "rgb", "*.png")))
         if not self.rgb:
-            raise RuntimeError(f"aucune image dans {root}/rgb (lance generate_seg_dataset.py)")
+            raise RuntimeError(
+                f"aucune image dans {root}/rgb (lance generate_seg_dataset.py)"
+            )
 
     def __len__(self):
         return len(self.rgb)
@@ -74,7 +81,7 @@ class SegDataset(Dataset):
 
         target = np.zeros((TRAIN_H, TRAIN_W), np.int64)
         target[drive > 127] = 2
-        target[lane > 127] = 1                    # la ligne est prioritaire sur la route
+        target[lane > 127] = 1  # la ligne est prioritaire sur la route
 
         x = torch.from_numpy(img).float().permute(2, 0, 1) / 255.0
         x = (x - MEAN) / STD
@@ -95,9 +102,13 @@ def main(data, epochs, batch_size, lr, out=WEIGHTS_OUT):
     ds = SegDataset(data)
     n_val = max(1, int(0.1 * len(ds)))
     train_ds, val_ds = random_split(ds, [len(ds) - n_val, n_val])
-    train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2, drop_last=True)
+    train_dl = DataLoader(
+        train_ds, batch_size=batch_size, shuffle=True, num_workers=2, drop_last=True
+    )
     val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
-    print(f"[INFO] {len(ds)} images ({len(train_ds)} train / {len(val_ds)} val) sur {dev}")
+    print(
+        f"[INFO] {len(ds)} images ({len(train_ds)} train / {len(val_ds)} val) sur {dev}"
+    )
 
     model = build_model().to(dev)
     # la ligne de voie est rare -> on la sur-pondere

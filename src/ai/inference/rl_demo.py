@@ -16,10 +16,10 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 
 from src.interfaces.navigation_types import Route
 
-
 # ---------------------------------------------------------------------------
 # Scenario + Highlight dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Scenario:
@@ -42,8 +42,10 @@ class Scenario:
     expected: str = ""
     success_fn: Callable | None = None
     setup_fn: Callable | None = None
-    dest_spawn_idx: int | None = None  # if set, route is replanned toward this spawn after reset
-    target_radius: float = 15.0        # metres — reaching dest counts as success
+    dest_spawn_idx: int | None = (
+        None  # if set, route is replanned toward this spawn after reset
+    )
+    target_radius: float = 15.0  # metres — reaching dest counts as success
 
 
 @dataclass
@@ -77,32 +79,44 @@ DEFAULT_HIGHLIGHT_SPECS: list[HighlightSpec] = [
     HighlightSpec(
         name="turn_left",
         detect=lambda obs, act, r, done, trunc: bool(obs[1] > 0.5 and act[0] < -0.25),
-        pre_s=2.0, post_s=4.0, cooldown_s=20.0,
+        pre_s=2.0,
+        post_s=4.0,
+        cooldown_s=20.0,
     ),
     HighlightSpec(
         name="turn_right",
         detect=lambda obs, act, r, done, trunc: bool(obs[2] > 0.5 and act[0] > 0.25),
-        pre_s=2.0, post_s=4.0, cooldown_s=20.0,
+        pre_s=2.0,
+        post_s=4.0,
+        cooldown_s=20.0,
     ),
     HighlightSpec(
         name="near_obstacle",
         detect=lambda obs, act, r, done, trunc: bool(obs[6] < 0.15),
-        pre_s=2.0, post_s=3.0, cooldown_s=10.0,
+        pre_s=2.0,
+        post_s=3.0,
+        cooldown_s=10.0,
     ),
     HighlightSpec(
         name="collision",
         detect=lambda obs, act, r, done, trunc: bool(done),
-        pre_s=3.0, post_s=1.0, cooldown_s=5.0,
+        pre_s=3.0,
+        post_s=1.0,
+        cooldown_s=5.0,
     ),
     HighlightSpec(
         name="high_speed",
         detect=lambda obs, act, r, done, trunc: bool(obs[0] > 0.65),
-        pre_s=1.0, post_s=3.0, cooldown_s=30.0,
+        pre_s=1.0,
+        post_s=3.0,
+        cooldown_s=30.0,
     ),
     HighlightSpec(
         name="lane_drift",
         detect=lambda obs, act, r, done, trunc: bool(abs(obs[4]) > 0.6),
-        pre_s=1.5, post_s=2.5, cooldown_s=15.0,
+        pre_s=1.5,
+        post_s=2.5,
+        cooldown_s=15.0,
     ),
 ]
 
@@ -110,6 +124,7 @@ DEFAULT_HIGHLIGHT_SPECS: list[HighlightSpec] = [
 # ---------------------------------------------------------------------------
 # HighlightRecorder
 # ---------------------------------------------------------------------------
+
 
 class HighlightRecorder:
     """Rolling frame buffer that writes MP4 clips when a HighlightSpec fires."""
@@ -173,7 +188,7 @@ class HighlightRecorder:
         writer = cv2.VideoWriter(str(path), fourcc, self._fps, (self._w, self._h))
         pre_frames = int(spec.pre_s * self._fps)
         buf = list(self._buffer)
-        for f in buf[max(0, len(buf) - pre_frames):]:
+        for f in buf[max(0, len(buf) - pre_frames) :]:
             writer.write(f)
         self._recording[spec.name] = {
             "writer": writer,
@@ -193,6 +208,7 @@ class HighlightRecorder:
 # ---------------------------------------------------------------------------
 # Core helpers
 # ---------------------------------------------------------------------------
+
 
 def load_model(path: str) -> PPO:
     return PPO.load(path)
@@ -229,16 +245,16 @@ def _add_hud(frame: np.ndarray, info: dict) -> np.ndarray:
     draw.rectangle([0, 0, w, 14], fill=(20, 20, 20))
     draw.text((4, 2), f"PPO  {param_str}", fill=(200, 200, 200))
 
-    ep      = info.get("episode", 0)
-    step    = info.get("step", 0)
-    max_s   = info.get("max_steps", "?")
-    reward  = info.get("reward", 0.0)
+    ep = info.get("episode", 0)
+    step = info.get("step", 0)
+    max_s = info.get("max_steps", "?")
+    reward = info.get("reward", 0.0)
     total_r = info.get("total_reward", 0.0)
-    speed   = info.get("speed_kmh", 0.0)
-    action  = info.get("action", [0.0, 0.0, 0.0])
+    speed = info.get("speed_kmh", 0.0)
+    action = info.get("action", [0.0, 0.0, 0.0])
 
     draw.rectangle([0, h - 20, w, h], fill=(20, 20, 20))
-    left  = f"Ep {ep} | Step {step}/{max_s}   {speed:.1f} km/h"
+    left = f"Ep {ep} | Step {step}/{max_s}   {speed:.1f} km/h"
     right = f"r={reward:+.2f} S={total_r:+.1f}  S={action[0]:+.2f} T={action[1]:.2f} B={action[2]:.2f}"
     draw.text((4, h - 17), left, fill=(200, 200, 200))
     draw.text((w // 2, h - 17), right, fill=(200, 200, 200))
@@ -246,7 +262,9 @@ def _add_hud(frame: np.ndarray, info: dict) -> np.ndarray:
     return np.array(img)
 
 
-_EVAL_CLEAR_RADIUS_M = 20.0  # ambient NPCs closer than this to a scenario's spawn are relocated
+_EVAL_CLEAR_RADIUS_M = (
+    20.0  # ambient NPCs closer than this to a scenario's spawn are relocated
+)
 
 
 def _clear_spawn_area(env, radius_m: float) -> None:
@@ -263,7 +281,9 @@ def _clear_spawn_area(env, radius_m: float) -> None:
     try:
         actors = env.world.get_actors()
         nearby = [
-            a for a in list(actors.filter("vehicle.*")) + list(actors.filter("walker.pedestrian.*"))
+            a
+            for a in list(actors.filter("vehicle.*"))
+            + list(actors.filter("walker.pedestrian.*"))
             if a.id != env.ego.id
         ]
         if not nearby:
@@ -286,6 +306,7 @@ def _clear_spawn_area(env, radius_m: float) -> None:
 # Visual cards for eval_model()
 # ---------------------------------------------------------------------------
 
+
 def _ascii(s: str) -> str:
     """Strip accented characters — cv2.putText only handles ASCII."""
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
@@ -299,28 +320,50 @@ def _draw_title_card(sc: Scenario, w: int, h: int, cv2) -> np.ndarray:
     phase_color = (80, 200, 60) if sc.phase == 1 else (0, 160, 220)  # BGR
     badge = f"Phase {sc.phase}"
     (bw, _), _ = cv2.getTextSize(badge, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
-    cv2.putText(card, badge, (w - bw - 16, 36),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.75, phase_color, 2)
+    cv2.putText(
+        card, badge, (w - bw - 16, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.75, phase_color, 2
+    )
 
     # scenario name — centered, large
     name_text = _ascii(sc.name.upper().replace("_", " "))
     (tw, _), _ = cv2.getTextSize(name_text, cv2.FONT_HERSHEY_SIMPLEX, 1.6, 2)
-    cv2.putText(card, name_text, ((w - tw) // 2, h // 2 - 35),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.6, (230, 230, 230), 2)
+    cv2.putText(
+        card,
+        name_text,
+        ((w - tw) // 2, h // 2 - 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.6,
+        (230, 230, 230),
+        2,
+    )
 
     # description
     if sc.description:
         desc = _ascii(sc.description)
         (tw, _), _ = cv2.getTextSize(desc, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 1)
-        cv2.putText(card, desc, ((w - tw) // 2, h // 2 + 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (150, 150, 150), 1)
+        cv2.putText(
+            card,
+            desc,
+            ((w - tw) // 2, h // 2 + 15),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (150, 150, 150),
+            1,
+        )
 
     # expected behavior
     if sc.expected:
         exp = _ascii(f"Expected: {sc.expected}")
         (tw, _), _ = cv2.getTextSize(exp, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1)
-        cv2.putText(card, exp, ((w - tw) // 2, h // 2 + 52),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (100, 150, 100), 1)
+        cv2.putText(
+            card,
+            exp,
+            ((w - tw) // 2, h // 2 + 52),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            (100, 150, 100),
+            1,
+        )
 
     return card  # already BGR
 
@@ -342,8 +385,15 @@ def _draw_result_card(success: bool | None, w: int, h: int, cv2) -> np.ndarray:
 
     card = np.full((h, w, 3), bg, dtype=np.uint8)
     (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.8, 3)
-    cv2.putText(card, text, ((w - tw) // 2, h // 2 + 12),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.8, color, 3)
+    cv2.putText(
+        card,
+        text,
+        ((w - tw) // 2, h // 2 + 12),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.8,
+        color,
+        3,
+    )
     return card
 
 
@@ -377,15 +427,36 @@ def _draw_route_map_card(route: Route, w: int, h: int, cv2) -> np.ndarray:
     end_px = (int(points[-1][0]), int(points[-1][1]))
     cv2.circle(card, start_px, 8, (80, 220, 80), -1)
     cv2.circle(card, end_px, 8, (60, 60, 220), -1)
-    cv2.putText(card, "A", (start_px[0] + 12, start_px[1] - 12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (80, 220, 80), 2)
-    cv2.putText(card, "B", (end_px[0] + 12, end_px[1] - 12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (60, 60, 220), 2)
+    cv2.putText(
+        card,
+        "A",
+        (start_px[0] + 12, start_px[1] - 12),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (80, 220, 80),
+        2,
+    )
+    cv2.putText(
+        card,
+        "B",
+        (end_px[0] + 12, end_px[1] - 12),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (60, 60, 220),
+        2,
+    )
 
     title = "PLANNED ROUTE"
     (tw, _), _ = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
-    cv2.putText(card, title, ((w - tw) // 2, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (230, 230, 230), 2)
+    cv2.putText(
+        card,
+        title,
+        ((w - tw) // 2, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.9,
+        (230, 230, 230),
+        2,
+    )
     return card
 
 
@@ -416,19 +487,19 @@ def _draw_obs_panel(
 
     # derive nav command from one-hot encoding
     if obs[1] > 0.5:
-        nav_cmd, nav_col = "LEFT",     (60, 220, 80)
+        nav_cmd, nav_col = "LEFT", (60, 220, 80)
     elif obs[2] > 0.5:
-        nav_cmd, nav_col = "RIGHT",    (60, 220, 80)
+        nav_cmd, nav_col = "RIGHT", (60, 220, 80)
     elif obs[3] > 0.5:
         nav_cmd, nav_col = "STRAIGHT", (60, 220, 80)
     else:
-        nav_cmd, nav_col = "FOLLOW",   (60, 180, 220)
+        nav_cmd, nav_col = "FOLLOW", (60, 180, 220)
 
     FONT = cv2.FONT_HERSHEY_SIMPLEX
     SZ, TH = 0.40, 1
     LBL = (120, 120, 120)  # label colour
     VAL = (210, 210, 210)  # value colour
-    HDR = (170, 130, 60)   # section header colour
+    HDR = (170, 130, 60)  # section header colour
 
     VAL_X = x0 + PAD + 88  # x position for value column
 
@@ -436,19 +507,23 @@ def _draw_obs_panel(
 
     rows = [
         # (label, value_str, value_colour)
-        ("OBS SPACE", None,                       HDR),
-        ("speed",     f"{obs[0] * 90:5.1f} km/h", VAL),
-        ("nav",       nav_cmd,                    nav_col),
-        ("lane offset", f"{obs[4]:+.3f}",         VAL),
-        ("on road",   "YES" if on_road else "NO", (60, 220, 80) if on_road else (60, 60, 220)),
-        ("vehicle",   f"{obs[6] * 50:5.1f} m",    VAL),
-        ("red light", f"{obs[7] * 50:5.1f} m",    VAL),
-        ("walker",    f"{obs[9] * 50:5.1f} m",    VAL),
-        ("stop/yield", f"{obs[10] * 50:5.1f} m",  VAL),
-        ("ACTION",    None,                       HDR),
-        ("steer",     f"{action[0]:+.3f}",        VAL),
-        ("throttle",  f"{action[1]:.3f}",         VAL),
-        ("brake",     f"{action[2]:.3f}",         VAL),
+        ("OBS SPACE", None, HDR),
+        ("speed", f"{obs[0] * 90:5.1f} km/h", VAL),
+        ("nav", nav_cmd, nav_col),
+        ("lane offset", f"{obs[4]:+.3f}", VAL),
+        (
+            "on road",
+            "YES" if on_road else "NO",
+            (60, 220, 80) if on_road else (60, 60, 220),
+        ),
+        ("vehicle", f"{obs[6] * 50:5.1f} m", VAL),
+        ("red light", f"{obs[7] * 50:5.1f} m", VAL),
+        ("walker", f"{obs[9] * 50:5.1f} m", VAL),
+        ("stop/yield", f"{obs[10] * 50:5.1f} m", VAL),
+        ("ACTION", None, HDR),
+        ("steer", f"{action[0]:+.3f}", VAL),
+        ("throttle", f"{action[1]:.3f}", VAL),
+        ("brake", f"{action[2]:.3f}", VAL),
     ]
 
     y = y0 + 13
@@ -484,7 +559,9 @@ def _draw_minimap(
     waypoints = route.waypoints
     size = _MINIMAP_SIZE
     x0 = _MINIMAP_MARGIN
-    y0 = h - 20 - _MINIMAP_MARGIN - size  # stay clear of _add_hud's bottom bar (rows h-20..h)
+    y0 = (
+        h - 20 - _MINIMAP_MARGIN - size
+    )  # stay clear of _add_hud's bottom bar (rows h-20..h)
 
     xs = [wp.x for wp in waypoints]
     ys = [wp.y for wp in waypoints]
@@ -499,7 +576,9 @@ def _draw_minimap(
 
     def _to_px(x: float, y: float) -> tuple[int, int]:
         px = x0 + pad + int((x - min_x) * scale)
-        py = y0 + size - pad - int((y - min_y) * scale)  # flip Y for a map-like "up" feel
+        py = (
+            y0 + size - pad - int((y - min_y) * scale)
+        )  # flip Y for a map-like "up" feel
         return px, py
 
     # semi-transparent dark background (78 % opacity), same technique as _draw_obs_panel
@@ -508,7 +587,9 @@ def _draw_minimap(
     frame_bgr[:] = cv2.addWeighted(overlay, 0.78, frame_bgr, 0.22, 0)
 
     points = np.array([_to_px(wp.x, wp.y) for wp in waypoints], dtype=np.int32)
-    cv2.polylines(frame_bgr, [points], isClosed=False, color=(60, 200, 230), thickness=2)
+    cv2.polylines(
+        frame_bgr, [points], isClosed=False, color=(60, 200, 230), thickness=2
+    )
 
     start_px = _to_px(waypoints[0].x, waypoints[0].y)
     cv2.circle(frame_bgr, start_px, 4, (80, 220, 80), -1)
@@ -558,7 +639,9 @@ def _draw_bboxes(frame_bgr: np.ndarray, objects: list, cv2) -> None:
             txt += f" {o.distance_m:.0f}m"
         (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.rectangle(frame_bgr, (x1, max(0, y1 - th - 6)), (x1 + tw, y1), color, -1)
-        cv2.putText(frame_bgr, txt, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        cv2.putText(
+            frame_bgr, txt, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1
+        )
 
 
 def _write_summary_card(
@@ -574,28 +657,44 @@ def _write_summary_card(
     card = np.full((h, w, 3), (12, 12, 16), dtype=np.uint8)
 
     n_phase1 = sum(1 for sc in scenarios if sc.phase == 1)
-    n_success = sum(1 for sc in scenarios
-                    if results.get(sc.name, {}).get("success") is True)
+    n_success = sum(
+        1 for sc in scenarios if results.get(sc.name, {}).get("success") is True
+    )
     n_phase2 = sum(1 for sc in scenarios if sc.phase == 2)
 
     title = "FINAL RESULTS"
     (tw, _), _ = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 1.3, 2)
-    cv2.putText(card, title, ((w - tw) // 2, 50),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.3, (230, 230, 230), 2)
+    cv2.putText(
+        card,
+        title,
+        ((w - tw) // 2, 50),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.3,
+        (230, 230, 230),
+        2,
+    )
 
     p1_color = (60, 210, 80) if n_success == n_phase1 else (60, 60, 210)
     p1_text = f"Phase 1: {n_success}/{n_phase1} passed"
     (tw, _), _ = cv2.getTextSize(p1_text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
-    cv2.putText(card, p1_text, ((w - tw) // 2, 100),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, p1_color, 2)
+    cv2.putText(
+        card, p1_text, ((w - tw) // 2, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.9, p1_color, 2
+    )
 
     p2_text = f"Phase 2: {n_phase2} scenario(s) pending"
     (tw, _), _ = cv2.getTextSize(p2_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 1)
-    cv2.putText(card, p2_text, ((w - tw) // 2, 135),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 160, 220), 1)
+    cv2.putText(
+        card,
+        p2_text,
+        ((w - tw) // 2, 135),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 160, 220),
+        1,
+    )
 
     # per-scenario list
-    x_left  = max(w // 4 - 100, 20)
+    x_left = max(w // 4 - 100, 20)
     x_right = w // 2 + 20
     y = 175
     col = 0
@@ -627,6 +726,7 @@ def _write_summary_card(
 # ---------------------------------------------------------------------------
 # record_episode — unchanged public API
 # ---------------------------------------------------------------------------
+
 
 def record_episode(
     model: BaseAlgorithm,
@@ -661,7 +761,9 @@ def record_episode(
     obs, _ = env.reset(seed=reset_seed)
     sample_frame = _get_frame()
     src_h, src_w = sample_frame.shape[:2] if sample_frame is not None else (88, 200)
-    out_w, out_h = render_size if (render_size and render_fn is None) else (src_w, src_h)
+    out_w, out_h = (
+        render_size if (render_size and render_fn is None) else (src_w, src_h)
+    )
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(output_path, fourcc, fps, (out_w, out_h))
@@ -677,13 +779,36 @@ def record_episode(
 
     try:
         if scenarios is not None:
-            _record_scenarios(model, env, writer, recorder, scenarios,
-                              _get_frame, hud_params, out_w, out_h, cv2)
+            _record_scenarios(
+                model,
+                env,
+                writer,
+                recorder,
+                scenarios,
+                _get_frame,
+                hud_params,
+                out_w,
+                out_h,
+                cv2,
+            )
         else:
             route_map_frames = int(fps * route_map_seconds)
-            _record_episodes(model, env, writer, recorder, n_episodes, max_steps,
-                             reset_seed, spawn_idx, _get_frame, hud_params, cv2,
-                             out_w, out_h, route_map_frames)
+            _record_episodes(
+                model,
+                env,
+                writer,
+                recorder,
+                n_episodes,
+                max_steps,
+                reset_seed,
+                spawn_idx,
+                _get_frame,
+                hud_params,
+                cv2,
+                out_w,
+                out_h,
+                route_map_frames,
+            )
     finally:
         writer.release()
         if recorder is not None:
@@ -695,9 +820,20 @@ def record_episode(
 
 
 def _record_episodes(
-    model, env, writer, recorder, n_episodes, max_steps,
-    reset_seed, spawn_idx, _get_frame, hud_params, cv2,
-    out_w, out_h, route_map_frames,
+    model,
+    env,
+    writer,
+    recorder,
+    n_episodes,
+    max_steps,
+    reset_seed,
+    spawn_idx,
+    _get_frame,
+    hud_params,
+    cv2,
+    out_w,
+    out_h,
+    route_map_frames,
 ) -> None:
     reset_options = {"spawn_idx": spawn_idx} if spawn_idx is not None else None
     obs, _ = env.reset(seed=reset_seed, options=reset_options)
@@ -719,8 +855,11 @@ def _record_episodes(
         frame = _get_frame()
         if frame is not None:
             info = {
-                "episode": episode + 1, "step": step, "max_steps": max_steps,
-                "reward": float(reward), "total_reward": total_reward,
+                "episode": episode + 1,
+                "step": step,
+                "max_steps": max_steps,
+                "reward": float(reward),
+                "total_reward": total_reward,
                 "speed_kmh": float(obs[0]) * 90.0,
                 "action": [float(a) for a in action],
                 "params": hud_params or {},
@@ -730,7 +869,9 @@ def _record_episodes(
             _draw_obs_panel(frame_bgr, obs, action, cv2)
             writer.write(frame_bgr)
             if recorder is not None:
-                recorder.push(frame_bgr, obs, action, float(reward), terminated, truncated)
+                recorder.push(
+                    frame_bgr, obs, action, float(reward), terminated, truncated
+                )
 
         if terminated or truncated or step >= max_steps:
             episode += 1
@@ -740,8 +881,16 @@ def _record_episodes(
 
 
 def _record_scenarios(
-    model, env, writer, recorder, scenarios,
-    _get_frame, hud_params, out_w, out_h, cv2,
+    model,
+    env,
+    writer,
+    recorder,
+    scenarios,
+    _get_frame,
+    hud_params,
+    out_w,
+    out_h,
+    cv2,
 ) -> None:
     for sc_idx, scenario in enumerate(scenarios):
         obs, _ = env.reset(options={"spawn_idx": scenario.spawn_idx})
@@ -756,9 +905,11 @@ def _record_scenarios(
             frame = _get_frame()
             if frame is not None:
                 info = {
-                    "episode": sc_idx + 1, "step": step + 1,
+                    "episode": sc_idx + 1,
+                    "step": step + 1,
                     "max_steps": scenario.max_steps,
-                    "reward": float(reward), "total_reward": total_reward,
+                    "reward": float(reward),
+                    "total_reward": total_reward,
                     "speed_kmh": float(obs[0]) * 90.0,
                     "action": [float(a) for a in action],
                     "params": hud_params or {},
@@ -767,14 +918,30 @@ def _record_scenarios(
                 _draw_bboxes(frame_bgr, getattr(env, "last_objects", []), cv2)
 
                 label = f"[{sc_idx + 1}/{len(scenarios)}] {scenario.name}"
-                cv2.putText(frame_bgr, label, (4, 11),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 2)
-                cv2.putText(frame_bgr, label, (4, 11),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.42, (100, 220, 100), 1)
+                cv2.putText(
+                    frame_bgr,
+                    label,
+                    (4, 11),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.42,
+                    (0, 0, 0),
+                    2,
+                )
+                cv2.putText(
+                    frame_bgr,
+                    label,
+                    (4, 11),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.42,
+                    (100, 220, 100),
+                    1,
+                )
 
                 writer.write(frame_bgr)
                 if recorder is not None:
-                    recorder.push(frame_bgr, obs, action, float(reward), terminated, truncated)
+                    recorder.push(
+                        frame_bgr, obs, action, float(reward), terminated, truncated
+                    )
 
             if terminated:
                 for _ in range(min(40, scenario.max_steps - step - 1)):
@@ -787,6 +954,7 @@ def _record_scenarios(
 # ---------------------------------------------------------------------------
 # eval_model — full benchmark pipeline
 # ---------------------------------------------------------------------------
+
 
 def eval_model(
     model: BaseAlgorithm,
@@ -821,6 +989,7 @@ def eval_model(
 
     if scenarios is None:
         from src.ai.inference.benchmark import BENCHMARK_SCENARIOS  # noqa: PLC0415
+
         scenarios = BENCHMARK_SCENARIOS
 
     _get_frame = render_fn if render_fn is not None else env.render
@@ -857,8 +1026,9 @@ def eval_model(
                 try:
                     spawn_pts = env.world.get_map().get_spawn_points()
                     dest_carla = spawn_pts[sc.dest_spawn_idx % len(spawn_pts)]
-                    env.route = env.nav.plan(env.ego.get_transform().location,
-                                             dest_carla.location)
+                    env.route = env.nav.plan(
+                        env.ego.get_transform().location, dest_carla.location
+                    )
                     dest_loc = dest_carla.location
                     obs = env._get_obs()  # refresh with updated nav commands
                     print(f"    route replanned to spawn {sc.dest_spawn_idx}")
@@ -881,19 +1051,23 @@ def eval_model(
 
             # legacy metrics dict (required by success_fn API)
             metrics: dict = {
-                "center_offsets": [], "speeds": [], "rewards": [],
-                "terminated": False, "reached_dest": False,
-                "max_dist_from_start": 0.0, "steps": 0,
+                "center_offsets": [],
+                "speeds": [],
+                "rewards": [],
+                "terminated": False,
+                "reached_dest": False,
+                "max_dist_from_start": 0.0,
+                "steps": 0,
             }
             # rich per-step collectors
-            trajectory: list      = []  # [[x, y, yaw], ...]
-            steer_series: list    = []  # action[0] per step
+            trajectory: list = []  # [[x, y, yaw], ...]
+            steer_series: list = []  # action[0] per step
             throttle_series: list = []
-            brake_series: list    = []
+            brake_series: list = []
             obstacle_series: list = []  # metres
-            nav_series: list      = []  # 0=FOLLOW 1=LEFT 2=RIGHT 3=STRAIGHT
-            off_route_series: list = [] # 0/1 per step (1 = off-route)
-            dist_series: list     = []  # distance from spawn (m) per step
+            nav_series: list = []  # 0=FOLLOW 1=LEFT 2=RIGHT 3=STRAIGHT
+            off_route_series: list = []  # 0/1 per step (1 = off-route)
+            dist_series: list = []  # distance from spawn (m) per step
             collision_step: int | None = None
             total_reward = 0.0
 
@@ -919,17 +1093,26 @@ def eval_model(
                 # per-step rich data
                 ego_t = env.ego.get_transform()
                 ego_loc = ego_t.location
-                trajectory.append([round(ego_loc.x, 2), round(ego_loc.y, 2),
-                                    round(ego_t.rotation.yaw, 1)])
+                trajectory.append(
+                    [
+                        round(ego_loc.x, 2),
+                        round(ego_loc.y, 2),
+                        round(ego_t.rotation.yaw, 1),
+                    ]
+                )
                 steer_series.append(round(float(action[0]), 4))
                 throttle_series.append(round(float(action[1]), 4))
                 brake_series.append(round(float(action[2]), 4))
                 obstacle_series.append(round(float(obs[6]) * 50.0, 2))
                 # nav command encoding
-                if obs[1] > 0.5:   nav_series.append(1)
-                elif obs[2] > 0.5: nav_series.append(2)
-                elif obs[3] > 0.5: nav_series.append(3)
-                else:              nav_series.append(0)
+                if obs[1] > 0.5:
+                    nav_series.append(1)
+                elif obs[2] > 0.5:
+                    nav_series.append(2)
+                elif obs[3] > 0.5:
+                    nav_series.append(3)
+                else:
+                    nav_series.append(0)
 
                 # off-route per step
                 curr_off_count = getattr(env, "off_route_count", 0)
@@ -955,9 +1138,11 @@ def eval_model(
                 frame = _get_frame()
                 if frame is not None:
                     info = {
-                        "episode": sc_idx + 1, "step": step + 1,
+                        "episode": sc_idx + 1,
+                        "step": step + 1,
                         "max_steps": sc.max_steps,
-                        "reward": float(reward), "total_reward": total_reward,
+                        "reward": float(reward),
+                        "total_reward": total_reward,
                         "speed_kmh": speed_kmh,
                         "action": [float(a) for a in action],
                         "params": {},
@@ -968,10 +1153,24 @@ def eval_model(
                     # scenario label — green = Phase 1, blue = Phase 2
                     label = f"[{sc_idx + 1}/{len(scenarios)}] {sc.name}"
                     label_color = (80, 200, 60) if sc.phase == 1 else (200, 140, 0)
-                    cv2.putText(frame_bgr, label, (4, 11),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 2)
-                    cv2.putText(frame_bgr, label, (4, 11),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.42, label_color, 1)
+                    cv2.putText(
+                        frame_bgr,
+                        label,
+                        (4, 11),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.42,
+                        (0, 0, 0),
+                        2,
+                    )
+                    cv2.putText(
+                        frame_bgr,
+                        label,
+                        (4, 11),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.42,
+                        label_color,
+                        1,
+                    )
 
                     # obs-space + action panel (top-right)
                     _draw_obs_panel(frame_bgr, obs, action, cv2)
@@ -1015,102 +1214,105 @@ def eval_model(
                     pass
 
             # 8 — compute rich stats from collected series
-            sp_arr  = np.array(metrics["speeds"],         dtype=np.float32)
-            co_arr  = np.array(metrics["center_offsets"], dtype=np.float32)
-            ob_arr  = np.array(obstacle_series,           dtype=np.float32)
-            st_arr  = np.array(steer_series,              dtype=np.float32)
-            th_arr  = np.array(throttle_series,           dtype=np.float32)
-            br_arr  = np.array(brake_series,              dtype=np.float32)
-            nav_arr = np.array(nav_series,                dtype=np.int8)
+            sp_arr = np.array(metrics["speeds"], dtype=np.float32)
+            co_arr = np.array(metrics["center_offsets"], dtype=np.float32)
+            ob_arr = np.array(obstacle_series, dtype=np.float32)
+            st_arr = np.array(steer_series, dtype=np.float32)
+            th_arr = np.array(throttle_series, dtype=np.float32)
+            br_arr = np.array(brake_series, dtype=np.float32)
+            nav_arr = np.array(nav_series, dtype=np.int8)
 
-            def _s(a): return float(np.std(a))  if len(a) else 0.0
-            def _m(a): return float(np.mean(a)) if len(a) else 0.0
-            def _x(a): return float(np.max(a))  if len(a) else 0.0
-            def _n(a): return float(np.min(a))  if len(a) else 0.0
+            def _s(a):
+                return float(np.std(a)) if len(a) else 0.0
+
+            def _m(a):
+                return float(np.mean(a)) if len(a) else 0.0
+
+            def _x(a):
+                return float(np.max(a)) if len(a) else 0.0
+
+            def _n(a):
+                return float(np.min(a)) if len(a) else 0.0
 
             n_steps = max(metrics["steps"], 1)
             off_route_steps = getattr(env, "off_route_count", 0)
 
             results[sc.name] = {
                 # ── outcome ──────────────────────────────────────────────
-                "success":             success,
-                "terminated":          metrics["terminated"],
-                "collision_step":      collision_step,
-                "reached_dest":        metrics["reached_dest"],
-                "steps":               metrics["steps"],
+                "success": success,
+                "terminated": metrics["terminated"],
+                "collision_step": collision_step,
+                "reached_dest": metrics["reached_dest"],
+                "steps": metrics["steps"],
                 "max_dist_from_start": round(metrics["max_dist_from_start"], 2),
-                "total_reward":        round(total_reward, 3),
-
+                "total_reward": round(total_reward, 3),
                 # ── speed ─────────────────────────────────────────────────
                 "speed": {
-                    "mean":       round(_m(sp_arr), 2),
-                    "max":        round(_x(sp_arr), 2),
-                    "min":        round(_n(sp_arr), 2),
-                    "std":        round(_s(sp_arr), 2),
+                    "mean": round(_m(sp_arr), 2),
+                    "max": round(_x(sp_arr), 2),
+                    "min": round(_n(sp_arr), 2),
+                    "std": round(_s(sp_arr), 2),
                     "pct_moving": round(float(np.mean(sp_arr > 2.0)), 3),
                 },
-
                 # ── lane keeping ──────────────────────────────────────────
                 "center_offset": {
-                    "mean_abs":    round(float(_m(np.abs(co_arr))), 4),
-                    "max_abs":     round(float(_x(np.abs(co_arr))), 4),
-                    "std":         round(_s(co_arr), 4),
+                    "mean_abs": round(float(_m(np.abs(co_arr))), 4),
+                    "max_abs": round(float(_x(np.abs(co_arr))), 4),
+                    "std": round(_s(co_arr), 4),
                     "pct_centered": round(float(np.mean(np.abs(co_arr) < 0.2)), 3),
                 },
-
                 # ── obstacle ──────────────────────────────────────────────
                 "obstacle": {
                     "mean_m": round(_m(ob_arr), 2),
-                    "min_m":  round(_n(ob_arr), 2),
+                    "min_m": round(_n(ob_arr), 2),
                 },
-
                 # ── actions ───────────────────────────────────────────────
                 "steer": {
                     "mean_abs": round(float(_m(np.abs(st_arr))), 4),
-                    "mean":     round(_m(st_arr), 4),   # signed → detect L/R bias
-                    "std":      round(_s(st_arr), 4),
+                    "mean": round(_m(st_arr), 4),  # signed → detect L/R bias
+                    "std": round(_s(st_arr), 4),
                 },
                 "throttle": {
                     "mean": round(_m(th_arr), 4),
-                    "std":  round(_s(th_arr), 4),       # high std → oscillation
+                    "std": round(_s(th_arr), 4),  # high std → oscillation
                 },
                 "brake": {
-                    "mean":        round(_m(br_arr), 4),
-                    "max":         round(_x(br_arr), 4),
+                    "mean": round(_m(br_arr), 4),
+                    "max": round(_x(br_arr), 4),
                     "pct_braking": round(float(np.mean(br_arr > 0.05)), 3),
                 },
-
                 # ── navigation ────────────────────────────────────────────
                 "nav_commands": {
                     "LANE_FOLLOW": int(np.sum(nav_arr == 0)),
-                    "LEFT":        int(np.sum(nav_arr == 1)),
-                    "RIGHT":       int(np.sum(nav_arr == 2)),
-                    "STRAIGHT":    int(np.sum(nav_arr == 3)),
+                    "LEFT": int(np.sum(nav_arr == 1)),
+                    "RIGHT": int(np.sum(nav_arr == 2)),
+                    "STRAIGHT": int(np.sum(nav_arr == 3)),
                 },
                 "off_route_steps": off_route_steps,
-                "off_route_pct":   round(off_route_steps / n_steps, 3),
-
+                "off_route_pct": round(off_route_steps / n_steps, 3),
                 # ── time series (for plotting) ─────────────────────────────
-                "trajectory":      trajectory,
-                "rewards_series":  [round(r, 4) for r in metrics["rewards"]],
-                "speed_series":    [round(s, 2) for s in metrics["speeds"]],
-                "center_series":   [round(c, 4) for c in metrics["center_offsets"]],
-                "steer_series":    steer_series,
+                "trajectory": trajectory,
+                "rewards_series": [round(r, 4) for r in metrics["rewards"]],
+                "speed_series": [round(s, 2) for s in metrics["speeds"]],
+                "center_series": [round(c, 4) for c in metrics["center_offsets"]],
+                "steer_series": steer_series,
                 "throttle_series": throttle_series,
-                "brake_series":    brake_series,
+                "brake_series": brake_series,
                 "obstacle_series": obstacle_series,
-                "nav_series":      nav_series,
+                "nav_series": nav_series,
                 "off_route_series": off_route_series,
-                "dist_series":     dist_series,
+                "dist_series": dist_series,
             }
 
             status = "✓" if success else ("✗" if success is False else "–")
             r = results[sc.name]
-            print(f"    {status}  steps={r['steps']:3d}  "
-                  f"dist={r['max_dist_from_start']:5.1f}m  "
-                  f"spd={r['speed']['mean']:5.1f}km/h  "
-                  f"offset={r['center_offset']['mean_abs']:.3f}  "
-                  f"off_route={r['off_route_pct']:.0%}")
+            print(
+                f"    {status}  steps={r['steps']:3d}  "
+                f"dist={r['max_dist_from_start']:5.1f}m  "
+                f"spd={r['speed']['mean']:5.1f}km/h  "
+                f"offset={r['center_offset']['mean_abs']:.3f}  "
+                f"off_route={r['off_route_pct']:.0%}"
+            )
 
         # 8 — summary card (3 seconds)
         _write_summary_card(results, scenarios, writer, out_w, out_h, fps, cv2)
@@ -1129,10 +1331,13 @@ def pick_best_checkpoint(all_results: dict[str, dict[str, dict]]) -> str:
     ppo_v6.3_300k's evals/results.json for a real-world case where it picked
     the worst checkpoint by off_route_pct.
     """
+
     def _score(scenarios: dict[str, dict]) -> tuple[int, float]:
         successes = sum(1 for m in scenarios.values() if m.get("success") is True)
         off_route_pcts = [m["off_route_pct"] for m in scenarios.values()]
-        mean_off_route = sum(off_route_pcts) / len(off_route_pcts) if off_route_pcts else 1.0
+        mean_off_route = (
+            sum(off_route_pcts) / len(off_route_pcts) if off_route_pcts else 1.0
+        )
         return (successes, -mean_off_route)
 
     return max(all_results, key=lambda label: _score(all_results[label]))

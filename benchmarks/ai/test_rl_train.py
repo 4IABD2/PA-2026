@@ -11,7 +11,6 @@ import pytest
 
 from src.ai.training.rl_train import make_model, train
 
-
 # ---------------------------------------------------------------------------
 # Minimal env — lets SB3 PPO initialize without CARLA
 # ---------------------------------------------------------------------------
@@ -38,12 +37,14 @@ class _MinimalEnv(gym.Env):
 
 def test_make_model_returns_ppo_instance():
     from stable_baselines3 import PPO
+
     model = make_model(_MinimalEnv())
     assert isinstance(model, PPO)
 
 
 def test_make_model_has_mlp_policy():
     from stable_baselines3.common.policies import ActorCriticPolicy
+
     model = make_model(_MinimalEnv())
     assert isinstance(model.policy, ActorCriticPolicy)
 
@@ -55,21 +56,25 @@ def test_make_model_override_learning_rate():
 
 def test_ppo_defaults_use_larger_network():
     from src.ai.training.rl_train import _PPO_DEFAULTS
+
     assert _PPO_DEFAULTS["policy_kwargs"]["net_arch"] == [128, 128]
 
 
 def test_ppo_defaults_have_entropy_coefficient():
     from src.ai.training.rl_train import _PPO_DEFAULTS
+
     assert _PPO_DEFAULTS["ent_coef"] == pytest.approx(0.01)
 
 
 def test_ppo_defaults_are_seeded():
     from src.ai.training.rl_train import _PPO_DEFAULTS
+
     assert _PPO_DEFAULTS["seed"] == 42
 
 
 def test_ppo_defaults_learning_rate_is_a_decaying_schedule():
     from src.ai.training.rl_train import _PPO_DEFAULTS
+
     lr_fn = _PPO_DEFAULTS["learning_rate"]
     assert callable(lr_fn)
     assert lr_fn(1.0) == pytest.approx(3e-4)

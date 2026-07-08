@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 import numpy as np
@@ -35,10 +36,10 @@ from src.lane_detection.lane_perception import estimate as lane_estimate
 from src.ai.training.rl_env import CarlaEnv
 from src.ai.inference.rl_demo import load_model, eval_model
 
-
 # ---------------------------------------------------------------------------
 # CARLA helpers (same pattern as run_rl_training.py)
 # ---------------------------------------------------------------------------
+
 
 class _NavAdapter:
     def __init__(self, nav: Navigation) -> None:
@@ -56,7 +57,9 @@ class _NavAdapter:
         self._nav.index_way = 0
         return self._nav.plan(start, destination)
 
-    def next_command(self, vehicle_position: Waypoint, route: Route) -> HighLevelCommand:
+    def next_command(
+        self, vehicle_position: Waypoint, route: Route
+    ) -> HighLevelCommand:
         try:
             return self._nav.next_command(vehicle_position, route)
         except Exception:
@@ -84,8 +87,9 @@ def _restore_async(world: carla.World) -> None:
     world.apply_settings(s)
 
 
-def _spawn_sensor(world: carla.World, ego: carla.Actor, bp_name: str,
-                  transform=None, **attrs) -> carla.Sensor:
+def _spawn_sensor(
+    world: carla.World, ego: carla.Actor, bp_name: str, transform=None, **attrs
+) -> carla.Sensor:
     bp = world.get_blueprint_library().find(bp_name)
     for k, v in attrs.items():
         bp.set_attribute(k, str(v))
@@ -106,11 +110,12 @@ def _destroy_all(actors: list) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark evaluation on CARLA")
     parser.add_argument("--model", required=True, help="Path to .zip model file")
-    parser.add_argument("--host",  default="localhost")
-    parser.add_argument("--port",  type=int, default=2000)
+    parser.add_argument("--host", default="localhost")
+    parser.add_argument("--port", type=int, default=2000)
     args = parser.parse_args()
 
     model_path = Path(args.model)
@@ -133,8 +138,9 @@ def main() -> None:
         bp = world.get_blueprint_library().find("vehicle.tesla.model3")
         ego = world.spawn_actor(bp, world.get_map().get_spawn_points()[0])
 
-        camera     = _spawn_sensor(world, ego, "sensor.camera.rgb",
-                                   image_size_x=_CAM_W, image_size_y=_CAM_H)
+        camera = _spawn_sensor(
+            world, ego, "sensor.camera.rgb", image_size_x=_CAM_W, image_size_y=_CAM_H
+        )
         col_sensor = _spawn_sensor(world, ego, "sensor.other.collision")
         sensors = [camera, col_sensor]
 
@@ -145,27 +151,38 @@ def main() -> None:
         perception = PerceptionPipeline()
 
         carla_map = world.get_map()
-        nav       = _NavAdapter(Navigation(ego, carla_map))
+        nav = _NavAdapter(Navigation(ego, carla_map))
         spawn_pts = carla_map.get_spawn_points()
-        route     = nav.plan(ego.get_transform().location, spawn_pts[-1].location)
+        route = nav.plan(ego.get_transform().location, spawn_pts[-1].location)
 
         env = CarlaEnv(
-            world=world, ego_vehicle=ego, nav=nav, route=route,
-            perception=perception, lane_estimate_fn=lane_estimate,
-            camera=camera, collision_sensor=col_sensor,
+            world=world,
+            ego_vehicle=ego,
+            nav=nav,
+            route=route,
+            perception=perception,
+            lane_estimate_fn=lane_estimate,
+            camera=camera,
+            collision_sensor=col_sensor,
             max_episode_steps=500,
         )
 
         # high-res demo camera
         demo_frame: list = [None]
         demo_cam = _spawn_sensor(
-            world, ego, "sensor.camera.rgb",
-            image_size_x=_DEMO_CAM_W, image_size_y=_DEMO_CAM_H,
+            world,
+            ego,
+            "sensor.camera.rgb",
+            image_size_x=_DEMO_CAM_W,
+            image_size_y=_DEMO_CAM_H,
         )
+
         def _on_frame(raw):
             arr = np.frombuffer(raw.raw_data, dtype="uint8").reshape(
-                raw.height, raw.width, 4)
+                raw.height, raw.width, 4
+            )
             demo_frame[0] = arr[:, :, [2, 1, 0]]
+
         demo_cam.listen(_on_frame)
         for _ in range(5):
             world.tick()
@@ -175,7 +192,8 @@ def main() -> None:
 
         try:
             results = eval_model(
-                model, env,
+                model,
+                env,
                 output_path=output_path,
                 fps=20,
                 render_fn=lambda: demo_frame[0],
@@ -186,6 +204,7 @@ def main() -> None:
 
         # ── save JSON ────────────────────────────────────────────────────
         import json
+
         results_path = str(model_path.parent / f"eval_{model_path.stem}.json")
         with open(results_path, "w") as f:
             json.dump(results, f, indent=2)
@@ -199,12 +218,14 @@ def main() -> None:
         for name, r in results.items():
             s = r["success"]
             mark = "✓" if s is True else ("✗" if s is False else "–")
-            detail = (f"steps={r['steps']:<4}  "
-                      f"dist={r['max_dist_from_start']:5.1f}m  "
-                      f"crash={str(r['terminated']):<5}  "
-                      f"offset={r['center_offset']['mean_abs']:.3f}  "
-                      f"speed={r['speed']['mean']:.1f}km/h  "
-                      f"off_route={r['off_route_pct']:.0%}")
+            detail = (
+                f"steps={r['steps']:<4}  "
+                f"dist={r['max_dist_from_start']:5.1f}m  "
+                f"crash={str(r['terminated']):<5}  "
+                f"offset={r['center_offset']['mean_abs']:.3f}  "
+                f"speed={r['speed']['mean']:.1f}km/h  "
+                f"off_route={r['off_route_pct']:.0%}"
+            )
             print(f"  {mark} {name:<22} {detail}")
         print(f"\nPhase 1 : {n_ok}/{n_p1} passed")
         print(f"Video   : {output_path}")

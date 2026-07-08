@@ -74,14 +74,20 @@ def _summarize_benchmark(results: dict) -> dict:
         p1 = [s for s in scenarios.values() if s.get("success") is not None]
         n_ok = sum(1 for s in p1 if s["success"] is True)
         speeds = [s["speed"]["mean"] for s in scenarios.values() if "speed" in s]
-        off_routes = [s["off_route_pct"] for s in scenarios.values() if "off_route_pct" in s]
-        throttles = [s["throttle"]["mean"] for s in scenarios.values() if "throttle" in s]
+        off_routes = [
+            s["off_route_pct"] for s in scenarios.values() if "off_route_pct" in s
+        ]
+        throttles = [
+            s["throttle"]["mean"] for s in scenarios.values() if "throttle" in s
+        ]
         brakes = [s["brake"]["mean"] for s in scenarios.values() if "brake" in s]
         summary[ckpt] = {
             "p1_success": n_ok,
             "p1_total": len(p1),
             "avg_speed_kmh": sum(speeds) / len(speeds) if speeds else None,
-            "avg_off_route_pct": sum(off_routes) / len(off_routes) if off_routes else None,
+            "avg_off_route_pct": (
+                sum(off_routes) / len(off_routes) if off_routes else None
+            ),
             "avg_throttle": sum(throttles) / len(throttles) if throttles else None,
             "avg_brake": sum(brakes) / len(brakes) if brakes else None,
         }
@@ -114,9 +120,17 @@ def _print_summary(data: dict) -> None:
     if data["benchmark"]:
         print("=== Benchmark by checkpoint ===")
         for ckpt, s in data["benchmark"].items():
-            speed = f"{s['avg_speed_kmh']:.1f}" if s["avg_speed_kmh"] is not None else "NA"
-            off_route = f"{s['avg_off_route_pct']:.1%}" if s["avg_off_route_pct"] is not None else "NA"
-            throttle = f"{s['avg_throttle']:.3f}" if s["avg_throttle"] is not None else "NA"
+            speed = (
+                f"{s['avg_speed_kmh']:.1f}" if s["avg_speed_kmh"] is not None else "NA"
+            )
+            off_route = (
+                f"{s['avg_off_route_pct']:.1%}"
+                if s["avg_off_route_pct"] is not None
+                else "NA"
+            )
+            throttle = (
+                f"{s['avg_throttle']:.3f}" if s["avg_throttle"] is not None else "NA"
+            )
             brake = f"{s['avg_brake']:.3f}" if s["avg_brake"] is not None else "NA"
             print(
                 f"  {ckpt:12s} P1={s['p1_success']}/{s['p1_total']}  speed={speed}km/h  "
@@ -124,7 +138,9 @@ def _print_summary(data: dict) -> None:
             )
         print()
     t = data["totals"]
-    print(f"Total: {t['total_episodes']} episodes, {t['total_steps']} steps, {t['crash_rate']:.0%} crash rate")
+    print(
+        f"Total: {t['total_episodes']} episodes, {t['total_steps']} steps, {t['crash_rate']:.0%} crash rate"
+    )
 
 
 def main() -> None:

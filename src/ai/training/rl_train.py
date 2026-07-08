@@ -9,8 +9,10 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 
 def _linear_lr_schedule(initial_value: float):
     """SB3 learning-rate schedule: linear decay from initial_value to 0."""
+
     def schedule(progress_remaining: float) -> float:
         return progress_remaining * initial_value
+
     return schedule
 
 
@@ -22,8 +24,10 @@ _PPO_DEFAULTS: dict = dict(
     gamma=0.99,
     gae_lambda=0.95,
     clip_range=0.2,
-    ent_coef=0.01,             # keeps exploration alive longer, avoids premature convergence
-    policy_kwargs=dict(net_arch=[128, 128]),  # bigger obs space and task need more capacity than [64, 64]
+    ent_coef=0.01,  # keeps exploration alive longer, avoids premature convergence
+    policy_kwargs=dict(
+        net_arch=[128, 128]
+    ),  # bigger obs space and task need more capacity than [64, 64]
     seed=42,
     verbose=1,
     device="cpu",  # MlpPolicy trains faster on CPU than GPU
