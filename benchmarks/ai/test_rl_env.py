@@ -47,6 +47,7 @@ def _make_env(
 
     wp = Mock()
     wp.transform.rotation.yaw = 0.0
+    wp.is_junction = False
     world.get_map.return_value.get_waypoint.return_value = wp
 
     spawn = Mock()
@@ -130,6 +131,29 @@ def _set_ego_location(env, x: float, y: float, z: float = 0.0) -> None:
     env.ego.get_transform.return_value = transform
 
 
+def _stub_ego_position_changes_after_tick(
+    env, pre_xyz: tuple[float, float, float], post_xyz: tuple[float, float, float]
+) -> tuple[Mock, Mock]:
+    """Makes env.ego.get_transform() return a location built from `pre_xyz`
+    until env.world.tick() has been called at least once, then a location
+    built from `post_xyz` afterwards — simulating CARLA's real behaviour
+    where set_transform() only takes effect client-side on the next
+    world.tick(). Returns (pre_loc, post_loc) so callers can assert identity.
+    """
+    pre_loc = Mock(x=pre_xyz[0], y=pre_xyz[1], z=pre_xyz[2])
+    pre_transform = Mock(location=pre_loc)
+    pre_transform.rotation.yaw = 0.0
+    post_loc = Mock(x=post_xyz[0], y=post_xyz[1], z=post_xyz[2])
+    post_transform = Mock(location=post_loc)
+    post_transform.rotation.yaw = 0.0
+
+    def get_transform_side_effect():
+        return post_transform if env.world.tick.called else pre_transform
+
+    env.ego.get_transform = Mock(side_effect=get_transform_side_effect)
+    return pre_loc, post_loc
+
+
 def _make_spawn(distance_to_nearest: float) -> Mock:
     """A spawn-point Mock whose location reports a fixed nearest-actor distance,
     regardless of which actor is queried."""
@@ -194,6 +218,21 @@ def test_reset_teleports_ego():
     env.reset()
     env.ego.set_transform.assert_called()
     env.ego.set_target_velocity.assert_called()
+
+
+def test_teleport_resets_vehicle_control():
+    # Regression test: a previous episode ending at full throttle (e.g.
+    # mid-collision) must not leave that control active on the actuator
+    # through the new episode's warmup ticks. Only asserts the call
+    # happened (not the exact argument), mirroring how
+    # set_target_velocity's own call is asserted just above — the real
+    # `carla` package is importable in this environment, so this exercises
+    # the real-CARLA branch (an actual zeroed VehicleControl), not the
+    # ModuleNotFoundError fallback.
+    env = _make_env()
+    env.ego.apply_control.reset_mock()
+    env.reset()
+    env.ego.apply_control.assert_called()
 
 
 def test_reset_replans_route_even_without_explicit_spawn_idx():
@@ -314,6 +353,64 @@ def test_reset_clears_last_image():
     env._last_image = np.zeros((720, 1280, 3), dtype=np.uint8)
     env.reset()
     assert env._last_image is None
+
+
+def test_reset_plans_route_from_post_tick_ego_position():
+    # Regression test: set_transform() only takes effect client-side on the
+    # next world.tick(). nav.plan() must be called with the ego's position
+    # as read AFTER the warmup ticks, not the stale pre-teleport position.
+    env = _make_env()
+    env.nav.plan.reset_mock()
+    _pre_loc, post_loc = _stub_ego_position_changes_after_tick(
+        env, pre_xyz=(1.0, 2.0, 0.0), post_xyz=(9.0, 8.0, 0.0)
+    )
+
+    env.reset()
+
+    env.nav.plan.assert_called_once()
+    called_location = env.nav.plan.call_args[0][0]
+    assert called_location is post_loc
+
+
+def test_reset_episode_start_location_uses_post_tick_ego_position():
+    # Same root cause as above: _episode_start_location must be captured
+    # after the warmup ticks, or the "reached destination" bonus can fire
+    # after almost no travel (it did, in production).
+    env = _make_env()
+    _pre_loc, post_loc = _stub_ego_position_changes_after_tick(
+        env, pre_xyz=(1.0, 2.0, 0.0), post_xyz=(9.0, 8.0, 0.0)
+    )
+
+    env.reset()
+
+    assert env._episode_start_location is post_loc
+
+
+def test_reset_clears_collision_flag_set_during_warmup_ticks():
+    # Regression test: a transient collision during the settling ticks
+    # (e.g. a nearby NPC clips the just-teleported vehicle) must not poison
+    # the new episode. This requires _collision_flag to be reset to False
+    # AFTER the warmup-tick loop, not before it.
+    env = _make_env()
+    env.world.tick = Mock(side_effect=lambda: setattr(env, "_collision_flag", True))
+
+    env.reset()
+
+    assert env._collision_flag is False
+
+
+def test_reset_nav_plan_exception_does_not_propagate():
+    env = _make_env()
+    env.nav.plan.side_effect = RuntimeError("boom")
+    env.reset()  # must not raise
+
+
+def test_reset_nav_plan_exception_is_printed(capsys):
+    env = _make_env()
+    env.nav.plan.side_effect = RuntimeError("boom")
+    env.reset()
+    captured = capsys.readouterr()
+    assert "boom" in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +581,16 @@ def test_obs_is_off_road_when_none():
     env = _make_env(on_road=False)
     obs, _ = env.reset()
     assert obs[5] == pytest.approx(0.0)
+
+
+def test_obs_is_on_road_when_in_junction_without_lane_lines():
+    # Intersections have no lane markings, so Karim's lane detector reports
+    # direction="NONE" there. Being inside a CARLA junction must still count
+    # as on-road so legitimately crossing an intersection isn't punished.
+    env = _make_env(on_road=False)
+    env.world.get_map.return_value.get_waypoint.return_value.is_junction = True
+    obs, _ = env.reset()
+    assert obs[5] == pytest.approx(1.0)
 
 
 def test_obs_nearest_vehicle_normalized():

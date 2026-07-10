@@ -15,6 +15,7 @@ class MatplotVisualizer:
         plt.axis("equal")
         plt.grid()
         plt.savefig("planned_route.png", dpi=300)
+        plt.close()
 
     @staticmethod
     def plot_road_network(graph):
@@ -27,3 +28,4 @@ class MatplotVisualizer:
         plt.axis("equal")
         plt.grid()
         plt.savefig("road_network_graph.png", dpi=300)
+        plt.close()

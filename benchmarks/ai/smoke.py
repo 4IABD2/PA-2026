@@ -26,7 +26,9 @@ def test_collision_terminates_with_negative_reward():
 
 
 def test_offroad_applies_penalty():
-    """Being off-road must give a lower reward than being on-road, by exactly -0.25."""
+    """Being off-road must cost -0.90 total: r_speed and r_center both drop
+    to 0.0 (no longer computed from a stale/default center_offset while
+    off-road), plus the raised -0.5 _P_OFFROAD penalty (was -0.25)."""
     reward_onroad, _, _ = compute_reward(
         speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -34,7 +36,33 @@ def test_offroad_applies_penalty():
         speed_kmh=30.0, center_offset=0.0, is_on_road=False, collision=False
     )
     assert reward_offroad < reward_onroad
-    assert reward_offroad == pytest.approx(reward_onroad - 0.25)
+    assert reward_offroad == pytest.approx(reward_onroad - 0.90)
+
+
+def test_r_center_zeroed_when_off_road():
+    """r_center must be 0.0 when off-road, regardless of the reported center_offset —
+    the gate is purely on is_on_road, since center_offset defaults to 0.0 (a
+    "perfectly centered" value) whenever the lane detector loses track off-road."""
+    _, _, components_centered = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=False, collision=False
+    )
+    _, _, components_edge = compute_reward(
+        speed_kmh=30.0, center_offset=0.9, is_on_road=False, collision=False
+    )
+    assert components_centered["r_center"] == pytest.approx(0.0)
+    assert components_edge["r_center"] == pytest.approx(0.0)
+
+
+def test_r_speed_zeroed_when_off_road():
+    """r_speed must be 0.0 when off-road, regardless of speed."""
+    _, _, components_slow = compute_reward(
+        speed_kmh=10.0, center_offset=0.0, is_on_road=False, collision=False
+    )
+    _, _, components_fast = compute_reward(
+        speed_kmh=80.0, center_offset=0.0, is_on_road=False, collision=False
+    )
+    assert components_slow["r_speed"] == pytest.approx(0.0)
+    assert components_fast["r_speed"] == pytest.approx(0.0)
 
 
 def test_speed_reward_scales_with_speed():

@@ -36,7 +36,7 @@ _OFF_ROUTE_M = 15.0  # metres from nearest route waypoint before off_route penal
 _ROUTE_GRACE_STEPS = (
     20  # steps after reset where off-route is not penalised (car joins route)
 )
-_DEFAULT_SPEED_LIMIT_KMH = 50.0
+_DEFAULT_SPEED_LIMIT_KMH = 30.0
 
 _SPAWN_SAFETY_MIN_DIST_M = (
     10.0  # minimum clearance from any NPC/pedestrian for a random spawn to be "safe"
@@ -158,18 +158,23 @@ class CarlaEnv(gym.Env):
         self._teleport_to_spawn(spawn_idx)
         if hasattr(self.nav, "index_way"):
             self.nav.index_way = 0
+        for _ in range(_WARMUP_TICKS):
+            self.world.tick()
         # Replan route from new position so nav commands are correct at every
         # spawn. Must run unconditionally: during normal training, SB3 calls
         # reset() with no options (spawn_idx=None) after every episode, so
         # skipping this when spawn_idx is None left the route — and thus every
         # nav command fed to the policy — stale from the very first episode.
+        # Runs AFTER the warmup ticks: set_transform() only takes effect
+        # client-side on the next world.tick(), so reading the ego's position
+        # any earlier would still see the previous episode's ending location.
         if hasattr(self.nav, "plan"):
             try:
                 spawn_pts = self.world.get_map().get_spawn_points()
                 dest = spawn_pts[-1].location
                 self.route = self.nav.plan(self.ego.get_transform().location, dest)
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"    nav.plan failed at reset: {exc}")
         self._collision_flag = False
         self._collision_speed_kmh = 0.0
         self._red_light_flagged = False
@@ -182,8 +187,6 @@ class CarlaEnv(gym.Env):
         self._current_speed_limit_kmh = _DEFAULT_SPEED_LIMIT_KMH
         self.off_route_count = 0
         self._last_image = None
-        for _ in range(_WARMUP_TICKS):
-            self.world.tick()
         return self._get_obs(), {}
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict]:
@@ -271,7 +274,10 @@ class CarlaEnv(gym.Env):
         # Karim: lateral offset, on-road status (lane heading angle is not fed to the model)
         direction, _angle, offset = self._lane_estimate(image)
         lane_offset_norm = float(np.clip(offset, -1.0, 1.0))
-        is_on_road = 1.0 if direction != "NONE" else 0.0
+        wp = self.world.get_map().get_waypoint(self.ego.get_transform().location)
+        is_on_road = (
+            1.0 if (direction != "NONE" or (wp is not None and wp.is_junction)) else 0.0
+        )
 
         # Franck: nearest vehicle, red light distance, speed limit sign, walker, stop/yield
         objects, _ = self.perception.perceive(image)
@@ -324,11 +330,13 @@ class CarlaEnv(gym.Env):
             spawn = self._pick_safe_random_spawn(spawn_points)
         self.ego.set_transform(spawn)
         try:
-            from carla import Vector3D  # noqa: PLC0415
+            from carla import Vector3D, VehicleControl  # noqa: PLC0415
 
             self.ego.set_target_velocity(Vector3D(0, 0, 0))
+            self.ego.apply_control(VehicleControl())
         except ModuleNotFoundError:
             self.ego.set_target_velocity(None)
+            self.ego.apply_control(None)
 
     def _pick_safe_random_spawn(self, spawn_points: list) -> "carla.Transform":
         """Draws up to _SPAWN_SAFETY_MAX_ATTEMPTS random spawn points and returns

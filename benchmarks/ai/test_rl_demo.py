@@ -20,6 +20,8 @@ from src.ai.inference.rl_demo import (
     pick_best_checkpoint,
     _draw_minimap,
     _draw_bboxes,
+    eval_model,
+    Scenario,
 )
 from src.interfaces.navigation_types import Route, Waypoint
 from src.interfaces.perception_types import DetectedObject, ObjectClass
@@ -639,3 +641,120 @@ def test_record_episode_calls_draw_bboxes_with_last_objects(tmp_path, monkeypatc
     frame_bgr_arg, objects_arg, cv2_arg = spy.call_args[0]
     assert objects_arg == env.last_objects
     assert cv2_arg is cv2
+
+
+# ---------------------------------------------------------------------------
+# eval_model
+# ---------------------------------------------------------------------------
+
+
+def _carla_loc(x, y, z=0.0):
+    """A minimal carla.Location stand-in with real numeric x/y/z (arithmetic
+    in eval_model's distance checks needs real floats, not auto-Mocks)."""
+    return Mock(x=x, y=y, z=z)
+
+
+def _carla_transform(x, y, z=0.0, yaw=0.0):
+    return Mock(location=_carla_loc(x, y, z), rotation=Mock(yaw=yaw))
+
+
+def _eval_env(ego_transforms, step_results, dest_xy):
+    """Mock env for eval_model()'s per-scenario loop.
+
+    ego_transforms: replayed in order by env.ego.get_transform() -- one call
+        for the dest_spawn_idx route-replan lookup, one for `_start`, then one
+        per env.step() call.
+    step_results: (reward, terminated, truncated) tuples, one per env.step()
+        call, replayed by env.step().
+    dest_xy: (x, y) of the scenario's replanned destination -- wired through
+        env.world.get_map().get_spawn_points()[dest_spawn_idx].location so
+        the eval loop's own dest-reached distance check has something to
+        compare against.
+    """
+    env = Mock()
+    env.reset.return_value = (_OBS, {})
+    env.step.side_effect = [(_OBS, r, te, tr, {}) for r, te, tr in step_results]
+    env.ego.get_transform.side_effect = ego_transforms
+    env._get_obs.return_value = _OBS
+    dest_spawn = Mock(location=_carla_loc(*dest_xy))
+    env.world.get_map.return_value.get_spawn_points.return_value = [dest_spawn]
+    return env
+
+
+def _dest_scenario(**overrides):
+    """A Phase 1 scenario with a replanned destination (dest_spawn_idx=0),
+    mirroring turn_left/turn_right/junction_straight in BENCHMARK_SCENARIOS."""
+    base = dict(
+        name="dest_test",
+        spawn_idx=0,
+        max_steps=5,
+        phase=1,
+        dest_spawn_idx=0,
+        target_radius=15.0,
+        success_fn=lambda m: bool(m.get("reached_dest")) and not m["terminated"],
+    )
+    base.update(overrides)
+    return Scenario(**base)
+
+
+def test_eval_model_reaching_dest_and_terminated_same_step_is_recorded_as_success(
+    tmp_path,
+):
+    # Regression test for a real success getting misrecorded as a crash: the
+    # env's own terminated=True fires for EITHER a collision OR the ego
+    # reaching its internal destination check -- both produce the identical
+    # boolean. Here, step 2 has the ego already within target_radius of
+    # dest_loc *and* env.step() reports terminated=True on that same call,
+    # simulating the internal destination-reached termination landing on the
+    # exact step the eval loop's own distance check would also fire.
+    ego_transforms = [
+        _carla_transform(0.0, 0.0),  # dest_spawn_idx route-replan lookup
+        _carla_transform(0.0, 0.0),  # `_start`
+        _carla_transform(50.0, 50.0),  # step 1 -- still far from dest
+        _carla_transform(100.0, 100.0),  # step 2 -- at dest, terminated=True too
+    ]
+    step_results = [
+        (0.1, False, False),
+        (-1.0, True, False),
+    ]
+    env = _eval_env(ego_transforms, step_results, dest_xy=(100.0, 100.0))
+    sc = _dest_scenario()
+    output = str(tmp_path / "eval.mp4")
+
+    results = eval_model(
+        _model(), env, output, scenarios=[sc], fps=2, render_fn=lambda: None
+    )
+
+    r = results["dest_test"]
+    assert r["reached_dest"] is True
+    assert r["terminated"] is False
+    assert r["collision_step"] is None
+    assert r["success"] is True
+
+
+def test_eval_model_genuine_collision_far_from_dest_still_recorded_as_crash(
+    tmp_path,
+):
+    # Complementary test: the fix must not suppress real crash detection when
+    # the ego is nowhere near the destination.
+    ego_transforms = [
+        _carla_transform(0.0, 0.0),  # dest_spawn_idx route-replan lookup
+        _carla_transform(0.0, 0.0),  # `_start`
+        _carla_transform(5.0, 5.0),  # step 1 -- nowhere near dest, collision here
+    ]
+    step_results = [
+        (-1.0, True, False),
+    ]
+    env = _eval_env(ego_transforms, step_results, dest_xy=(100.0, 100.0))
+    sc = _dest_scenario()
+    output = str(tmp_path / "eval.mp4")
+
+    results = eval_model(
+        _model(), env, output, scenarios=[sc], fps=2, render_fn=lambda: None
+    )
+
+    r = results["dest_test"]
+    assert r["terminated"] is True
+    assert r["collision_step"] == 1
+    assert r["reached_dest"] is False
+    assert r["success"] is False

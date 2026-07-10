@@ -54,6 +54,8 @@ class YoloDetector:
             conf = float(box.conf[0].cpu())
 
             if cls_id in _LIGHT_IDS:
+                if x2 <= x1 or y2 <= y1:
+                    continue
                 bgr_crop = cv2.cvtColor(image[y1:y2, x1:x2], cv2.COLOR_RGB2BGR)
                 final_id, _ = classify_tl_color(bgr_crop)
                 if final_id is None:

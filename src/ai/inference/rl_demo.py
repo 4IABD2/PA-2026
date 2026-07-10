@@ -1151,13 +1151,31 @@ def eval_model(
                 metrics["speeds"].append(speed_kmh)
                 metrics["rewards"].append(float(reward))
                 metrics["steps"] = step + 1
-                if terminated and collision_step is None:
-                    metrics["terminated"] = True
-                    collision_step = step + 1
 
                 # per-step rich data
                 ego_t = env.ego.get_transform()
                 ego_loc = ego_t.location
+
+                # check goal reached -- must run before recording `terminated`
+                # below: env-level terminated=True fires for EITHER a collision
+                # or the destination already being reached, and a genuine
+                # success must not be misrecorded as a crash just because both
+                # land on the same step.
+                if dest_loc is not None and not metrics["reached_dest"]:
+                    dist_to_dest = math.sqrt(
+                        (ego_loc.x - dest_loc.x) ** 2 + (ego_loc.y - dest_loc.y) ** 2
+                    )
+                    if dist_to_dest < sc.target_radius:
+                        metrics["reached_dest"] = True
+
+                if (
+                    terminated
+                    and collision_step is None
+                    and not metrics["reached_dest"]
+                ):
+                    metrics["terminated"] = True
+                    collision_step = step + 1
+
                 trajectory.append(
                     [
                         round(ego_loc.x, 2),
@@ -1191,14 +1209,6 @@ def eval_model(
                 dist_series.append(round(dist_from_start, 2))
                 if dist_from_start > metrics["max_dist_from_start"]:
                     metrics["max_dist_from_start"] = dist_from_start
-
-                # check goal reached
-                if dest_loc is not None and not metrics["terminated"]:
-                    dist_to_dest = math.sqrt(
-                        (ego_loc.x - dest_loc.x) ** 2 + (ego_loc.y - dest_loc.y) ** 2
-                    )
-                    if dist_to_dest < sc.target_radius:
-                        metrics["reached_dest"] = True
 
                 frame = _get_frame()
                 if frame is not None:
