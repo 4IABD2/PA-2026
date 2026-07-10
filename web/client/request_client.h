@@ -6,5 +6,6 @@
 #include <sys/socket.h>
 #include <cstdio>
 #include <unistd.h>
+#include <arpa/inet.h>
 
 std::vector<float> launchRequest(std::vector<float> input);

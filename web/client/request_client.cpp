@@ -10,7 +10,7 @@ std::vector<float> launchRequest(std::vector<float> input)
     sockaddr_in serverAddress;
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(8080);
-    serverAddress.sin_addr.s_addr = INADDR_ANY;
+    serverAddress.sin_addr.s_addr = inet_addr("13.51.201.34");
 
     // sending connection request
     connect(clientSocket, (struct sockaddr*)&serverAddress,
