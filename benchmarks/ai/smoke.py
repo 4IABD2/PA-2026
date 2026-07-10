@@ -127,6 +127,67 @@ def test_stall_penalises_zero_speed():
     assert reward_moving > reward_still
 
 
+def test_stall_not_penalised_near_red_light():
+    """A red light close ahead is a legitimate reason to stop — r_stall must
+    not fire, otherwise stopping at a red light is punished far harder than
+    running it."""
+    _, _, components = compute_reward(
+        speed_kmh=0.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=False,
+        red_light_distance_m=5.0,
+    )
+    assert components["r_stall"] == 0.0
+
+
+def test_stall_not_penalised_near_vehicle_danger():
+    """A vehicle within the danger distance is a legitimate reason to stop."""
+    _, _, components = compute_reward(
+        speed_kmh=0.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=False,
+        nearest_vehicle_m=5.0,
+    )
+    assert components["r_stall"] == 0.0
+
+
+def test_stall_not_penalised_near_walker_danger():
+    """A pedestrian within the danger distance is a legitimate reason to stop."""
+    _, _, components = compute_reward(
+        speed_kmh=0.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=False,
+        nearest_walker_m=5.0,
+    )
+    assert components["r_stall"] == 0.0
+
+
+def test_stall_still_penalised_with_no_legitimate_reason():
+    """Regression: an unjustified stall (nothing dangerous/red nearby) must
+    still cost the full -0.20 stall penalty."""
+    _, _, components = compute_reward(
+        speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    assert components["r_stall"] == pytest.approx(-0.20)
+
+
+def test_stall_penalised_when_red_light_far_away():
+    """A red light far ahead (outside the stall gate distance) must not
+    exempt stalling — the gate has an actual boundary, not "any red light
+    anywhere exempts stalling"."""
+    _, _, components = compute_reward(
+        speed_kmh=0.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=False,
+        red_light_distance_m=20.0,
+    )
+    assert components["r_stall"] == pytest.approx(-0.20)
+
+
 def test_collision_scales_with_impact_speed():
     """A faster impact must cost more than a near-stationary one."""
     reward_slow, _, _ = compute_reward(
@@ -166,12 +227,16 @@ def test_following_penalty_none_when_vehicle_far():
 
 
 def test_following_penalty_none_when_stopped():
+    """r_following stays 0 at any distance once stopped (speed_kmh < 1.0) --
+    "close" here uses 20.0 m, outside _WALKER_DANGER_M (10.0), so this isn't
+    confounded by the separate is_legitimate_stop exemption on r_stall for a
+    vehicle within danger distance."""
     reward_stopped_close, _, _ = compute_reward(
         speed_kmh=0.0,
         center_offset=0.0,
         is_on_road=True,
         collision=False,
-        nearest_vehicle_m=2.0,
+        nearest_vehicle_m=20.0,
     )
     reward_stopped_far, _, _ = compute_reward(
         speed_kmh=0.0,

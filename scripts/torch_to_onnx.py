@@ -21,7 +21,7 @@ class OnnxActorWrapper(torch.nn.Module):
         mean_actions = self.policy.action_net(latent_pi)
 
         # If the policy uses action squashing, keep the output in action range.
-        # For your env this is steer/throttle/brake = 3 floats.
+        # For your env this is steer/accel = 2 floats.
         return torch.tanh(mean_actions)
 
 
