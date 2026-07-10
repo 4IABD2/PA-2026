@@ -7,13 +7,11 @@ MAX_SPEED_KMH = 90.0
 _W_SPEED = 0.3
 _W_CENTER = 0.3
 _W_ALIVE = 0.01
-_P_OFFROAD = -0.25
+_P_OFFROAD = -0.5
 _P_COLLISION_BASE = -5.0
 _P_COLLISION_SPEED_SCALE = -0.20  # per km/h of speed at the moment of impact
 _P_STALL = -0.20  # breaks the lazy-policy attractor (staying still = 0 risk)
-_P_OFF_ROUTE = -0.5  # calibrated independently from _P_OFFROAD, which was deliberately
-# lowered in the v4 batch to avoid worsening the "crash fast" shortcut
-# diagnosed at the time — the two are no longer meant to be equal
+_P_OFF_ROUTE = -0.5  # re-aligned with _P_OFFROAD (both -0.5)
 
 _W_FOLLOWING = 0.2
 _SAFE_HEADWAY_S = 2.0  # standard "2-second rule" following distance
@@ -183,8 +181,12 @@ def compute_reward(
     )
 
     components = {
-        "r_speed": (effective_speed_for_r_speed / max_speed_kmh) * _W_SPEED,
-        "r_center": (1.0 - abs(center_offset)) * _W_CENTER,
+        "r_speed": (
+            (effective_speed_for_r_speed / max_speed_kmh) * _W_SPEED
+            if is_on_road
+            else 0.0
+        ),
+        "r_center": (1.0 - abs(center_offset)) * _W_CENTER if is_on_road else 0.0,
         "r_alive": _W_ALIVE,
         "r_offroad": 0.0 if is_on_road else _P_OFFROAD,
         "r_stall": _P_STALL if speed_kmh < 1.0 else 0.0,

@@ -15,7 +15,7 @@ Usage:
 Output — one timestamped folder under runs/ :
     runs/YYYY-MM-DD_HH-MM_<tag>/
         params.json              hyperparams + config
-        model_best.zip           best checkpoint (saved during training)
+        best_model.zip           best checkpoint (saved during training)
         model_final.zip          weights at end of training
         checkpoints/             periodic snapshots (every timesteps/10 steps)
         training_log.csv         per-episode reward / length (Monitor format)
@@ -431,10 +431,7 @@ def main() -> None:
 
             # SB3 Monitor wrapper — logs episode reward/length to CSV automatically
             from stable_baselines3.common.monitor import Monitor
-            from stable_baselines3.common.callbacks import (
-                EvalCallback,
-                CheckpointCallback,
-            )
+            from stable_baselines3.common.callbacks import CheckpointCallback
 
             env_monitored = Monitor(
                 env,
@@ -444,14 +441,6 @@ def main() -> None:
             model = make_model(env_monitored)
 
             callbacks = [
-                EvalCallback(
-                    Monitor(env),
-                    best_model_save_path=str(run_dir),
-                    log_path=str(run_dir),
-                    eval_freq=max(args.timesteps // 20, 1000),
-                    n_eval_episodes=3,
-                    verbose=0,
-                ),
                 CheckpointCallback(
                     save_freq=max(args.timesteps // 10, 2048),
                     save_path=str(run_dir / "checkpoints"),
@@ -546,19 +535,6 @@ def main() -> None:
                             checkpoint_paths[label] = ckpt
                         print(f"Checkpoint evals → {evals_dir}/checkpoint_*.mp4")
 
-                    # benchmark eval on best model
-                    best_model = load_model(str(run_dir / "best_model"))
-                    best_results = eval_model(
-                        best_model,
-                        env,
-                        output_path=str(evals_dir / "best_model.mp4"),
-                        fps=20,
-                        render_fn=lambda: demo_frame[0],
-                    )
-                    all_results["best_model"] = best_results
-                    checkpoint_paths["best_model"] = run_dir / "best_model"
-                    print(f"Best model eval → {evals_dir / 'best_model.mp4'}")
-
                     # save all benchmark results to JSON
                     import json
 
@@ -567,10 +543,15 @@ def main() -> None:
                         json.dump(all_results, f, indent=2)
                     print(f"Benchmark results → {results_path}")
 
-                    # EvalCallback's best_model.zip is picked from 3 noisy eval
-                    # episodes during training and is not trustworthy on its own
-                    # (see JOURNAL.md, ppo_v6.3_300k) -- replace it with whichever
-                    # candidate actually scores best on the full benchmark above.
+                    # Pick the real winner from the full benchmark above (raw training
+                    # reward, which an EvalCallback-style pick would rely on, was shown
+                    # not to track real quality -- see JOURNAL.md, ppo_v6.3_300k).
+                    if not all_results:
+                        raise RuntimeError(
+                            "No checkpoints were saved during training -- nothing to "
+                            "benchmark or pick as best_model. Check CheckpointCallback's "
+                            "save_freq against --timesteps."
+                        )
                     winner_label = pick_best_checkpoint(all_results)
                     winner_model = load_model(str(checkpoint_paths[winner_label]))
                     winner_model.save(str(run_dir / "best_model"))

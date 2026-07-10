@@ -73,11 +73,11 @@ CARLA World (sync mode, 20 FPS)
          └─ brake    ∈ [0, 1]
 
 [Reward function — par step]   src/ai/rewards/reward_fn.py
-         ├─ r_speed      = (progress_speed_kmh / 90.0) × 0.3                → encourage la progression le long de la route (pas la vitesse brute)
-         ├─ r_center     = (1 − |lane_offset_norm|) × 0.3                   → encourage le centrage
+         ├─ r_speed      = (progress_speed_kmh / 90.0) × 0.3 si is_on_road else 0.0 → encourage la progression le long de la route (pas la vitesse brute) ; nul hors route pour ne pas récompenser une vitesse mesurée hors piste
+         ├─ r_center     = (1 − |lane_offset_norm|) × 0.3 si is_on_road else 0.0 → encourage le centrage ; nul hors route (sinon un center_offset resté à 0.0 par défaut donnerait un faux maximum)
          ├─ r_alive      = +0.01                                            → survie (anti-crash passif)
          ├─ r_stall      = −0.20 si speed < 1 km/h                          → pénalise l'immobilisme
-         ├─ r_offroad    = −0.25 si is_on_road=False                        → pénalité hors route (Karim)
+         ├─ r_offroad    = −0.5  si is_on_road=False                        → pénalité hors route (Karim)
          ├─ r_off_route  = −0.5  si > 15m de la route GPS                   → pénalise la déviation GPS
          ├─ r_following  = −(1 − headway_s/2.0) × 0.2 si headway < 2s       → distance de sécurité, règle des 2s (Franck)
          ├─ r_walker     = −(1 − dist_piéton/10m) × 0.3 si dist < 10m       → priorité sécurité piéton (Franck)
@@ -230,14 +230,13 @@ Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` :
 |---|---|
 | `params.json` | hyperparamètres + config de la run |
 | `run.log` | copie intégrale de stdout+stderr sur toute la durée du script — survit à un crash |
-| `model_best.zip` | meilleur checkpoint (EvalCallback SB3) |
+| `best_model.zip` | meilleur checkpoint réel, sélectionné par `pick_best_checkpoint()` sur le benchmark complet (plus d'EvalCallback SB3 — voir plus bas) |
 | `model_final.zip` | poids à la fin du training |
 | `training_log.monitor.csv` | reward / longueur par épisode + moyenne des 15 composantes de reward (Monitor SB3, `info_keywords`) |
 | `reward_curve.png` | courbe reward brute + moyenne mobile |
 | `demo.mp4` | vidéo d'inférence avec HUD (best model, spawn fixe) — ouvre sur 3s de carte du trajet prévu (départ "A" / arrivée "B") |
 | `evals/checkpoint_XXXXk.mp4` | vidéo 13 scénarios par checkpoint |
-| `evals/best_model.mp4` | vidéo 13 scénarios du best model |
-| `evals/results.json` | métriques complètes (tous checkpoints + best model) |
+| `evals/results.json` | métriques complètes de tous les checkpoints périodiques évalués |
 | `analysis_data.json` | généré par `scripts/analyze_run.py` (voir section suivante) |
 
 ## Phase 1 — Analyser une run
