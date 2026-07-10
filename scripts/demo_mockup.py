@@ -67,7 +67,7 @@ class StraightPolicy:
     name = "straight"
 
     def predict(self, obs: np.ndarray, deterministic: bool = True):
-        action = np.array([0.0, 0.9, 0.0], dtype=np.float32)
+        action = np.array([0.0, 0.9], dtype=np.float32)
         return action, None
 
 
@@ -85,9 +85,8 @@ class RouteFollowPolicy:
         speed_norm = float(obs[0])
 
         steer = float(np.clip(-lane_offset_norm * 0.25, -1.0, 1.0))
-        throttle = 0.45 if speed_norm < 0.25 else 0.3
-        brake = 0.0
-        return np.array([steer, throttle, brake], dtype=np.float32), None
+        accel = 0.45 if speed_norm < 0.25 else 0.3
+        return np.array([steer, accel], dtype=np.float32), None
 
 
 # ---------------------------------------------------------------------------

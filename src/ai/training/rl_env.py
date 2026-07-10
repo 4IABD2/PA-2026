@@ -45,6 +45,11 @@ _SPAWN_SAFETY_MAX_ATTEMPTS = (
     10  # random spawn draws tried before falling back to the best one seen
 )
 
+_MIN_DEST_DIST_M = 30.0  # minimum straight-line distance from spawn to destination
+_DEST_PICK_MAX_ATTEMPTS = (
+    10  # random destination draws tried before falling back to the best one seen
+)
+
 _DEST_REACHED_RADIUS_M = 15.0  # matches _OFF_ROUTE_M's "close enough" scale
 _MIN_TRAVEL_FOR_DEST_M = (
     25.0  # matches benchmark.py's _MIN_DIST_M "must have actually driven" convention
@@ -95,6 +100,18 @@ def _nearest_distance_norm(objects: list, classes: tuple) -> float:
     return float(np.clip(min(dists) / _MAX_OBSTACLE_M, 0.0, 1.0)) if dists else 1.0
 
 
+def _in_ego_path(obj, image_width: float) -> bool:
+    """Coarse "is this roughly ahead of the ego" heuristic: True if the
+    detection's bounding box is horizontally centered in the middle third
+    of the camera frame. No 3D/world position is available on a detection
+    to do this more precisely — this only filters out things clearly to the
+    far left/right (oncoming traffic in the next lane over, cross-street
+    signals, parked vehicles on the shoulder), not a real lane check.
+    """
+    cx = (obj.bbox[0] + obj.bbox[2]) / 2.0
+    return image_width / 3.0 <= cx <= 2.0 * image_width / 3.0
+
+
 class CarlaEnv(gym.Env):
     def __init__(
         self,
@@ -121,8 +138,8 @@ class CarlaEnv(gym.Env):
             low=_OBS_LOW, high=_OBS_HIGH, dtype=np.float32
         )
         self.action_space = spaces.Box(
-            low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
-            high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+            low=np.array([-1.0, -1.0], dtype=np.float32),
+            high=np.array([1.0, 1.0], dtype=np.float32),
         )
 
         self._collision_flag: bool = False
@@ -171,7 +188,9 @@ class CarlaEnv(gym.Env):
         if hasattr(self.nav, "plan"):
             try:
                 spawn_pts = self.world.get_map().get_spawn_points()
-                dest = spawn_pts[-1].location
+                dest = self._pick_random_destination(
+                    spawn_pts, self.ego.get_transform().location
+                )
                 self.route = self.nav.plan(self.ego.get_transform().location, dest)
             except Exception as exc:
                 print(f"    nav.plan failed at reset: {exc}")
@@ -191,8 +210,9 @@ class CarlaEnv(gym.Env):
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict]:
         steer = float(action[0])
-        throttle = float(action[1])
-        brake = float(action[2])
+        accel = float(action[1])
+        throttle = max(accel, 0.0)
+        brake = max(-accel, 0.0)
         self._apply_control(steer, throttle, brake)
         self.world.tick()
         self._step_count += 1
@@ -233,6 +253,7 @@ class CarlaEnv(gym.Env):
             off_route=off_route,
             nearest_vehicle_m=float(obs[6]) * _MAX_OBSTACLE_M,
             nearest_walker_m=float(obs[9]) * _MAX_OBSTACLE_M,
+            red_light_distance_m=float(obs[7]) * _MAX_OBSTACLE_M,
             speed_limit_kmh=self._current_speed_limit_kmh,
             collision_speed_kmh=self._collision_speed_kmh,
             red_light_violation=red_light_violation,
@@ -283,9 +304,28 @@ class CarlaEnv(gym.Env):
         objects, _ = self.perception.perceive(image)
         self.last_objects = objects
 
-        nearest_vehicle_norm = _nearest_distance_norm(objects, (ObjectClass.VEHICLE,))
+        # Vehicle/red-light detections are filtered to roughly "ahead of the
+        # ego" (see _in_ego_path) before computing distance — otherwise the
+        # nearest match anywhere in frame can be oncoming traffic in the next
+        # lane, a parked car on the shoulder, or a cross-street's signal.
+        # Walkers and stop/yield signs are deliberately left unfiltered.
+        image_width = float(image.shape[1])
+        vehicles_ahead = [
+            o
+            for o in objects
+            if o.class_name == ObjectClass.VEHICLE and _in_ego_path(o, image_width)
+        ]
+        red_lights_ahead = [
+            o
+            for o in objects
+            if o.class_name == ObjectClass.RED_LIGHT and _in_ego_path(o, image_width)
+        ]
+
+        nearest_vehicle_norm = _nearest_distance_norm(
+            vehicles_ahead, (ObjectClass.VEHICLE,)
+        )
         red_light_distance_norm = _nearest_distance_norm(
-            objects, (ObjectClass.RED_LIGHT,)
+            red_lights_ahead, (ObjectClass.RED_LIGHT,)
         )
         nearest_walker_norm = _nearest_distance_norm(objects, (ObjectClass.WALKER,))
         nearest_stop_yield_norm = _nearest_distance_norm(
@@ -357,6 +397,26 @@ class CarlaEnv(gym.Env):
                 best_dist = dist
                 best_spawn = candidate
         return best_spawn
+
+    def _pick_random_destination(
+        self, spawn_pts: list, ego_location: "carla.Location"
+    ) -> "carla.Location":
+        """Draws up to _DEST_PICK_MAX_ATTEMPTS random spawn points as a candidate
+        destination and returns the first at least _MIN_DEST_DIST_M from the
+        ego's current position — avoids a degenerate near-zero-length route.
+        Falls back to the farthest candidate seen if none clears the threshold.
+        """
+        best_dest = None
+        best_dist = -1.0
+        for _ in range(_DEST_PICK_MAX_ATTEMPTS):
+            candidate = spawn_pts[int(self.np_random.integers(len(spawn_pts)))]
+            dist = ego_location.distance(candidate.location)
+            if dist >= _MIN_DEST_DIST_M:
+                return candidate.location
+            if dist > best_dist:
+                best_dist = dist
+                best_dest = candidate.location
+        return best_dest
 
     def _nearby_dynamic_actors(self) -> list:
         """All vehicle and pedestrian actors in the world, excluding the ego."""

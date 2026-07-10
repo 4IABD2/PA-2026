@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from unittest.mock import Mock
 
 import numpy as np
 import pytest
 
-from src.ai.training.rl_env import CarlaEnv
+from src.ai.training.rl_env import CarlaEnv, _in_ego_path
 from src.interfaces.navigation_types import HighLevelCommand, Route, Waypoint
 from src.interfaces.perception_types import DetectedObject, ObjectClass
 
@@ -40,6 +41,7 @@ def _make_env(
 
     loc = Mock()
     loc.x, loc.y, loc.z = 0.0, 0.0, 0.0
+    _add_real_distance(loc)  # _pick_random_destination() calls loc.distance(...)
     transform = Mock()
     transform.location = loc
     transform.rotation.yaw = 0.0
@@ -61,11 +63,15 @@ def _make_env(
     )
 
     # Franck's perception mock
+    # Vehicle/red-light bboxes are centered on a 1280-wide frame (cx=640) so
+    # they land in the middle third and survive _in_ego_path() filtering —
+    # tests that specifically exercise the edge-vs-center filter build their
+    # own DetectedObject lists instead of using these defaults.
     perception = Mock()
     objects = [
         DetectedObject(
             class_name=ObjectClass.VEHICLE,
-            bbox=(0, 0, 10, 10),
+            bbox=(630, 0, 650, 10),
             confidence=0.9,
             distance_m=nearest_vehicle_m,
         )
@@ -74,7 +80,7 @@ def _make_env(
         objects.append(
             DetectedObject(
                 class_name=ObjectClass.RED_LIGHT,
-                bbox=(100, 0, 120, 30),
+                bbox=(630, 0, 650, 30),
                 confidence=0.95,
                 distance_m=red_light_distance_m,
             )
@@ -140,10 +146,10 @@ def _stub_ego_position_changes_after_tick(
     where set_transform() only takes effect client-side on the next
     world.tick(). Returns (pre_loc, post_loc) so callers can assert identity.
     """
-    pre_loc = Mock(x=pre_xyz[0], y=pre_xyz[1], z=pre_xyz[2])
+    pre_loc = _add_real_distance(Mock(x=pre_xyz[0], y=pre_xyz[1], z=pre_xyz[2]))
     pre_transform = Mock(location=pre_loc)
     pre_transform.rotation.yaw = 0.0
-    post_loc = Mock(x=post_xyz[0], y=post_xyz[1], z=post_xyz[2])
+    post_loc = _add_real_distance(Mock(x=post_xyz[0], y=post_xyz[1], z=post_xyz[2]))
     post_transform = Mock(location=post_loc)
     post_transform.rotation.yaw = 0.0
 
@@ -156,13 +162,41 @@ def _stub_ego_position_changes_after_tick(
 
 def _make_spawn(distance_to_nearest: float) -> Mock:
     """A spawn-point Mock whose location reports a fixed nearest-actor distance,
-    regardless of which actor is queried."""
+    regardless of which actor is queried. Its (x, y, z) is set to a fixed point
+    100m from the default (0, 0, 0) ego mock position (see _make_env()) — well
+    past _MIN_DEST_DIST_M (30m) — so _pick_random_destination()'s real
+    ego_location.distance(candidate.location) call (see _add_real_distance())
+    succeeds with a genuine value instead of raising a TypeError that reset()'s
+    broad except would otherwise silently swallow."""
     sp = Mock()
+    sp.location.x, sp.location.y, sp.location.z = 100.0, 0.0, 0.0
     sp.location.distance = Mock(return_value=distance_to_nearest)
     return sp
 
 
-_ZERO_ACTION = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+def _add_real_distance(loc: Mock) -> Mock:
+    """Attaches a `.distance()` method to a location Mock that computes real
+    Euclidean distance to another x/y/z-bearing object, mirroring
+    carla.Location.distance() — needed for _pick_random_destination(), which
+    calls `.distance()` on the ego's own (mocked) location.
+    """
+    loc.distance = Mock(
+        side_effect=lambda other: math.sqrt(
+            (loc.x - other.x) ** 2 + (loc.y - other.y) ** 2 + (loc.z - other.z) ** 2
+        )
+    )
+    return loc
+
+
+def _make_spawn_at(x: float, y: float, z: float = 0.0) -> Mock:
+    """A spawn-point Mock at a specific, distinguishable (x, y, z) — for
+    destination-selection tests that need distinct candidate locations."""
+    sp = Mock()
+    sp.location.x, sp.location.y, sp.location.z = x, y, z
+    return sp
+
+
+_ZERO_ACTION = np.array([0.0, 0.0], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -178,9 +212,9 @@ def test_observation_space_shape_and_dtype():
 
 def test_action_space_shape_and_bounds():
     env = _make_env()
-    assert env.action_space.shape == (3,)
-    np.testing.assert_array_equal(env.action_space.low, [-1.0, 0.0, 0.0])
-    np.testing.assert_array_equal(env.action_space.high, [1.0, 1.0, 1.0])
+    assert env.action_space.shape == (2,)
+    np.testing.assert_array_equal(env.action_space.low, [-1.0, -1.0])
+    np.testing.assert_array_equal(env.action_space.high, [1.0, 1.0])
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +299,11 @@ def test_safe_spawn_rejects_candidate_within_min_distance():
     env.world.get_map.return_value.get_spawn_points.return_value = [unsafe, safe]
     nearby_actor = Mock(id=999, get_location=Mock(return_value=Mock()))
     env.world.get_actors.return_value.filter.return_value = [nearby_actor]
-    env.np_random = Mock(integers=Mock(side_effect=[0, 1]))
+    # 3 draws total: 2 for the safe-spawn pick (unsafe, then safe) and 1 more
+    # for the random destination pick that follows in the same reset() call,
+    # which succeeds immediately since _make_spawn()'s candidates sit 100m
+    # from the ego's mocked (0, 0, 0) position.
+    env.np_random = Mock(integers=Mock(side_effect=[0, 1, 0]))
 
     env.reset()
 
@@ -279,12 +317,20 @@ def test_safe_spawn_accepts_first_candidate_at_exactly_min_distance():
     env.world.get_map.return_value.get_spawn_points.return_value = [safe, other]
     nearby_actor = Mock(id=999, get_location=Mock(return_value=Mock()))
     env.world.get_actors.return_value.filter.return_value = [nearby_actor]
-    env.np_random = Mock(integers=Mock(side_effect=[0]))
+    env.np_random = Mock(integers=Mock(side_effect=[0, 0]))
 
     env.reset()
 
     env.ego.set_transform.assert_called_with(safe)
-    env.np_random.integers.assert_called_once()  # short-circuits, doesn't draw all 10
+    # 2 draws total: one for the safe-spawn pick (safe's 10.0m clearance
+    # meets the 10m threshold on the first draw) and one for the random
+    # destination pick that follows (reset() shares self.np_random across
+    # both). The destination draw also succeeds on its first attempt:
+    # _make_spawn()'s candidates sit 100m from the ego's mocked (0, 0, 0)
+    # position, comfortably past the 30m _MIN_DEST_DIST_M guard, so
+    # ego_location.distance(...) returns a real value >= 30 immediately
+    # rather than needing a retry.
+    assert env.np_random.integers.call_count == 2
 
 
 def test_safe_spawn_falls_back_to_best_attempt_when_all_unsafe():
@@ -295,8 +341,9 @@ def test_safe_spawn_falls_back_to_best_attempt_when_all_unsafe():
     nearby_actor = Mock(id=999, get_location=Mock(return_value=Mock()))
     env.world.get_actors.return_value.filter.return_value = [nearby_actor]
     # 10 draws (all below the 10m threshold), ending on `worse` so a
-    # last-drawn-wins implementation would incorrectly return `worse`.
-    env.np_random = Mock(integers=Mock(side_effect=[0, 1, 0, 1, 0, 1, 0, 1, 0, 0]))
+    # last-drawn-wins implementation would incorrectly return `worse`, plus
+    # 1 more draw for the random destination pick that follows.
+    env.np_random = Mock(integers=Mock(side_effect=[0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0]))
 
     env.reset()
 
@@ -310,7 +357,9 @@ def test_safe_spawn_accepts_immediately_when_no_nearby_actors():
     env.world.get_actors.return_value.filter.return_value = (
         []
     )  # no vehicles, no walkers
-    env.np_random = Mock(integers=Mock(side_effect=[0]))
+    # 2 draws: 1 for the safe-spawn pick (immediate, no nearby actors) and 1
+    # for the random destination pick that follows.
+    env.np_random = Mock(integers=Mock(side_effect=[0, 0]))
 
     env.reset()
 
@@ -324,7 +373,9 @@ def test_safe_spawn_excludes_ego_from_nearby_actors():
     env.ego.id = 1
     ego_as_actor = Mock(id=1, get_location=Mock(return_value=Mock()))
     env.world.get_actors.return_value.filter.return_value = [ego_as_actor]
-    env.np_random = Mock(integers=Mock(side_effect=[0]))
+    # 2 draws: 1 for the safe-spawn pick (immediate, ego excluded from
+    # nearby actors) and 1 for the random destination pick that follows.
+    env.np_random = Mock(integers=Mock(side_effect=[0, 0]))
 
     env.reset()
 
@@ -411,6 +462,66 @@ def test_reset_nav_plan_exception_is_printed(capsys):
     env.reset()
     captured = capsys.readouterr()
     assert "boom" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Random destination selection
+# ---------------------------------------------------------------------------
+
+
+def test_reset_picks_different_destination_across_differently_seeded_episodes():
+    # Regression test: reset() used to always plan toward spawn_pts[-1], the
+    # same fixed destination every episode. It must now vary with the random
+    # draw so the policy practices reaching different points on the map.
+    env = _make_env()
+    near = _make_spawn_at(5.0, 0.0)  # closer than _MIN_DEST_DIST_M
+    far_a = _make_spawn_at(100.0, 0.0)
+    far_b = _make_spawn_at(0.0, 100.0)
+    env.world.get_map.return_value.get_spawn_points.return_value = [
+        near,
+        far_a,
+        far_b,
+    ]
+
+    env.np_random = Mock(integers=Mock(return_value=1))  # always draws far_a
+    env.reset()
+    dest_a = env.nav.plan.call_args[0][1]
+
+    env.np_random = Mock(integers=Mock(return_value=2))  # always draws far_b
+    env.reset()
+    dest_b = env.nav.plan.call_args[0][1]
+
+    assert dest_a is far_a.location
+    assert dest_b is far_b.location
+    assert dest_a is not dest_b
+
+
+def test_pick_random_destination_enforces_min_distance_guard():
+    env = _make_env()
+    ego_loc = _add_real_distance(Mock(x=0.0, y=0.0, z=0.0))
+    near = _make_spawn_at(5.0, 0.0)  # 5m away, below the 30m guard
+    far = _make_spawn_at(50.0, 0.0)  # 50m away, clears the guard
+    env.np_random = Mock(integers=Mock(side_effect=[0, 1]))  # draws near, then far
+
+    dest = env._pick_random_destination([near, far], ego_loc)
+
+    assert dest is far.location
+    assert ego_loc.distance(dest) >= 30.0  # >= _MIN_DEST_DIST_M
+
+
+def test_pick_random_destination_falls_back_to_farthest_when_all_too_close():
+    env = _make_env()
+    ego_loc = _add_real_distance(Mock(x=0.0, y=0.0, z=0.0))
+    closer = _make_spawn_at(5.0, 0.0)  # 5m, both below the 30m guard
+    farther = _make_spawn_at(20.0, 0.0)  # 20m, farthest seen
+    # 10 draws alternating, ending on `closer` so a last-drawn-wins
+    # implementation would incorrectly return `closer`.
+    env.np_random = Mock(integers=Mock(side_effect=[1, 0, 1, 0, 1, 0, 1, 0, 1, 0]))
+
+    dest = env._pick_random_destination([closer, farther], ego_loc)
+
+    assert dest is farther.location
+    assert dest is not None
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +748,197 @@ def test_obs_no_stop_yield_detected():
 
 
 # ---------------------------------------------------------------------------
+# _in_ego_path() — coarse "roughly ahead of the ego" heuristic
+# ---------------------------------------------------------------------------
+
+
+def test_in_ego_path_excludes_bbox_centered_at_left_edge():
+    obj = DetectedObject(
+        class_name=ObjectClass.VEHICLE,
+        bbox=(0, 100, 50, 200),
+        confidence=0.9,
+        distance_m=5.0,
+    )
+    assert _in_ego_path(obj, image_width=1280.0) is False
+
+
+def test_in_ego_path_excludes_bbox_centered_at_right_edge():
+    obj = DetectedObject(
+        class_name=ObjectClass.VEHICLE,
+        bbox=(1230, 100, 1280, 200),
+        confidence=0.9,
+        distance_m=5.0,
+    )
+    assert _in_ego_path(obj, image_width=1280.0) is False
+
+
+def test_in_ego_path_includes_bbox_centered_in_middle_third():
+    obj = DetectedObject(
+        class_name=ObjectClass.VEHICLE,
+        bbox=(600, 100, 700, 200),
+        confidence=0.9,
+        distance_m=5.0,
+    )
+    assert _in_ego_path(obj, image_width=1280.0) is True
+
+
+def test_in_ego_path_includes_bbox_exactly_at_lower_third_boundary():
+    # image_width=300 -> boundaries at exactly 100.0 and 200.0
+    obj = DetectedObject(
+        class_name=ObjectClass.VEHICLE,
+        bbox=(100, 0, 100, 10),  # center == 100.0, the lower boundary
+        confidence=0.9,
+        distance_m=5.0,
+    )
+    assert _in_ego_path(obj, image_width=300.0) is True
+
+
+def test_in_ego_path_includes_bbox_exactly_at_upper_third_boundary():
+    obj = DetectedObject(
+        class_name=ObjectClass.VEHICLE,
+        bbox=(200, 0, 200, 10),  # center == 200.0, the upper boundary
+        confidence=0.9,
+        distance_m=5.0,
+    )
+    assert _in_ego_path(obj, image_width=300.0) is True
+
+
+def test_in_ego_path_excludes_bbox_just_below_lower_third_boundary():
+    obj = DetectedObject(
+        class_name=ObjectClass.VEHICLE,
+        bbox=(99, 0, 99, 10),  # center == 99.0, just outside the 100.0 boundary
+        confidence=0.9,
+        distance_m=5.0,
+    )
+    assert _in_ego_path(obj, image_width=300.0) is False
+
+
+def test_in_ego_path_excludes_bbox_just_above_upper_third_boundary():
+    obj = DetectedObject(
+        class_name=ObjectClass.VEHICLE,
+        bbox=(201, 0, 201, 10),  # center == 201.0, just outside the 200.0 boundary
+        confidence=0.9,
+        distance_m=5.0,
+    )
+    assert _in_ego_path(obj, image_width=300.0) is False
+
+
+# ---------------------------------------------------------------------------
+# Vehicle/red-light ego-path filtering in _get_obs()
+# ---------------------------------------------------------------------------
+
+
+def test_obs_excludes_vehicle_bbox_at_frame_edge():
+    env = _make_env()
+    env.perception.perceive.return_value = (
+        [
+            DetectedObject(
+                class_name=ObjectClass.VEHICLE,
+                bbox=(0, 100, 50, 200),  # far left edge on a 1280-wide frame
+                confidence=0.9,
+                distance_m=2.0,  # closest possible, but off to the side
+            )
+        ],
+        np.zeros((720, 1280), dtype=np.float32),
+    )
+    obs, _ = env.reset()
+    assert obs[6] == pytest.approx(1.0)  # excluded -> "nothing detected" default
+
+
+def test_obs_includes_vehicle_bbox_in_middle_third():
+    env = _make_env()
+    env.perception.perceive.return_value = (
+        [
+            DetectedObject(
+                class_name=ObjectClass.VEHICLE,
+                bbox=(600, 100, 700, 200),  # centered ahead on a 1280-wide frame
+                confidence=0.9,
+                distance_m=20.0,
+            )
+        ],
+        np.zeros((720, 1280), dtype=np.float32),
+    )
+    obs, _ = env.reset()
+    assert obs[6] == pytest.approx(20.0 / 50.0, abs=1e-4)
+
+
+def test_obs_prefers_farther_centered_vehicle_over_closer_edge_vehicle():
+    env = _make_env()
+    env.perception.perceive.return_value = (
+        [
+            DetectedObject(
+                class_name=ObjectClass.VEHICLE,
+                bbox=(0, 100, 50, 200),  # closer by distance, but off to the edge
+                confidence=0.9,
+                distance_m=2.0,
+            ),
+            DetectedObject(
+                class_name=ObjectClass.VEHICLE,
+                bbox=(600, 100, 700, 200),  # farther, but centered ahead
+                confidence=0.9,
+                distance_m=20.0,
+            ),
+        ],
+        np.zeros((720, 1280), dtype=np.float32),
+    )
+    obs, _ = env.reset()
+    assert obs[6] == pytest.approx(20.0 / 50.0, abs=1e-4)
+
+
+def test_obs_excludes_red_light_bbox_at_frame_edge():
+    env = _make_env()
+    env.perception.perceive.return_value = (
+        [
+            DetectedObject(
+                class_name=ObjectClass.RED_LIGHT,
+                bbox=(1230, 0, 1280, 30),  # far right edge, e.g. a cross-street signal
+                confidence=0.95,
+                distance_m=3.0,
+            )
+        ],
+        np.zeros((720, 1280), dtype=np.float32),
+    )
+    obs, _ = env.reset()
+    assert obs[7] == pytest.approx(1.0)  # excluded -> "nothing detected" default
+
+
+def test_obs_includes_red_light_bbox_in_middle_third():
+    env = _make_env()
+    env.perception.perceive.return_value = (
+        [
+            DetectedObject(
+                class_name=ObjectClass.RED_LIGHT,
+                bbox=(600, 0, 700, 30),
+                confidence=0.95,
+                distance_m=10.0,
+            )
+        ],
+        np.zeros((720, 1280), dtype=np.float32),
+    )
+    obs, _ = env.reset()
+    assert obs[7] == pytest.approx(10.0 / 50.0, abs=1e-4)
+
+
+def test_obs_walker_at_frame_edge_still_included():
+    # Confirms the ego-path filter is NOT applied to walkers: pedestrian
+    # safety must not depend on being centered in the frame.
+    env = _make_env()
+    env.perception.perceive.return_value = (
+        [
+            DetectedObject(
+                class_name=ObjectClass.WALKER,
+                bbox=(0, 100, 50, 200),  # far left edge
+                confidence=0.9,
+                distance_m=12.0,
+            )
+        ],
+        np.zeros((720, 1280), dtype=np.float32),
+    )
+    obs, _ = env.reset()
+    assert obs[9] == pytest.approx(12.0 / 50.0, abs=1e-4)
+
+
+# ---------------------------------------------------------------------------
 # render()
 # ---------------------------------------------------------------------------
 
@@ -815,9 +1117,9 @@ def test_prev_steer_tracks_last_action_and_resets():
     env = _make_env()
     env.reset()
     assert env._prev_steer == pytest.approx(0.0)
-    env.step(np.array([0.3, 0.0, 0.0], dtype=np.float32))
+    env.step(np.array([0.3, 0.0], dtype=np.float32))
     assert env._prev_steer == pytest.approx(0.3)
-    env.step(np.array([-0.2, 0.0, 0.0], dtype=np.float32))
+    env.step(np.array([-0.2, 0.0], dtype=np.float32))
     assert env._prev_steer == pytest.approx(-0.2)
     env.reset()
     assert env._prev_steer == pytest.approx(0.0)
@@ -826,13 +1128,38 @@ def test_prev_steer_tracks_last_action_and_resets():
 def test_episode_reward_components_includes_jerk_penalty():
     env = _make_env(max_episode_steps=2)
     env.reset()
-    env.step(np.array([1.0, 0.0, 0.0], dtype=np.float32))  # steer 0.0 -> 1.0, delta=1.0
+    env.step(np.array([1.0, 0.0], dtype=np.float32))  # steer 0.0 -> 1.0, delta=1.0
     _, _, _, truncated, info = env.step(
-        np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        np.array([1.0, 0.0], dtype=np.float32)
     )  # 1.0 -> 1.0, delta=0.0
     assert truncated is True
     # r_jerk = -delta * 0.1, summed: step1 -0.1 + step2 0.0
     assert info["r_jerk"] == pytest.approx(-0.1, abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Throttle/brake derivation from accel (2D action space)
+# ---------------------------------------------------------------------------
+
+
+def test_step_derives_throttle_from_positive_accel():
+    env = _make_env()
+    env.reset()
+    env.ego.apply_control.reset_mock()
+    env.step(np.array([0.0, 0.7], dtype=np.float32))
+    control = env.ego.apply_control.call_args[0][0]
+    assert control.throttle == pytest.approx(0.7)
+    assert control.brake == pytest.approx(0.0)
+
+
+def test_step_derives_brake_from_negative_accel():
+    env = _make_env()
+    env.reset()
+    env.ego.apply_control.reset_mock()
+    env.step(np.array([0.0, -0.7], dtype=np.float32))
+    control = env.ego.apply_control.call_args[0][0]
+    assert control.throttle == pytest.approx(0.0)
+    assert control.brake == pytest.approx(0.7)
 
 
 # ---------------------------------------------------------------------------

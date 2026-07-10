@@ -10,7 +10,9 @@ _W_ALIVE = 0.01
 _P_OFFROAD = -0.5
 _P_COLLISION_BASE = -5.0
 _P_COLLISION_SPEED_SCALE = -0.20  # per km/h of speed at the moment of impact
-_P_STALL = -0.20  # breaks the lazy-policy attractor (staying still = 0 risk)
+_P_STALL = -0.20  # breaks the lazy-policy attractor (staying still = 0 risk),
+# except when stopping is legitimate (red light ahead, vehicle/walker danger) --
+# see is_legitimate_stop in compute_reward()
 _P_OFF_ROUTE = -0.5  # re-aligned with _P_OFFROAD (both -0.5)
 
 _W_FOLLOWING = 0.2
@@ -18,6 +20,9 @@ _SAFE_HEADWAY_S = 2.0  # standard "2-second rule" following distance
 
 _W_WALKER_PROXIMITY = 0.3  # higher than _W_FOLLOWING: pedestrian safety takes priority
 _WALKER_DANGER_M = 10.0
+
+_STALL_RED_LIGHT_GATE_M = 15.0  # bigger than _RED_LIGHT_VIOLATION_DIST_M (5.0) --
+# stopping well before the violation line must not be punished as stalling
 
 _W_SPEEDING = 0.3
 _SPEEDING_TOLERANCE_KMH = 5.0
@@ -113,6 +118,7 @@ def compute_reward(
     max_speed_kmh: float = MAX_SPEED_KMH,
     nearest_vehicle_m: float = float("inf"),
     nearest_walker_m: float = float("inf"),
+    red_light_distance_m: float = float("inf"),
     speed_limit_kmh: float | None = None,
     collision_speed_kmh: float = 0.0,
     red_light_violation: bool = False,
@@ -140,6 +146,10 @@ def compute_reward(
                        (Franck). `inf` if none detected within sensor range.
         nearest_walker_m:  Distance in metres to the nearest detected pedestrian
                        (Franck). `inf` if none detected.
+        red_light_distance_m: Distance in metres to the nearest detected red
+                       light ahead (Franck). `inf` if none detected. Used to
+                       exempt r_stall while legitimately stopped at a light,
+                       not just to flag the single-step violation.
         speed_limit_kmh:   Last detected speed limit sign value, or None if none
                        has been seen yet this episode (Franck).
         collision_speed_kmh: Vehicle speed at the instant the collision fired.
@@ -179,6 +189,11 @@ def compute_reward(
     effective_speed_for_r_speed = (
         speed_kmh if progress_speed_kmh is None else progress_speed_kmh
     )
+    is_legitimate_stop = (
+        red_light_distance_m < _STALL_RED_LIGHT_GATE_M
+        or nearest_vehicle_m < _WALKER_DANGER_M
+        or nearest_walker_m < _WALKER_DANGER_M
+    )
 
     components = {
         "r_speed": (
@@ -189,7 +204,9 @@ def compute_reward(
         "r_center": (1.0 - abs(center_offset)) * _W_CENTER if is_on_road else 0.0,
         "r_alive": _W_ALIVE,
         "r_offroad": 0.0 if is_on_road else _P_OFFROAD,
-        "r_stall": _P_STALL if speed_kmh < 1.0 else 0.0,
+        "r_stall": (
+            0.0 if is_legitimate_stop else (_P_STALL if speed_kmh < 1.0 else 0.0)
+        ),
         "r_off_route": _P_OFF_ROUTE if off_route else 0.0,
         "r_following": _following_penalty(nearest_vehicle_m, speed_kmh),
         "r_walker": _walker_penalty(nearest_walker_m),

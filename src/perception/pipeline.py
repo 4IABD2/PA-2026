@@ -79,14 +79,24 @@ class PerceptionPipeline:
         depth_model_name: str = "depth-anything/Depth-Anything-V2-Small-hf",
         device: str | None = None,
         max_depth_m: float = 100.0,
+        require_calibration: bool = False,
     ) -> None:
         self.device = device or _auto_device()
-        # calibration optionnelle : si le fichier n'existe pas, depth non calibrée
-        calib = (
-            depth_calibration
-            if depth_calibration and Path(depth_calibration).exists()
-            else None
-        )
+        calib_exists = bool(depth_calibration) and Path(depth_calibration).exists()
+        if not calib_exists and require_calibration:
+            raise RuntimeError(
+                f"Depth calibration file not found: {depth_calibration!r}. "
+                "Training with uncalibrated depth produces meaningless distance "
+                "observations for the entire run -- fix the path or run "
+                "src/perception/depth/calibrate.py first."
+            )
+        if not calib_exists:
+            print(
+                f"WARNING: depth calibration file not found ({depth_calibration!r}) -- "
+                "falling back to UNCALIBRATED raw disparity. Distance-based "
+                "observations/rewards will be meaningless until this is fixed."
+            )
+        calib = depth_calibration if calib_exists else None
         self.detector = YoloDetector(weights_path=yolo_weights, device=self.device)
         self.depth = DepthEstimator(
             model_name=depth_model_name,
