@@ -251,11 +251,13 @@ def _add_hud(frame: np.ndarray, info: dict) -> np.ndarray:
     reward = info.get("reward", 0.0)
     total_r = info.get("total_reward", 0.0)
     speed = info.get("speed_kmh", 0.0)
-    action = info.get("action", [0.0, 0.0, 0.0])
+    action = info.get("action", [0.0, 0.0])
 
     draw.rectangle([0, h - 20, w, h], fill=(20, 20, 20))
     left = f"Ep {ep} | Step {step}/{max_s}   {speed:.1f} km/h"
-    right = f"r={reward:+.2f} S={total_r:+.1f}  S={action[0]:+.2f} T={action[1]:.2f} B={action[2]:.2f}"
+    throttle = max(action[1], 0.0)
+    brake = max(-action[1], 0.0)
+    right = f"r={reward:+.2f} S={total_r:+.1f}  S={action[0]:+.2f} T={throttle:.2f} B={brake:.2f}"
     draw.text((4, h - 17), left, fill=(200, 200, 200))
     draw.text((w // 2, h - 17), right, fill=(200, 200, 200))
 
@@ -266,6 +268,10 @@ _EVAL_CLEAR_RADIUS_M = (
     20.0  # ambient NPCs closer than this to a scenario's spawn are relocated
 )
 
+_CLEAR_SPAWN_POOL_SIZE = 5  # spread relocated NPCs across this many far spawns
+# instead of piling them all onto the single farthest one (avoids a physics
+# pile-up when several NPCs are relocated at once)
+
 
 def _clear_spawn_area(env, radius_m: float) -> None:
     """Relocate ambient NPC vehicles/pedestrians near the ego's spawn point.
@@ -274,9 +280,9 @@ def _clear_spawn_area(env, radius_m: float) -> None:
     session (run_rl_training.py::main()) roam continuously and are still present
     during every benchmark scenario. A scenario with no setup_fn of its own can
     otherwise "collide" with one of them by pure luck, unrelated to policy
-    quality. Relocation targets are the farthest available map spawn point from
-    the ego -- a deterministic choice, not a random draw, so repeated evals of
-    the same scenario stay reproducible.
+    quality. Relocation targets are the N farthest available map spawn points,
+    cycled deterministically across relocated actors -- not a random draw, so
+    repeated evals of the same scenario stay reproducible.
     """
     try:
         actors = env.world.get_actors()
@@ -292,10 +298,14 @@ def _clear_spawn_area(env, radius_m: float) -> None:
         if not spawn_points:
             return
         ego_loc = env.ego.get_transform().location
-        farthest = max(spawn_points, key=lambda sp: ego_loc.distance(sp.location))
-        for actor in nearby:
-            if ego_loc.distance(actor.get_location()) < radius_m:
-                actor.set_transform(farthest)
+        farthest_n = sorted(
+            spawn_points, key=lambda sp: ego_loc.distance(sp.location), reverse=True
+        )[:_CLEAR_SPAWN_POOL_SIZE]
+        to_relocate = [
+            a for a in nearby if ego_loc.distance(a.get_location()) < radius_m
+        ]
+        for i, actor in enumerate(to_relocate):
+            actor.set_transform(farthest_n[i % len(farthest_n)])
         for _ in range(10):
             env.world.tick()
     except Exception as exc:
@@ -522,8 +532,8 @@ def _draw_obs_panel(
         ("stop/yield", f"{obs[10] * 50:5.1f} m", VAL),
         ("ACTION", None, HDR),
         ("steer", f"{action[0]:+.3f}", VAL),
-        ("throttle", f"{action[1]:.3f}", VAL),
-        ("brake", f"{action[2]:.3f}", VAL),
+        ("throttle", f"{max(action[1], 0.0):.3f}", VAL),
+        ("brake", f"{max(-action[1], 0.0):.3f}", VAL),
     ]
 
     y = y0 + 13
@@ -857,12 +867,12 @@ def _record_episodes(
             "reward": 0.0,
             "total_reward": 0.0,
             "speed_kmh": float(obs[0]) * 90.0,
-            "action": [0.0, 0.0, 0.0],
+            "action": [0.0, 0.0],
             "params": hud_params or {},
         }
         frame_bgr = cv2.cvtColor(_add_hud(frame, info), cv2.COLOR_RGB2BGR)
         _draw_bboxes(frame_bgr, getattr(env, "last_objects", []), cv2)
-        _draw_obs_panel(frame_bgr, obs, [0.0, 0.0, 0.0], cv2)
+        _draw_obs_panel(frame_bgr, obs, [0.0, 0.0], cv2)
         for _ in range(pause_frames):
             writer.write(frame_bgr)
 
@@ -1079,7 +1089,7 @@ def eval_model(
                     "reward": 0.0,
                     "total_reward": 0.0,
                     "speed_kmh": float(obs[0]) * 90.0,
-                    "action": [0.0, 0.0, 0.0],
+                    "action": [0.0, 0.0],
                     "params": {},
                 }
                 frame_bgr = cv2.cvtColor(_add_hud(frame, info), cv2.COLOR_RGB2BGR)
@@ -1106,7 +1116,7 @@ def eval_model(
                     1,
                 )
 
-                _draw_obs_panel(frame_bgr, obs, [0.0, 0.0, 0.0], cv2)
+                _draw_obs_panel(frame_bgr, obs, [0.0, 0.0], cv2)
                 _draw_minimap(frame_bgr, env.route, pause_ego_loc, out_w, out_h, cv2)
                 for _ in range(fps):
                     writer.write(frame_bgr)
@@ -1184,8 +1194,8 @@ def eval_model(
                     ]
                 )
                 steer_series.append(round(float(action[0]), 4))
-                throttle_series.append(round(float(action[1]), 4))
-                brake_series.append(round(float(action[2]), 4))
+                throttle_series.append(round(max(float(action[1]), 0.0), 4))
+                brake_series.append(round(max(-float(action[1]), 0.0), 4))
                 obstacle_series.append(round(float(obs[6]) * 50.0, 2))
                 # nav command encoding
                 if obs[1] > 0.5:
@@ -1284,6 +1294,8 @@ def eval_model(
             for actor in spawned:
                 try:
                     if actor and actor.is_alive:
+                        if "controller" in actor.type_id:
+                            actor.stop()
                         actor.destroy()
                 except Exception:
                     pass

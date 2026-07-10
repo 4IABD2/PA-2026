@@ -108,11 +108,21 @@ def lane_geometry(lanes, drivable, w, h):
     center = np.stack([cxs, ys_line], axis=1)
     result["center_line"] = center.astype(np.int32)
 
-    # point vise + consigne (offset normalise, direction, angle de braquage)
+    # point vise (pour l'angle de braquage — mesure au lookahead, inchange)
     idx = int(np.clip(round(LOOKAHEAD_FRAC * (len(center) - 1)), 0, len(center) - 1))
     aim_x, aim_y = center[idx]
-    offset = (aim_x - w / 2.0) / (w / 2.0)
     angle = math.degrees(math.atan2(aim_x - w / 2.0, (h - 1) - aim_y))
+
+    # offset (pour r_center — mesure a la position de la voiture, bas de l'image,
+    # normalise par la vraie largeur de voie a cette hauteur, pas par la demi-
+    # largeur d'image : ±1 doit vouloir dire "bord de la voie", pas "bord de
+    # l'image")
+    bottom_y = h - 1.0
+    lane_left_x = np.polyval(fl, bottom_y)
+    lane_right_x = np.polyval(fr, bottom_y)
+    lane_center_x = 0.5 * (lane_left_x + lane_right_x)
+    lane_half_width = max((lane_right_x - lane_left_x) / 2.0, 1.0)  # garde div/0
+    offset = (lane_center_x - w / 2.0) / lane_half_width
     direction = (
         "DROITE"
         if angle > ANGLE_DEADZONE

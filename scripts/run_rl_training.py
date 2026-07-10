@@ -406,6 +406,7 @@ def main() -> None:
             perception = PerceptionPipeline(
                 yolo_weights=args.yolo_weights,
                 depth_model_name=args.depth_model,
+                require_calibration=True,
             )
             # lane_estimate is a module-level singleton — loaded on first call
 

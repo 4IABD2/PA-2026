@@ -28,7 +28,7 @@ from src.interfaces.perception_types import DetectedObject, ObjectClass
 import cv2
 
 _OBS = np.zeros(7, dtype=np.float32)
-_ACT = np.zeros(3, dtype=np.float32)
+_ACT = np.zeros(2, dtype=np.float32)
 
 
 def _model(rewards=None):
@@ -118,7 +118,7 @@ def _hud_info(**kwargs):
         "reward": 0.5,
         "total_reward": 3.2,
         "speed_kmh": 30.0,
-        "action": [0.0, 0.3, 0.0],
+        "action": [0.0, 0.3],
         "params": {"lr": "3e-4"},
     }
     return {**base, **kwargs}
@@ -500,6 +500,21 @@ def test_clear_spawn_area_swallows_get_actors_failure():
     _clear_spawn_area(env, radius_m=20.0)  # must not raise
 
 
+def test_clear_spawn_area_spreads_multiple_actors_across_distinct_spawns():
+    # Regression test for the physics pile-up bug: relocating several nearby
+    # NPCs must not all dump them onto the single farthest spawn point.
+    env, _ = _clear_area_env()
+    near_actors = [_actor_at(actor_id, dist=1.0) for actor_id in range(2, 6)]
+    _wire_actors(env, vehicles=near_actors)
+    spawns = [_spawn_at(dist=d) for d in (50.0, 100.0, 150.0, 200.0)]
+    env.world.get_map.return_value.get_spawn_points.return_value = spawns
+
+    _clear_spawn_area(env, radius_m=20.0)
+
+    targets = [a.set_transform.call_args[0][0] for a in near_actors]
+    assert len(set(targets)) > 1
+
+
 # ---------------------------------------------------------------------------
 # pick_best_checkpoint
 # ---------------------------------------------------------------------------
@@ -758,3 +773,29 @@ def test_eval_model_genuine_collision_far_from_dest_still_recorded_as_crash(
     assert r["collision_step"] == 1
     assert r["reached_dest"] is False
     assert r["success"] is False
+
+
+def test_eval_model_cleanup_stops_pedestrian_controller_before_destroy(tmp_path):
+    # Regression test: destroying a controller.ai.walker actor without first
+    # calling .stop() on it is a known CARLA stability issue. Non-controller
+    # actors (plain vehicles/walkers) must not get .stop() called on them.
+    ego_transforms = [
+        _carla_transform(0.0, 0.0),  # dest_spawn_idx route-replan lookup
+        _carla_transform(0.0, 0.0),  # `_start`
+        _carla_transform(5.0, 5.0),  # step 1 -- terminates immediately
+    ]
+    step_results = [
+        (-1.0, True, False),
+    ]
+    env = _eval_env(ego_transforms, step_results, dest_xy=(100.0, 100.0))
+
+    controller = Mock(type_id="controller.ai.walker", is_alive=True)
+    walker = Mock(type_id="walker.pedestrian.0001", is_alive=True)
+    sc = _dest_scenario(setup_fn=lambda world, ego: [controller, walker])
+    output = str(tmp_path / "eval.mp4")
+
+    eval_model(_model(), env, output, scenarios=[sc], fps=2, render_fn=lambda: None)
+
+    assert [c[0] for c in controller.mock_calls] == ["stop", "destroy"]
+    walker.stop.assert_not_called()
+    walker.destroy.assert_called_once()
