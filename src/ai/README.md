@@ -75,9 +75,9 @@ CARLA World (sync mode, 20 FPS)
          └─ brake    ∈ [0, 1]
 
 [Reward function — par step]   src/ai/rewards/reward_fn.py
-         ├─ r_progress   = (γ·Φ(s') − Φ(s)) × 0.3, Φ(s) = −distance_to_destination(s) normalisée → shaping potential-based vers la destination, garantie théorique contre les raccourcis (remplace r_speed, qui ne récompensait que la vitesse brute) ; pas gaté sur is_on_road (r_offroad reste seul juge de la sortie de route)
+         ├─ r_progress   = (γ·Φ(s') − Φ(s)) × 1.0, Φ(s) = −distance_to_destination(s) normalisée → shaping potential-based vers la destination, garantie théorique contre les raccourcis (remplace r_speed, qui ne récompensait que la vitesse brute) ; pas gaté sur is_on_road (r_offroad reste seul juge de la sortie de route)
          ├─ r_center     = (1 − |lane_offset_norm|) × 0.3 si is_on_road else 0.0 → encourage le centrage ; nul hors route (sinon un center_offset resté à 0.0 par défaut donnerait un faux maximum)
-         ├─ r_alive      = +0.01                                            → survie (anti-crash passif)
+         ├─ r_alive      = +0.05                                            → survie (anti-crash passif)
          ├─ r_stall      = −0.20 si speed < 1 km/h                          → pénalise l'immobilisme
          ├─ r_offroad    = −0.5  si is_on_road=False                        → pénalité hors route (Karim)
          ├─ r_off_route  = −0.5  si > 15m de la route GPS                   → pénalise la déviation GPS

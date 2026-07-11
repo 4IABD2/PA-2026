@@ -4,9 +4,13 @@ from __future__ import annotations
 
 MAX_SPEED_KMH = 90.0
 
-_W_PROGRESS = 0.3  # replaces _W_SPEED's role -- potential-based shaping reward
+_W_PROGRESS = 1.0  # raised from 0.3 -- measured on v10, its real contribution
+# was ~0.003/step, negligible next to r_offroad (-0.5/step); not a derived
+# optimum, revisit if v11 still shows no measurable behavior change
 _W_CENTER = 0.3
-_W_ALIVE = 0.01
+_W_ALIVE = 0.05  # raised from 0.01 -- makes mere survival per step meaningfully
+# more valuable, a direct (partial) counterweight to ending an episode early
+# (runs/AUDIT.md section 2.1, option (a))
 _P_OFFROAD = -0.5
 _P_COLLISION_BASE = -5.0
 _P_COLLISION_SPEED_SCALE = -0.20  # per km/h of speed at the moment of impact
