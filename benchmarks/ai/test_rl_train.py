@@ -17,17 +17,17 @@ from src.ai.training.rl_train import make_model, train
 
 
 class _MinimalEnv(gym.Env):
-    observation_space = spaces.Box(low=-1.0, high=1.0, shape=(11,), dtype=np.float32)
+    observation_space = spaces.Box(low=-1.0, high=1.0, shape=(13,), dtype=np.float32)
     action_space = spaces.Box(
         low=np.array([-1.0, -1.0], dtype=np.float32),
         high=np.array([1.0, 1.0], dtype=np.float32),
     )
 
     def reset(self, **kwargs):
-        return np.zeros(11, dtype=np.float32), {}
+        return np.zeros(13, dtype=np.float32), {}
 
     def step(self, action):
-        return np.zeros(11, dtype=np.float32), 0.0, False, False, {}
+        return np.zeros(13, dtype=np.float32), 0.0, False, False, {}
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ def test_ppo_defaults_use_larger_network():
 def test_ppo_defaults_have_entropy_coefficient():
     from src.ai.training.rl_train import _PPO_DEFAULTS
 
-    assert _PPO_DEFAULTS["ent_coef"] == pytest.approx(0.01)
+    assert _PPO_DEFAULTS["ent_coef"] == pytest.approx(0.02)
 
 
 def test_ppo_defaults_are_seeded():
@@ -84,7 +84,7 @@ def test_ppo_defaults_learning_rate_is_a_decaying_schedule():
 
 def test_make_model_builds_with_new_defaults():
     model = make_model(_MinimalEnv())
-    assert model.ent_coef == pytest.approx(0.01)
+    assert model.ent_coef == pytest.approx(0.02)
     assert model.seed == 42
 
 

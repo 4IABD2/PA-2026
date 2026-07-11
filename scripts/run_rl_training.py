@@ -23,9 +23,10 @@ Output — one timestamped folder under runs/ :
         demo.mp4                 full inference with HUD overlay (best model)
         evals/                   benchmark eval per checkpoint + best model
 
-Obs (11 scalars): speed | cmd_left | cmd_right | cmd_straight |
+Obs (13 scalars): speed | cmd_left | cmd_right | cmd_straight |
                   lane_offset | is_on_road | nearest_vehicle | red_light_distance |
-                  speed_limit | nearest_walker | nearest_stop_yield
+                  speed_limit | nearest_walker | nearest_stop_yield |
+                  prev_steer | prev_accel
 Perception: Franck's PerceptionPipeline (YOLO11s + Depth Anything v2) + Karim's YOLOPv2 lane detection.
 Environment: NPC vehicles (autopilot) + NPC pedestrians (AI walker controllers).
 """
@@ -37,6 +38,8 @@ import random
 import sys
 import time
 from pathlib import Path
+
+import numpy as np
 
 
 def _format_duration(seconds: float) -> str:
@@ -116,7 +119,7 @@ from src.ai.inference.rl_demo import (
 from src.ai.inference.benchmark import _MIN_DIST_M
 from src.ai.rewards.reward_fn import (
     MAX_SPEED_KMH,
-    _W_SPEED,
+    _W_PROGRESS,
     _W_CENTER,
     _W_ALIVE,
     _P_OFFROAD,
@@ -223,6 +226,7 @@ def _spawn_npc_vehicles(
 ) -> list:
     tm = client.get_trafficmanager()
     tm.set_synchronous_mode(True)
+    tm.set_random_device_seed(42)
     bp_lib = world.get_blueprint_library()
     vehicle_bps = list(bp_lib.filter("vehicle.*"))
     spawn_pts = world.get_map().get_spawn_points()
@@ -292,6 +296,9 @@ _DEMO_SCENARIOS = [
 
 
 def main() -> None:
+    random.seed(42)
+    np.random.seed(42)
+
     parser = argparse.ArgumentParser(description="Phase 1 RL training on CARLA")
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=2000)
@@ -332,7 +339,7 @@ def main() -> None:
             "obs": f"{len(_OBS_LOW)}-scalars-traffic",
             "reward": {
                 "max_speed_kmh": MAX_SPEED_KMH,
-                "w_speed": _W_SPEED,
+                "w_progress": _W_PROGRESS,
                 "w_center": _W_CENTER,
                 "w_alive": _W_ALIVE,
                 "p_offroad": _P_OFFROAD,
@@ -433,13 +440,21 @@ def main() -> None:
             # SB3 Monitor wrapper — logs episode reward/length to CSV automatically
             from stable_baselines3.common.monitor import Monitor
             from stable_baselines3.common.callbacks import CheckpointCallback
+            from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
             env_monitored = Monitor(
                 env,
                 filename=str(monitor_base),
                 info_keywords=REWARD_COMPONENT_KEYS,
             )
-            model = make_model(env_monitored)
+            vec_env = VecNormalize(
+                DummyVecEnv([lambda: env_monitored]),
+                norm_obs=False,  # obs is already hand-normalised to [0,1]/[-1,1]
+                # throughout this codebase -- re-normalising would fight that
+                norm_reward=True,
+                gamma=0.99,  # must match PPO's own gamma (rl_train.py's _PPO_DEFAULTS)
+            )
+            model = make_model(vec_env)
 
             callbacks = [
                 CheckpointCallback(

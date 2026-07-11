@@ -206,8 +206,30 @@ _ZERO_ACTION = np.array([0.0, 0.0], dtype=np.float32)
 
 def test_observation_space_shape_and_dtype():
     env = _make_env()
-    assert env.observation_space.shape == (11,)
+    assert env.observation_space.shape == (13,)
     assert env.observation_space.dtype == np.float32
+
+
+def test_observation_space_grows_to_13_scalars():
+    env = _make_env()
+    assert env.observation_space.shape == (13,)
+    np.testing.assert_array_equal(env.observation_space.low[11:13], [-1.0, -1.0])
+    np.testing.assert_array_equal(env.observation_space.high[11:13], [1.0, 1.0])
+
+
+def test_obs_prev_steer_and_prev_accel_start_at_zero_after_reset():
+    env = _make_env()
+    obs, _ = env.reset()
+    assert obs[11] == pytest.approx(0.0)
+    assert obs[12] == pytest.approx(0.0)
+
+
+def test_obs_prev_steer_and_prev_accel_reflect_last_action():
+    env = _make_env()
+    env.reset()
+    obs, _, _, _, _ = env.step(np.array([0.4, -0.6], dtype=np.float32))
+    assert obs[11] == pytest.approx(0.4)
+    assert obs[12] == pytest.approx(-0.6)
 
 
 def test_action_space_shape_and_bounds():
@@ -230,7 +252,7 @@ def test_reset_returns_obs_and_empty_info():
 
 def test_reset_obs_shape_and_dtype():
     obs, _ = _make_env().reset()
-    assert obs.shape == (11,)
+    assert obs.shape == (13,)
     assert obs.dtype == np.float32
 
 
@@ -533,7 +555,7 @@ def test_step_returns_five_tuple_correct_types():
     env = _make_env()
     env.reset()
     obs, reward, terminated, truncated, info = env.step(_ZERO_ACTION)
-    assert obs.shape == (11,)
+    assert obs.shape == (13,)
     assert isinstance(reward, float)
     assert isinstance(terminated, bool)
     assert isinstance(truncated, bool)
@@ -571,6 +593,10 @@ def test_red_light_violation_penalized_once_not_twice():
     env.reset()
     _, reward1, _, _, _ = env.step(_ZERO_ACTION)
     _, reward2, _, _, _ = env.step(_ZERO_ACTION)
+    # Expected diff is 2.0 (the red-light violation penalty). This fixture's
+    # mocked destination sits exactly at the ego's fixed spawn location
+    # (dist0=0) and the ego never moves, so r_progress is 0.0 on every step
+    # (no distance change to reward) and doesn't affect the diff.
     assert reward2 - reward1 == pytest.approx(2.0, abs=1e-3)
 
 
@@ -600,6 +626,8 @@ def test_stop_yield_violation_penalized_once_not_twice():
     env.reset()
     _, reward1, _, _, _ = env.step(_ZERO_ACTION)
     _, reward2, _, _, _ = env.step(_ZERO_ACTION)
+    # Expected diff is 1.0 (the stop/yield violation penalty). Same
+    # zero-progress reasoning as test_red_light_violation_penalized_once_not_twice.
     assert reward2 - reward1 == pytest.approx(1.0, abs=1e-3)
 
 
@@ -618,8 +646,11 @@ def test_reward_center_term_uses_lane_offset_when_centered():
     env = _make_env(lane_angle=80.0, lane_offset=0.0)
     env.reset()
     _, reward, _, _, _ = env.step(_ZERO_ACTION)
-    # speed=0 -> r_speed=0, r_center=0.3, r_alive=0.01, r_stall=-0.20 (speed < 1 km/h),
-    # r_safe=0.05 (no vehicle/walker/speed-limit configured, so nothing dangerous is active)
+    # speed=0 -> r_center=0.3, r_alive=0.01, r_stall=-0.20 (speed < 1 km/h),
+    # r_safe=0.05 (no vehicle/walker/speed-limit configured, so nothing dangerous is
+    # active). r_progress=0.0: this fixture's mocked destination sits exactly at
+    # the ego's fixed spawn location (dist0=0) and the ego never moves, so there's
+    # no distance change to reward.
     assert reward == pytest.approx(0.16, abs=1e-4)
 
 
@@ -628,8 +659,10 @@ def test_reward_center_term_uses_lane_offset_when_off_center():
     env = _make_env(lane_angle=0.0, lane_offset=0.9)
     env.reset()
     _, reward, _, _, _ = env.step(_ZERO_ACTION)
-    # speed=0 -> r_speed=0, r_center=(1-0.9)*0.3=0.03, r_alive=0.01, r_stall=-0.20,
-    # r_safe=0.05 (no vehicle/walker/speed-limit configured, so nothing dangerous is active)
+    # speed=0 -> r_center=(1-0.9)*0.3=0.03, r_alive=0.01, r_stall=-0.20,
+    # r_safe=0.05 (no vehicle/walker/speed-limit configured, so nothing dangerous is
+    # active). r_progress=0.0, same zero-progress reasoning as
+    # test_reward_center_term_uses_lane_offset_when_centered.
     assert reward == pytest.approx(-0.11, abs=1e-4)
 
 
@@ -974,18 +1007,6 @@ def test_episode_reward_components_empty_mid_episode():
     assert info == {}
 
 
-def test_episode_reward_components_reported_on_truncation():
-    env = _make_env(speed_mps=10.0, max_episode_steps=3)  # 36 km/h
-    env.reset()
-    env.step(_ZERO_ACTION)
-    env.step(_ZERO_ACTION)
-    _, _, terminated, truncated, info = env.step(_ZERO_ACTION)
-    assert truncated is True
-    assert terminated is False
-    # r_speed = (36/90)*0.3 = 0.12 per step, summed over 3 steps
-    assert info["r_speed"] == pytest.approx(0.12 * 3, abs=1e-3)
-
-
 def test_episode_reward_components_reported_on_collision():
     env = _make_env(speed_mps=10.0)
     env.reset()
@@ -993,7 +1014,7 @@ def test_episode_reward_components_reported_on_collision():
     _, _, terminated, _, info = env.step(_ZERO_ACTION)
     assert terminated is True
     assert info["r_collision"] != 0.0
-    assert info["r_speed"] == pytest.approx(
+    assert info["r_progress"] == pytest.approx(
         0.0
     )  # collision step zeroes every other component
 
@@ -1004,7 +1025,7 @@ def test_episode_reward_components_has_all_fifteen_keys_when_reported():
     _, _, _, truncated, info = env.step(_ZERO_ACTION)
     assert truncated is True
     expected_keys = {
-        "r_speed",
+        "r_progress",
         "r_center",
         "r_alive",
         "r_offroad",
@@ -1030,37 +1051,12 @@ def test_episode_reward_components_reset_between_episodes():
     _, _, _, truncated, _ = env.step(_ZERO_ACTION)
     assert truncated is True
     env.reset()
-    assert env._episode_reward_components["r_speed"] == pytest.approx(0.0)
+    assert env._episode_reward_components["r_progress"] == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
-# Route-projected speed, destination check, jerk tracking
+# Destination check, jerk tracking
 # ---------------------------------------------------------------------------
-
-
-def test_progress_speed_falls_back_to_raw_speed_without_route():
-    env = _make_env(speed_mps=10.0)  # default route has empty waypoints
-    assert env._progress_speed_kmh() == pytest.approx(36.0)  # 10 m/s = 36 km/h
-
-
-def test_progress_speed_zero_when_perpendicular_to_route():
-    env = _make_env(
-        speed_mps=10.0
-    )  # velocity along +x (see _make_env's vel.x=speed_mps)
-    wp = Waypoint(x=0.0, y=0.0, z=0.0, yaw_deg=90.0)  # route heads along +y
-    env.route = Route(waypoints=[wp], destination=wp)
-    env._route_idx = 0
-    assert env._progress_speed_kmh() == pytest.approx(0.0, abs=1e-6)
-
-
-def test_progress_speed_full_credit_when_aligned_with_route():
-    env = _make_env(speed_mps=10.0)
-    wp = Waypoint(
-        x=0.0, y=0.0, z=0.0, yaw_deg=0.0
-    )  # route heads along +x, same as velocity
-    env.route = Route(waypoints=[wp], destination=wp)
-    env._route_idx = 0
-    assert env._progress_speed_kmh() == pytest.approx(36.0)
 
 
 def test_reached_destination_false_when_close_but_not_travelled():
@@ -1111,6 +1107,25 @@ def test_step_terminates_on_reached_destination():
     assert terminated is True
     assert reward == pytest.approx(10.0)
     assert info["r_destination"] == pytest.approx(10.0)
+
+
+def test_step_reports_positive_accumulated_r_progress_when_moving_closer():
+    """Two-step progress-shaping integration test through the real reset()/step()
+    code path (not a reimplementation of the formula): the destination is set
+    far away via nav.plan() *before* reset() so _dist_to_dest_initial is
+    computed against it. First step: no motion, establishes the baseline.
+    Second step: the ego mock moves 500m closer to the destination -- the
+    accumulated r_progress must be positive."""
+    env = _make_env(max_episode_steps=2)
+    env.nav.plan.return_value = Route(
+        waypoints=[], destination=Waypoint(x=1000.0, y=0.0, z=0.0, yaw_deg=0.0)
+    )
+    env.reset()
+    env.step(_ZERO_ACTION)  # no movement -> baseline progress_delta near zero
+    _set_ego_location(env, 500.0, 0.0)  # 500m closer to the destination
+    _, _, _, truncated, info = env.step(_ZERO_ACTION)
+    assert truncated is True
+    assert info["r_progress"] > 0.0
 
 
 def test_prev_steer_tracks_last_action_and_resets():

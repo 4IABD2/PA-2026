@@ -4,7 +4,7 @@ from __future__ import annotations
 
 MAX_SPEED_KMH = 90.0
 
-_W_SPEED = 0.3
+_W_PROGRESS = 0.3  # replaces _W_SPEED's role -- potential-based shaping reward
 _W_CENTER = 0.3
 _W_ALIVE = 0.01
 _P_OFFROAD = -0.5
@@ -35,7 +35,7 @@ _W_SAFE_DRIVING = 0.05
 _W_JERK = 0.1
 
 REWARD_COMPONENT_KEYS: tuple[str, ...] = (
-    "r_speed",
+    "r_progress",
     "r_center",
     "r_alive",
     "r_offroad",
@@ -123,9 +123,9 @@ def compute_reward(
     collision_speed_kmh: float = 0.0,
     red_light_violation: bool = False,
     stop_yield_violation: bool = False,
-    progress_speed_kmh: float | None = None,
     reached_destination: bool = False,
     steer_delta: float = 0.0,
+    progress_delta: float = 0.0,
 ) -> tuple[float, bool, dict[str, float]]:
     """Compute the per-step reward and whether the episode should terminate.
 
@@ -156,16 +156,16 @@ def compute_reward(
         red_light_violation:  True on the single step a red light is judged run
                        (CarlaEnv resolves the "already penalised this light" state).
         stop_yield_violation: Same as above, for stop/yield signs.
-        progress_speed_kmh: Velocity projected onto the route direction, in
-                       km/h. None (default) makes r_speed use speed_kmh
-                       instead — every existing caller that doesn't compute
-                       this gets today's exact behaviour.
         reached_destination: True the step the ego is judged to have arrived
                        (CarlaEnv checks both proximity and minimum distance
                        travelled). Terminates the episode like a collision,
                        but with a positive reward.
         steer_delta:   abs(current steer - previous steer), for the jerk
                        penalty. 0.0 (default) means no penalty.
+        progress_delta: γ·Φ(s') − Φ(s) for potential-based reward shaping on
+                       distance-to-destination, pre-computed by CarlaEnv
+                       (Φ(s) = −normalized_distance_to_destination(s)).
+                       0.0 (default) means no shaping applied this step.
 
     Returns:
         (reward, terminated, components) where terminated is True on
@@ -186,9 +186,6 @@ def compute_reward(
         components["r_destination"] = _P_DEST_REACHED
         return components["r_destination"], True, components
 
-    effective_speed_for_r_speed = (
-        speed_kmh if progress_speed_kmh is None else progress_speed_kmh
-    )
     is_legitimate_stop = (
         red_light_distance_m < _STALL_RED_LIGHT_GATE_M
         or nearest_vehicle_m < _WALKER_DANGER_M
@@ -196,11 +193,7 @@ def compute_reward(
     )
 
     components = {
-        "r_speed": (
-            (effective_speed_for_r_speed / max_speed_kmh) * _W_SPEED
-            if is_on_road
-            else 0.0
-        ),
+        "r_progress": progress_delta * _W_PROGRESS,
         "r_center": (1.0 - abs(center_offset)) * _W_CENTER if is_on_road else 0.0,
         "r_alive": _W_ALIVE,
         "r_offroad": 0.0 if is_on_road else _P_OFFROAD,
