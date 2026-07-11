@@ -26,9 +26,12 @@ def test_collision_terminates_with_negative_reward():
 
 
 def test_offroad_applies_penalty():
-    """Being off-road must cost -0.90 total: r_speed and r_center both drop
-    to 0.0 (no longer computed from a stale/default center_offset while
-    off-road), plus the raised -0.5 _P_OFFROAD penalty (was -0.25)."""
+    """Being off-road must cost -0.80 total: r_center drops to 0.0 (no longer
+    computed from a stale/default center_offset while off-road), plus the
+    -0.5 _P_OFFROAD penalty. r_speed is gone (replaced by r_progress, which
+    isn't gated on is_on_road at all), so on-road no longer earns its +0.1
+    at speed_kmh=30.0 -- on-road = r_center(0.3) + r_alive(0.01) + r_safe(0.05)
+    = 0.36; off-road = r_alive(0.01) + r_offroad(-0.5) + r_safe(0.05) = -0.44."""
     reward_onroad, _, _ = compute_reward(
         speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -36,7 +39,7 @@ def test_offroad_applies_penalty():
         speed_kmh=30.0, center_offset=0.0, is_on_road=False, collision=False
     )
     assert reward_offroad < reward_onroad
-    assert reward_offroad == pytest.approx(reward_onroad - 0.90)
+    assert reward_offroad == pytest.approx(reward_onroad - 0.80)
 
 
 def test_r_center_zeroed_when_off_road():
@@ -53,27 +56,69 @@ def test_r_center_zeroed_when_off_road():
     assert components_edge["r_center"] == pytest.approx(0.0)
 
 
-def test_r_speed_zeroed_when_off_road():
-    """r_speed must be 0.0 when off-road, regardless of speed."""
-    _, _, components_slow = compute_reward(
-        speed_kmh=10.0, center_offset=0.0, is_on_road=False, collision=False
+def test_progress_reward_positive_when_approaching_destination():
+    """Moving closer to the destination (Phi increases toward 0) must reward."""
+    _, _, components = compute_reward(
+        speed_kmh=20.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=False,
+        progress_delta=0.5,  # Phi(s') closer to 0 than Phi(s) -- net positive delta
     )
-    _, _, components_fast = compute_reward(
-        speed_kmh=80.0, center_offset=0.0, is_on_road=False, collision=False
-    )
-    assert components_slow["r_speed"] == pytest.approx(0.0)
-    assert components_fast["r_speed"] == pytest.approx(0.0)
+    assert components["r_progress"] > 0.0
 
 
-def test_speed_reward_scales_with_speed():
-    """Higher speed must give a higher reward (at a fixed offset)."""
-    reward_slow, _, _ = compute_reward(
-        speed_kmh=10.0, center_offset=0.0, is_on_road=True, collision=False
+def test_progress_reward_negative_when_leaving_destination():
+    """Moving away from the destination (Phi decreases, more negative) must penalise."""
+    _, _, components = compute_reward(
+        speed_kmh=20.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=False,
+        progress_delta=-0.5,
     )
-    reward_fast, _, _ = compute_reward(
-        speed_kmh=40.0, center_offset=0.0, is_on_road=True, collision=False
+    assert components["r_progress"] < 0.0
+
+
+def test_progress_reward_zero_by_default():
+    """No progress_delta passed (e.g. no route/destination) must not reward or penalise."""
+    _, _, components = compute_reward(
+        speed_kmh=20.0, center_offset=0.0, is_on_road=True, collision=False
     )
-    assert reward_fast > reward_slow
+    assert components["r_progress"] == pytest.approx(0.0)
+
+
+def test_progress_reward_zero_on_collision():
+    """Terminal collision step must not include any progress shaping (Phi(terminal)=0)."""
+    _, _, components = compute_reward(
+        speed_kmh=20.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=True,
+        progress_delta=0.5,
+    )
+    assert components["r_progress"] == 0.0
+
+
+def test_progress_reward_zero_on_destination_reached():
+    """Terminal destination-reached step must not include progress shaping either."""
+    _, _, components = compute_reward(
+        speed_kmh=20.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=False,
+        reached_destination=True,
+        progress_delta=0.5,
+    )
+    assert components["r_progress"] == 0.0
+
+
+def test_r_speed_no_longer_a_component():
+    """r_speed is replaced by r_progress -- confirm it's gone from the component keys."""
+    from src.ai.rewards.reward_fn import REWARD_COMPONENT_KEYS
+
+    assert "r_speed" not in REWARD_COMPONENT_KEYS
+    assert "r_progress" in REWARD_COMPONENT_KEYS
 
 
 def test_centering_reward_maximal_at_center():
@@ -97,14 +142,15 @@ def test_alive_bonus_always_present():
 
 
 def test_reward_components_sum_at_max():
-    """At max speed (90 km/h), offset 0, on-road, no collision: r = 0.3 + 0.3 + 0.01 + 0.05
-    (the last term is r_safe — no vehicle/walker/speed-limit configured, so nothing
-    dangerous is active and the safe-driving bonus fires)."""
+    """At max speed (90 km/h), offset 0, on-road, no collision, no progress_delta:
+    r = 0.3 + 0.01 + 0.05 (r_center + r_alive + r_safe — no vehicle/walker/
+    speed-limit configured, so nothing dangerous is active and the safe-driving
+    bonus fires; r_progress is 0.0 since no progress_delta was passed)."""
     reward, done, _ = compute_reward(
         speed_kmh=90.0, center_offset=0.0, is_on_road=True, collision=False
     )
     assert done is False
-    assert reward == pytest.approx(0.3 + 0.3 + 0.01 + 0.05)
+    assert reward == pytest.approx(0.3 + 0.01 + 0.05)
 
 
 def test_collision_overrides_other_components():
@@ -416,7 +462,7 @@ def test_reward_components_sum_to_total_on_collision():
 
 def test_reward_components_always_has_all_fifteen_keys():
     expected_keys = {
-        "r_speed",
+        "r_progress",
         "r_center",
         "r_alive",
         "r_offroad",
@@ -598,27 +644,6 @@ def test_jerk_penalty_scales_with_steer_delta():
     assert components_small["r_jerk"] == pytest.approx(-0.1 * 0.1)
     assert components_large["r_jerk"] == pytest.approx(-1.0 * 0.1)
     assert components_large["r_jerk"] < components_small["r_jerk"]
-
-
-def test_r_speed_uses_progress_speed_when_provided():
-    _, _, components = compute_reward(
-        speed_kmh=90.0,
-        center_offset=0.0,
-        is_on_road=True,
-        collision=False,
-        progress_speed_kmh=45.0,
-    )
-    assert components["r_speed"] == pytest.approx((45.0 / 90.0) * 0.3)
-
-
-def test_r_speed_falls_back_to_speed_kmh_without_progress():
-    _, _, components = compute_reward(
-        speed_kmh=45.0,
-        center_offset=0.0,
-        is_on_road=True,
-        collision=False,
-    )
-    assert components["r_speed"] == pytest.approx((45.0 / 90.0) * 0.3)
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 # `src/ai/` — IA centrale (décision)
 
 > **Owner** : Frédéric Huang
-> **Contrats (Phase 1 réel)** : `CarlaEnv` (`gym.Env`) consomme directement `PerceptionPipeline.perceive()` (Franck), `lane_perception.estimate()` (Karim) et `Navigation.next_command()` (Victor) → `HighLevelCommand` ; produit une observation `Box(11,)` et consomme une action `Box(3,)` (steer, throttle, brake). Les dataclasses `SceneState`/`ControlOutput` de [`ai_types.py`](../interfaces/ai_types.py) faisaient partie du design initial mais ne sont plus utilisées : PPO/Stable-Baselines3 impose un espace d'observation/action `numpy` plat, pas des objets structurés.
+> **Contrats (Phase 1 réel)** : `CarlaEnv` (`gym.Env`) consomme directement `PerceptionPipeline.perceive()` (Franck), `lane_perception.estimate()` (Karim) et `Navigation.next_command()` (Victor) → `HighLevelCommand` ; produit une observation `Box(13,)` et consomme une action `Box(3,)` (steer, throttle, brake). Les dataclasses `SceneState`/`ControlOutput` de [`ai_types.py`](../interfaces/ai_types.py) faisaient partie du design initial mais ne sont plus utilisées : PPO/Stable-Baselines3 impose un espace d'observation/action `numpy` plat, pas des objets structurés.
 
 ---
 
@@ -50,7 +50,7 @@ CARLA World (sync mode, 20 FPS)
          ├─ plan(start, dest) → Route          ← au reset de chaque épisode
          └─ next_command(pos, route) → HighLevelCommand  ← à chaque step
 
-[Observation vector] — 11 scalaires normalisés  ∈ [-1, 1] ou [0, 1]
+[Observation vector] — 13 scalaires normalisés  ∈ [-1, 1] ou [0, 1]
          ├─ [0] speed_norm              = speed_kmh / 90.0                    ∈ [0, 1]
          ├─ [1] cmd_left                = 1.0 si LEFT else 0.0
          ├─ [2] cmd_right               = 1.0 si RIGHT else 0.0
@@ -62,7 +62,9 @@ CARLA World (sync mode, 20 FPS)
          ├─ [7] red_light_distance_norm = min(dist_feu_rouge, 50m) / 50m      ∈ [0, 1]  (Franck)
          ├─ [8] speed_limit_norm        = limite de vitesse mémorisée / 90.0  ∈ [0, 1]  (Franck)
          ├─ [9] nearest_walker_norm     = min(dist_piéton, 50m) / 50m         ∈ [0, 1]  (Franck)
-         └─ [10] nearest_stop_yield_norm = min(dist_stop_ou_yield, 50m) / 50m ∈ [0, 1]  (Franck)
+         ├─ [10] nearest_stop_yield_norm = min(dist_stop_ou_yield, 50m) / 50m ∈ [0, 1]
+         ├─ [11] prev_steer_norm        = steer appliqué au step précédent    ∈ [-1, 1]
+         └─ [12] prev_accel_norm        = accel appliqué au step précédent    ∈ [-1, 1]
 
 [PPO Policy] — Stable-Baselines3 MlpPolicy
          │   2 couches Dense 128, activation tanh
@@ -73,7 +75,7 @@ CARLA World (sync mode, 20 FPS)
          └─ brake    ∈ [0, 1]
 
 [Reward function — par step]   src/ai/rewards/reward_fn.py
-         ├─ r_speed      = (progress_speed_kmh / 90.0) × 0.3 si is_on_road else 0.0 → encourage la progression le long de la route (pas la vitesse brute) ; nul hors route pour ne pas récompenser une vitesse mesurée hors piste
+         ├─ r_progress   = (γ·Φ(s') − Φ(s)) × 0.3, Φ(s) = −distance_to_destination(s) normalisée → shaping potential-based vers la destination, garantie théorique contre les raccourcis (remplace r_speed, qui ne récompensait que la vitesse brute) ; pas gaté sur is_on_road (r_offroad reste seul juge de la sortie de route)
          ├─ r_center     = (1 − |lane_offset_norm|) × 0.3 si is_on_road else 0.0 → encourage le centrage ; nul hors route (sinon un center_offset resté à 0.0 par défaut donnerait un faux maximum)
          ├─ r_alive      = +0.01                                            → survie (anti-crash passif)
          ├─ r_stall      = −0.20 si speed < 1 km/h                          → pénalise l'immobilisme
@@ -93,7 +95,7 @@ CARLA World (sync mode, 20 FPS)
 ### Espace d'observation — pourquoi des scalaires et pas des pixels
 
 Le RL pur sur pixels (end-to-end) nécessite des dizaines de millions de steps et des semaines de compute. Les observations compactes convergent en quelques heures car :
-- L'espace d'état est petit (12 floats) — même si la caméra tourne à 1280×720 (résolution imposée par le modèle YOLO de Franck), la policy PPO ne voit **jamais** l'image brute, seulement les scalaires extraits par les modules de perception
+- L'espace d'état est petit (13 floats) — même si la caméra tourne à 1280×720 (résolution imposée par le modèle YOLO de Franck), la policy PPO ne voit **jamais** l'image brute, seulement les scalaires extraits par les modules de perception
 - Chaque feature est directement exploitable (le réseau n'a pas à apprendre à extraire la distance depuis les pixels)
 - La variance de l'estimation de gradient (PPO) est beaucoup plus faible
 
@@ -347,7 +349,7 @@ uv run pytest benchmarks/ai/ -v
 | Fichier | Couverture |
 |---|---|
 | `smoke.py` | reward_fn — triplet `(reward, terminated, components)`, invariant somme des 15 composantes, les 5 termes de sécurité `r_following`/`r_walker`/`r_speeding`/`r_red_light`/`r_stop_yield` + `r_destination`/`r_safe`/`r_jerk` (33 tests) + stubs GT — `src/interfaces/stubs.py`, non utilisés en prod depuis le branchement Franck/Karim (7 tests) |
-| `test_rl_env.py` | CarlaEnv — spaces, reset (dont replanification de route systématique + spawn sûr face aux NPC), step, observation (11 scalaires), reward (dont vitesse orientée-route, destination atteinte, jerk), accumulateur de composantes par épisode, violations feu rouge / stop-yield, render, off_route (59 tests) |
+| `test_rl_env.py` | CarlaEnv — spaces, reset (dont replanification de route systématique + spawn sûr face aux NPC), step, observation (13 scalaires, dont prev_steer/prev_accel), reward (dont progression potential-based vers la destination, destination atteinte, jerk), accumulateur de composantes par épisode, violations feu rouge / stop-yield, render, off_route (59 tests) |
 | `test_rl_train.py` | make_model (dont config PPO : réseau, entropy, seed, LR schedule), train (9 tests) |
 | `test_rl_demo.py` | run_episode, _add_hud, record_episode (dont overlay carte du trajet, spawn_idx pour la reproductibilité démo), load_model (18 tests) |
 | `test_run_manager.py` | make_run_dir, save_params, plot_reward_curve (9 tests) |

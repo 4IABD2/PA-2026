@@ -21,18 +21,22 @@ if TYPE_CHECKING:
 # obs = [speed_norm, cmd_left, cmd_right, cmd_straight,
 #         lane_offset_norm, is_on_road,
 #         nearest_vehicle_norm, red_light_distance_norm, speed_limit_norm,
-#         nearest_walker_norm, nearest_stop_yield_norm]
+#         nearest_walker_norm, nearest_stop_yield_norm,
+#         prev_steer_norm, prev_accel_norm]
 _OBS_LOW = np.array(
-    [0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32
+    [0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0],
+    dtype=np.float32,
 )
 _OBS_HIGH = np.array(
-    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32
+    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32
 )
 
 _MAX_SPEED_KMH = 90.0
 _MAX_OBSTACLE_M = 50.0
 _WARMUP_TICKS = 5  # ticks after teleport so physics settles and sensors fill
 _OFF_ROUTE_M = 15.0  # metres from nearest route waypoint before off_route penalty fires
+_PROGRESS_GAMMA = 0.99  # must match PPO's own gamma (src/ai/training/rl_train.py's
+# _PPO_DEFAULTS) for the potential-based shaping's policy-invariance guarantee to hold
 _ROUTE_GRACE_STEPS = (
     20  # steps after reset where off-route is not penalised (car joins route)
 )
@@ -151,6 +155,9 @@ class CarlaEnv(gym.Env):
         }
         self._episode_start_location: "carla.Location | None" = None
         self._prev_steer: float = 0.0
+        self._prev_accel: float = 0.0
+        self._dist_to_dest_initial: float = 1.0
+        self._prev_dist_to_dest_norm: float = 1.0
         self._last_image: np.ndarray | None = None
         self._step_count: int = 0
         self._route_idx: int = (
@@ -194,6 +201,11 @@ class CarlaEnv(gym.Env):
                 self.route = self.nav.plan(self.ego.get_transform().location, dest)
             except Exception as exc:
                 print(f"    nav.plan failed at reset: {exc}")
+        dist0 = self._dist_to_destination()
+        self._dist_to_dest_initial = max(dist0, 1.0) if dist0 is not None else 1.0
+        self._prev_dist_to_dest_norm = (
+            dist0 / self._dist_to_dest_initial if dist0 is not None else 1.0
+        )
         self._collision_flag = False
         self._collision_speed_kmh = 0.0
         self._red_light_flagged = False
@@ -201,6 +213,7 @@ class CarlaEnv(gym.Env):
         self._episode_reward_components = {k: 0.0 for k in REWARD_COMPONENT_KEYS}
         self._episode_start_location = self.ego.get_transform().location
         self._prev_steer = 0.0
+        self._prev_accel = 0.0
         self._step_count = 0
         self._route_idx = 0
         self._current_speed_limit_kmh = _DEFAULT_SPEED_LIMIT_KMH
@@ -216,6 +229,10 @@ class CarlaEnv(gym.Env):
         self._apply_control(steer, throttle, brake)
         self.world.tick()
         self._step_count += 1
+
+        steer_delta = abs(steer - self._prev_steer)
+        self._prev_steer = steer
+        self._prev_accel = accel
 
         obs = self._get_obs()
         speed_kmh = self._speed_kmh()
@@ -240,8 +257,15 @@ class CarlaEnv(gym.Env):
             _STOP_YIELD_VIOLATION_SPEED_KMH,
         )
 
-        steer_delta = abs(steer - self._prev_steer)
-        self._prev_steer = steer
+        dist_to_dest = self._dist_to_destination()
+        if dist_to_dest is not None:
+            dist_norm = dist_to_dest / self._dist_to_dest_initial
+            phi_now = -dist_norm
+            phi_prev = -self._prev_dist_to_dest_norm
+            progress_delta = _PROGRESS_GAMMA * phi_now - phi_prev
+            self._prev_dist_to_dest_norm = dist_norm
+        else:
+            progress_delta = 0.0
 
         reward, terminated, components = compute_reward(
             speed_kmh=speed_kmh,
@@ -258,9 +282,9 @@ class CarlaEnv(gym.Env):
             collision_speed_kmh=self._collision_speed_kmh,
             red_light_violation=red_light_violation,
             stop_yield_violation=stop_yield_violation,
-            progress_speed_kmh=self._progress_speed_kmh(),
             reached_destination=self._reached_destination(),
             steer_delta=steer_delta,
+            progress_delta=progress_delta,
         )
         for key, value in components.items():
             self._episode_reward_components[key] += value
@@ -352,6 +376,8 @@ class CarlaEnv(gym.Env):
                 speed_limit_norm,
                 nearest_walker_norm,
                 nearest_stop_yield_norm,
+                self._prev_steer,
+                self._prev_accel,
             ],
             dtype=np.float32,
         )
@@ -445,24 +471,19 @@ class CarlaEnv(gym.Env):
         v = self.ego.get_velocity()
         return math.sqrt(v.x**2 + v.y**2 + v.z**2) * 3.6
 
-    def _progress_speed_kmh(self) -> float:
-        """Velocity projected onto the route's current direction, in km/h.
-
-        Unlike _speed_kmh() (velocity magnitude), this measures progress toward
-        the destination — driving fast sideways or backward relative to the
-        route earns no credit. Floored at 0: driving against the route
-        direction never produces a negative r_speed, only zero (off-route/
-        off-road penalties already cover that failure mode separately).
-        Falls back to _speed_kmh() if there's no route to project onto.
+    def _dist_to_destination(self) -> float | None:
+        """Straight-line 2D distance from the ego to the route's destination,
+        or None if there's no route/destination to measure against.
         """
-        if not (self.route and self.route.waypoints):
-            return self._speed_kmh()
-        idx = min(self._route_idx, len(self.route.waypoints) - 1)
-        yaw_rad = math.radians(self.route.waypoints[idx].yaw_deg)
-        direction_x, direction_y = math.cos(yaw_rad), math.sin(yaw_rad)
-        v = self.ego.get_velocity()
-        projection_mps = v.x * direction_x + v.y * direction_y
-        return max(0.0, projection_mps * 3.6)
+        # Uses `is None` rather than truthiness: Route.__len__ delegates to
+        # len(waypoints), so a route with a valid destination but no waypoints
+        # (the common case right after a fresh plan()) would otherwise be
+        # incorrectly treated as "no route".
+        if self.route is None or self.route.destination is None:
+            return None
+        loc = self.ego.get_transform().location
+        dest = self.route.destination
+        return math.sqrt((loc.x - dest.x) ** 2 + (loc.y - dest.y) ** 2)
 
     def _reached_destination(self) -> bool:
         """True once the ego is close to the route's destination AND has
@@ -470,19 +491,10 @@ class CarlaEnv(gym.Env):
         condition stops a lucky spawn near the (fixed, far-away) training
         destination from collecting the bonus without driving anywhere.
         """
-        # Uses `is None` rather than truthiness: Route.__len__ delegates to
-        # len(waypoints), so a route with a valid destination but no waypoints
-        # (the common case right after a fresh plan()) would otherwise be
-        # incorrectly treated as "no route".
-        if (
-            self.route is None
-            or self.route.destination is None
-            or self._episode_start_location is None
-        ):
+        dist_to_dest = self._dist_to_destination()
+        if dist_to_dest is None or self._episode_start_location is None:
             return False
         loc = self.ego.get_transform().location
-        dest = self.route.destination
-        dist_to_dest = math.sqrt((loc.x - dest.x) ** 2 + (loc.y - dest.y) ** 2)
         dist_travelled = math.sqrt(
             (loc.x - self._episode_start_location.x) ** 2
             + (loc.y - self._episode_start_location.y) ** 2
