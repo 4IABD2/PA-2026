@@ -24,9 +24,18 @@ _PPO_DEFAULTS: dict = dict(
     gamma=0.99,
     gae_lambda=0.95,
     clip_range=0.2,
-    ent_coef=0.02,  # raised from 0.01 (frozen since v1) now that the reward itself
-    # is being fixed -- a modest, untested increase, not a derived optimum; revisit
-    # if v10 still shows narrow/collapsed action distributions
+    ent_coef=0.05,  # raised again from 0.02 -- v9 and v10 both showed the policy
+    # collapsing to action-space extremes (steer/accel saturated at -1/+1, never
+    # intermediate values) despite different reward functions; still not a derived
+    # optimum, revisit if v11 shows the same collapse
+    use_sde=True,  # generalized State-Dependent Exploration: temporally-correlated
+    # exploration noise instead of independent-per-step Gaussian noise, SB3's
+    # standard mechanism for smoother continuous-control exploration -- targets
+    # the same collapse-to-extremes symptom directly (see JOURNAL.md for the
+    # v9/v10 comparison that motivated this)
+    sde_sample_freq=4,  # resample exploration noise every 4 steps rather than
+    # once per rollout (SB3 default -1) -- a common starting value for
+    # continuous-control tasks, not a derived optimum
     policy_kwargs=dict(
         net_arch=[128, 128]
     ),  # bigger obs space and task need more capacity than [64, 64]

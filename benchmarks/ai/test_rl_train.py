@@ -63,7 +63,7 @@ def test_ppo_defaults_use_larger_network():
 def test_ppo_defaults_have_entropy_coefficient():
     from src.ai.training.rl_train import _PPO_DEFAULTS
 
-    assert _PPO_DEFAULTS["ent_coef"] == pytest.approx(0.02)
+    assert _PPO_DEFAULTS["ent_coef"] == pytest.approx(0.05)
 
 
 def test_ppo_defaults_are_seeded():
@@ -84,8 +84,23 @@ def test_ppo_defaults_learning_rate_is_a_decaying_schedule():
 
 def test_make_model_builds_with_new_defaults():
     model = make_model(_MinimalEnv())
-    assert model.ent_coef == pytest.approx(0.02)
+    assert model.ent_coef == pytest.approx(0.05)
     assert model.seed == 42
+
+
+def test_ppo_defaults_use_gsde():
+    from src.ai.training.rl_train import _PPO_DEFAULTS
+
+    assert _PPO_DEFAULTS["use_sde"] is True
+    assert _PPO_DEFAULTS["sde_sample_freq"] == 4
+
+
+def test_make_model_builds_with_gsde_and_predicts_within_bounds():
+    model = make_model(_MinimalEnv())
+    assert model.use_sde is True
+    obs, _ = _MinimalEnv().reset()
+    action, _ = model.predict(obs, deterministic=True)
+    assert model.action_space.contains(action.astype(np.float32))
 
 
 # ---------------------------------------------------------------------------

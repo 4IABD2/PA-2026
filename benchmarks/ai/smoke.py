@@ -30,8 +30,10 @@ def test_offroad_applies_penalty():
     computed from a stale/default center_offset while off-road), plus the
     -0.5 _P_OFFROAD penalty. r_speed is gone (replaced by r_progress, which
     isn't gated on is_on_road at all), so on-road no longer earns its +0.1
-    at speed_kmh=30.0 -- on-road = r_center(0.3) + r_alive(0.01) + r_safe(0.05)
-    = 0.36; off-road = r_alive(0.01) + r_offroad(-0.5) + r_safe(0.05) = -0.44."""
+    at speed_kmh=30.0 -- on-road = r_center(0.3) + r_alive(0.05) + r_safe(0.05)
+    = 0.40; off-road = r_alive(0.05) + r_offroad(-0.5) + r_safe(0.05) = -0.40.
+    The delta is unchanged at -0.80 despite _W_ALIVE rising from 0.01 to 0.05,
+    since r_alive contributes equally (unconditionally) to both sides."""
     reward_onroad, _, _ = compute_reward(
         speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -143,14 +145,21 @@ def test_alive_bonus_always_present():
 
 def test_reward_components_sum_at_max():
     """At max speed (90 km/h), offset 0, on-road, no collision, no progress_delta:
-    r = 0.3 + 0.01 + 0.05 (r_center + r_alive + r_safe — no vehicle/walker/
+    r = 0.3 + 0.05 + 0.05 (r_center + r_alive + r_safe — no vehicle/walker/
     speed-limit configured, so nothing dangerous is active and the safe-driving
     bonus fires; r_progress is 0.0 since no progress_delta was passed)."""
     reward, done, _ = compute_reward(
         speed_kmh=90.0, center_offset=0.0, is_on_road=True, collision=False
     )
     assert done is False
-    assert reward == pytest.approx(0.3 + 0.01 + 0.05)
+    assert reward == pytest.approx(0.3 + 0.05 + 0.05)
+
+
+def test_reward_weights_updated_for_v11():
+    from src.ai.rewards.reward_fn import _W_ALIVE, _W_PROGRESS
+
+    assert _W_ALIVE == pytest.approx(0.05)
+    assert _W_PROGRESS == pytest.approx(1.0)
 
 
 def test_collision_overrides_other_components():

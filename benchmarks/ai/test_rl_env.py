@@ -646,12 +646,12 @@ def test_reward_center_term_uses_lane_offset_when_centered():
     env = _make_env(lane_angle=80.0, lane_offset=0.0)
     env.reset()
     _, reward, _, _, _ = env.step(_ZERO_ACTION)
-    # speed=0 -> r_center=0.3, r_alive=0.01, r_stall=-0.20 (speed < 1 km/h),
+    # speed=0 -> r_center=0.3, r_alive=0.05, r_stall=-0.20 (speed < 1 km/h),
     # r_safe=0.05 (no vehicle/walker/speed-limit configured, so nothing dangerous is
     # active). r_progress=0.0: this fixture's mocked destination sits exactly at
     # the ego's fixed spawn location (dist0=0) and the ego never moves, so there's
     # no distance change to reward.
-    assert reward == pytest.approx(0.16, abs=1e-4)
+    assert reward == pytest.approx(0.20, abs=1e-4)
 
 
 def test_reward_center_term_uses_lane_offset_when_off_center():
@@ -659,11 +659,11 @@ def test_reward_center_term_uses_lane_offset_when_off_center():
     env = _make_env(lane_angle=0.0, lane_offset=0.9)
     env.reset()
     _, reward, _, _, _ = env.step(_ZERO_ACTION)
-    # speed=0 -> r_center=(1-0.9)*0.3=0.03, r_alive=0.01, r_stall=-0.20,
+    # speed=0 -> r_center=(1-0.9)*0.3=0.03, r_alive=0.05, r_stall=-0.20,
     # r_safe=0.05 (no vehicle/walker/speed-limit configured, so nothing dangerous is
     # active). r_progress=0.0, same zero-progress reasoning as
     # test_reward_center_term_uses_lane_offset_when_centered.
-    assert reward == pytest.approx(-0.11, abs=1e-4)
+    assert reward == pytest.approx(-0.07, abs=1e-4)
 
 
 # ---------------------------------------------------------------------------
