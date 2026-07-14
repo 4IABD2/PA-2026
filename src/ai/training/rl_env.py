@@ -158,6 +158,7 @@ class CarlaEnv(gym.Env):
         self._prev_accel: float = 0.0
         self._dist_to_dest_initial: float = 1.0
         self._prev_dist_to_dest_norm: float = 1.0
+        self._last_lane_offset_norm: float = 0.0
         self._last_image: np.ndarray | None = None
         self._step_count: int = 0
         self._route_idx: int = (
@@ -214,6 +215,7 @@ class CarlaEnv(gym.Env):
         self._episode_start_location = self.ego.get_transform().location
         self._prev_steer = 0.0
         self._prev_accel = 0.0
+        self._last_lane_offset_norm = 0.0
         self._step_count = 0
         self._route_idx = 0
         self._current_speed_limit_kmh = _DEFAULT_SPEED_LIMIT_KMH
@@ -265,6 +267,7 @@ class CarlaEnv(gym.Env):
             progress_delta = _PROGRESS_GAMMA * phi_now - phi_prev
             self._prev_dist_to_dest_norm = dist_norm
         else:
+            dist_norm = 1.0
             progress_delta = 0.0
 
         reward, terminated, components = compute_reward(
@@ -285,6 +288,7 @@ class CarlaEnv(gym.Env):
             reached_destination=self._reached_destination(),
             steer_delta=steer_delta,
             progress_delta=progress_delta,
+            remaining_frac=dist_norm,
         )
         for key, value in components.items():
             self._episode_reward_components[key] += value
@@ -318,7 +322,14 @@ class CarlaEnv(gym.Env):
 
         # Karim: lateral offset, on-road status (lane heading angle is not fed to the model)
         direction, _angle, offset = self._lane_estimate(image)
-        lane_offset_norm = float(np.clip(offset, -1.0, 1.0))
+        if direction != "NONE":
+            self._last_lane_offset_norm = float(np.clip(offset, -1.0, 1.0))
+        # else: lane_geometry() couldn't track both edges and returned its
+        # NO_LANE default (offset=0.0) -- that means "no measurement", not
+        # "centered", so hold the last real reading instead of feeding the
+        # policy a false "you're centered" signal the instant it loses the
+        # road (runs/2026-07-12_00-45_ppo_v11_150k/ANALYSIS.md, Constat #2).
+        lane_offset_norm = self._last_lane_offset_norm
         wp = self.world.get_map().get_waypoint(self.ego.get_transform().location)
         is_on_road = (
             1.0 if (direction != "NONE" or (wp is not None and wp.is_junction)) else 0.0

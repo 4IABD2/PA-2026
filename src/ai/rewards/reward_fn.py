@@ -130,6 +130,7 @@ def compute_reward(
     reached_destination: bool = False,
     steer_delta: float = 0.0,
     progress_delta: float = 0.0,
+    remaining_frac: float = 0.0,
 ) -> tuple[float, bool, dict[str, float]]:
     """Compute the per-step reward and whether the episode should terminate.
 
@@ -170,6 +171,16 @@ def compute_reward(
                        distance-to-destination, pre-computed by CarlaEnv
                        (Φ(s) = −normalized_distance_to_destination(s)).
                        0.0 (default) means no shaping applied this step.
+        remaining_frac: Fraction of the route still left to travel at the
+                       moment of a collision -- dist_to_destination(s) /
+                       dist_to_destination(s0), the same normalized distance
+                       CarlaEnv already computes for progress shaping.
+                       1.0 = crash right after spawn, 0.0 = crash right at
+                       the destination. Clamped to [0, 1] here (a car that
+                       drove further from the destination than its starting
+                       distance must not scale the penalty past 2x). Default
+                       0.0 (no scaling) so every existing caller/test that
+                       doesn't pass it keeps today's flat collision cost.
 
     Returns:
         (reward, terminated, components) where terminated is True on
@@ -180,9 +191,17 @@ def compute_reward(
     """
     if collision:
         components = {key: 0.0 for key in REWARD_COMPONENT_KEYS}
+        collision_scale = 1.0 + max(0.0, min(1.0, remaining_frac))  # 1x (crash
+        # at the destination) to 2x (crash right after spawn) -- audit
+        # runs/AUDIT.md section 2.1 option (b): a crash early in the route,
+        # forfeiting nearly all of it, must cost more than one right before
+        # arrival. Bounded at 2x so it can never approach the ~-200 a car
+        # would rack up by refusing to move for a full 1000-step episode
+        # (_P_STALL=-0.20/step) -- no risk of re-creating the pre-Lot-2
+        # freeze pathology.
         components["r_collision"] = (
             _P_COLLISION_BASE + _P_COLLISION_SPEED_SCALE * collision_speed_kmh
-        )
+        ) * collision_scale
         return components["r_collision"], True, components
 
     if reached_destination:
