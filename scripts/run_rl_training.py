@@ -106,6 +106,12 @@ from src.ai.training.rl_env import (
     _DEFAULT_SPEED_LIMIT_KMH,
     _DEST_REACHED_RADIUS_M,
     _MIN_TRAVEL_FOR_DEST_M,
+    _CURRICULUM_MIN_FLOOR_M,
+    _CURRICULUM_START_MAX_M,
+    _CURRICULUM_STEP_M,
+    _CURRICULUM_CEILING_M,
+    _CURRICULUM_WINDOW,
+    _CURRICULUM_ADVANCE_RATE,
 )
 from src.ai.training.rl_train import make_model, train, _PPO_DEFAULTS
 from src.ai.training.run_manager import make_run_dir, save_params, plot_reward_curve
@@ -372,6 +378,12 @@ def main() -> None:
                 "default_speed_limit_kmh": _DEFAULT_SPEED_LIMIT_KMH,
                 "dest_reached_radius_m": _DEST_REACHED_RADIUS_M,
                 "min_travel_for_dest_m": _MIN_TRAVEL_FOR_DEST_M,
+                "curriculum_min_floor_m": _CURRICULUM_MIN_FLOOR_M,
+                "curriculum_start_max_m": _CURRICULUM_START_MAX_M,
+                "curriculum_step_m": _CURRICULUM_STEP_M,
+                "curriculum_ceiling_m": _CURRICULUM_CEILING_M,
+                "curriculum_window": _CURRICULUM_WINDOW,
+                "curriculum_advance_rate": _CURRICULUM_ADVANCE_RATE,
                 "npcs": args.npcs,
                 "pedestrians": args.pedestrians,
             },
