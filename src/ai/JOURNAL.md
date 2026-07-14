@@ -1287,3 +1287,23 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Prochaine étape** :
 - Lancer un run v13 (150k) et comparer à v12 via `analyze_run.py` : steer déterministe enfin désaturé sur les évals (std > 0, valeurs intermédiaires) ? Part de stall en baisse ? Le duel parking/conduite bascule-t-il — premières destinations atteintes ?
 - Rédiger `ANALYSIS.md` pour `ppo_v12_150k` (les chiffres consolidés de cette entrée + `analysis_data.json`).
+
+---
+
+## 2026-07-15 — v14 : auto-curriculum sur la distance de destination (attaque du cold-start)
+
+**Contexte** : itération autonome de nuit (consigne utilisateur : enchaîner les versions jusqu'à ce que la voiture atteigne un minimum). `ppo_v13_150k` a été **interrompue à 59,5k/150k** pour libérer le serveur CARLA unique et permettre d'itérer — un seul run 150k occuperait toute la nuit. v13 suivait une trajectoire légèrement meilleure que v12 (épisodes 184 vs 155 à 43k, `r_progress` 4.7 vs 4.3) mais **0 destination sur 400 épisodes** ; le pari `squash_output` (steer désaturé) reste non mesuré faute d'évals de fin (voir `runs/2026-07-14_21-49_ppo_v13_150k/ANALYSIS.md`).
+
+**Diagnostic racine** : sur v9→v13, **0 destination atteinte en ~2000 épisodes cumulés**. PPO n'a donc jamais vu le bonus terminal `+10` — il n'a aucun signal positif d'arrivée pour bootstrapper la value function, il apprend seulement à éviter le pire. Le décideur fondateur de l'approche (JOURNAL, « pas de pretraining CIL→RL, PPO from scratch converge en quelques heures ») est empiriquement réfuté. Tuner le reward une 4ᵉ fois ne s'attaque pas à ce cold-start.
+
+**Fix v14 : curriculum de distance** (`rl_env.py`). Les destinations d'entraînement (tirées aléatoirement à chaque `reset()`) commencent proches et s'éloignent seulement quand la policy gagne :
+- Fenêtre de distance `[_CURRICULUM_MIN_FLOOR_M=18, _curriculum_max_m]`, `_curriculum_max_m` démarrant à 30 m, +8 m par palier jusqu'à un plafond de 70 m. `_pick_random_destination` tire dans cette fenêtre (fallback : candidat le plus proche de la fenêtre).
+- Avancement : `_maybe_advance_curriculum()` (appelé une fois par `reset()`) monte le plafond quand le taux de succès sur les 20 derniers épisodes ≥ 50 %, puis vide la fenêtre (le nouveau palier doit être re-gagné). Mémoire d'épisodes tenue dans `self._recent_success` (deque), alimentée en fin d'épisode dans `step()` par `components["r_destination"] > 0` (source unique de vérité « atteint »). État **cross-épisode** : ni le plafond ni la deque ne sont remis à zéro dans le bloc per-épisode de `reset()`.
+- **Interaction critique corrigée** : `_reached_destination` exigeait `_MIN_TRAVEL_FOR_DEST_M = 25 m` de trajet **et** d'être à < 15 m de la cible. Avec des destinations à 18-30 m, cette porte rendait tout succès proche mécaniquement impossible (entrer dans le rayon de 15 m d'une cible à 20 m demande ~5 m de trajet, très en-deçà de 25). Seuil baissé **25 → 12 m** : la cible la plus proche (18 m) demande encore ~12 m de conduite dirigée (pas un gain en dérivant sur place), mais devient atteignable. Volontairement plus permissif que le `_MIN_DIST_M` du benchmark pour l'instant (signal d'entraînement, pas critère de benchmark) — desync notée, à réaligner si on garde le curriculum.
+- Constante `_MIN_DEST_DIST_M` (30 m, ancien plancher dur) supprimée, remplacée par la fenêtre. Constantes du curriculum loggées dans `params.json`. Avancement de palier tracé par un `print` dans `run.log` (grepable).
+
+**TDD** : 13 nouveaux tests dans `test_rl_env.py` (démarrage au start_max, tir dans/hors fenêtre, fallback closest, avancement après fenêtre gagnante, maintien sous le seuil, cap au plafond, enregistrement du non-succès au timeout, survie de l'état au reset, verrou de constantes `test_curriculum_constants_v14`). 2 tests de destination existants réécrits pour la sémantique fenêtre (ex-garde `≥30 m`), 1 helper `_make_spawn` recentré à 25 m (dans la fenêtre) pour préserver un compte de tirages. **275 tests verts** (265 avant).
+
+**Smoke CARLA réel** (`runs/2026-07-15_00-38_v14_smoke_1k`, 1500 steps, `--demo-eps 0`) : exit 0 en 5m19, **aucune erreur `nav.plan`** (le routage vers destinations proches tient en conditions réelles), rampe de stall active (-30/ep). 0 destination sur 7 épisodes de policy aléatoire — attendu, pas de régression.
+
+**Prochaine étape** : run v14 60k (`--demo-eps 0`, itération rapide, lecture directe du CSV). **Métrique décisive : `r_destination > 0` apparaît-il ?** Si oui → le curriculum débloque le cold-start, on pousse (plafond plus haut, run plus long). Si toujours 0 même à 18-30 m → la distance n'est pas le mur → v15 = expérience obs vérité-terrain (offset latéral waypoint CARLA au lieu du détecteur de Karim) pour isoler perception vs RL.

@@ -163,13 +163,14 @@ def _stub_ego_position_changes_after_tick(
 def _make_spawn(distance_to_nearest: float) -> Mock:
     """A spawn-point Mock whose location reports a fixed nearest-actor distance,
     regardless of which actor is queried. Its (x, y, z) is set to a fixed point
-    100m from the default (0, 0, 0) ego mock position (see _make_env()) — well
-    past _MIN_DEST_DIST_M (30m) — so _pick_random_destination()'s real
-    ego_location.distance(candidate.location) call (see _add_real_distance())
-    succeeds with a genuine value instead of raising a TypeError that reset()'s
-    broad except would otherwise silently swallow."""
+    25m from the default (0, 0, 0) ego mock position (see _make_env()) — inside
+    the v14 curriculum window [18, 30] so _pick_random_destination() accepts it
+    on the first draw, and its real ego_location.distance(candidate.location)
+    call (see _add_real_distance()) succeeds with a genuine value instead of
+    raising a TypeError that reset()'s broad except would otherwise silently
+    swallow."""
     sp = Mock()
-    sp.location.x, sp.location.y, sp.location.z = 100.0, 0.0, 0.0
+    sp.location.x, sp.location.y, sp.location.z = 25.0, 0.0, 0.0
     sp.location.distance = Mock(return_value=distance_to_nearest)
     return sp
 
@@ -348,9 +349,9 @@ def test_safe_spawn_accepts_first_candidate_at_exactly_min_distance():
     # meets the 10m threshold on the first draw) and one for the random
     # destination pick that follows (reset() shares self.np_random across
     # both). The destination draw also succeeds on its first attempt:
-    # _make_spawn()'s candidates sit 100m from the ego's mocked (0, 0, 0)
-    # position, comfortably past the 30m _MIN_DEST_DIST_M guard, so
-    # ego_location.distance(...) returns a real value >= 30 immediately
+    # _make_spawn()'s candidates sit 25m from the ego's mocked (0, 0, 0)
+    # position, inside the [18, 30] curriculum window, so
+    # _pick_random_destination() accepts the first candidate immediately
     # rather than needing a retry.
     assert env.np_random.integers.call_count == 2
 
@@ -518,24 +519,28 @@ def test_reset_picks_different_destination_across_differently_seeded_episodes():
     assert dest_a is not dest_b
 
 
-def test_pick_random_destination_enforces_min_distance_guard():
+def test_pick_random_destination_skips_out_of_window_returns_in_window():
+    # v14 curriculum: a below-floor candidate is skipped in favour of one
+    # inside the [_CURRICULUM_MIN_FLOOR_M, curriculum_max] window.
     env = _make_env()
     ego_loc = _add_real_distance(Mock(x=0.0, y=0.0, z=0.0))
-    near = _make_spawn_at(5.0, 0.0)  # 5m away, below the 30m guard
-    far = _make_spawn_at(50.0, 0.0)  # 50m away, clears the guard
-    env.np_random = Mock(integers=Mock(side_effect=[0, 1]))  # draws near, then far
+    below = _make_spawn_at(5.0, 0.0)  # below the 18m floor -> out of window
+    in_win = _make_spawn_at(25.0, 0.0)  # inside [18, 30] -> valid
+    env.np_random = Mock(integers=Mock(side_effect=[0, 1]))  # below, then in_win
 
-    dest = env._pick_random_destination([near, far], ego_loc)
+    dest = env._pick_random_destination([below, in_win], ego_loc)
 
-    assert dest is far.location
-    assert ego_loc.distance(dest) >= 30.0  # >= _MIN_DEST_DIST_M
+    assert dest is in_win.location
 
 
-def test_pick_random_destination_falls_back_to_farthest_when_all_too_close():
+def test_pick_random_destination_falls_back_to_closest_when_all_below_floor():
+    # When every candidate is below the window floor, the one nearest the
+    # window (largest distance, smallest gap to the floor) must win — not
+    # whichever was drawn last.
     env = _make_env()
     ego_loc = _add_real_distance(Mock(x=0.0, y=0.0, z=0.0))
-    closer = _make_spawn_at(5.0, 0.0)  # 5m, both below the 30m guard
-    farther = _make_spawn_at(20.0, 0.0)  # 20m, farthest seen
+    closer = _make_spawn_at(5.0, 0.0)  # 5m, far below the 18m floor
+    farther = _make_spawn_at(15.0, 0.0)  # 15m, still below floor but nearest it
     # 10 draws alternating, ending on `closer` so a last-drawn-wins
     # implementation would incorrectly return `closer`.
     env.np_random = Mock(integers=Mock(side_effect=[1, 0, 1, 0, 1, 0, 1, 0, 1, 0]))
@@ -1230,6 +1235,138 @@ def test_stall_counter_resets_on_episode_reset():
     assert env._stall_steps == 3
     env.reset()
     assert env._stall_steps == 0
+
+
+# ---------------------------------------------------------------------------
+# Auto-curriculum on destination distance (v14)
+# ---------------------------------------------------------------------------
+
+
+def test_curriculum_starts_at_start_max():
+    from src.ai.training.rl_env import _CURRICULUM_START_MAX_M
+
+    env = _make_env()
+    assert env._curriculum_max_m == pytest.approx(_CURRICULUM_START_MAX_M)
+
+
+def test_pick_destination_returns_candidate_inside_window():
+    from src.ai.training.rl_env import (
+        _CURRICULUM_MIN_FLOOR_M,
+        _CURRICULUM_START_MAX_M,
+    )
+
+    env = _make_env()
+    env.reset()
+    ego = _add_real_distance(Mock(x=0.0, y=0.0, z=0.0))
+    # every candidate sits inside [floor, start_max] -> whichever is drawn is valid
+    mid = (_CURRICULUM_MIN_FLOOR_M + _CURRICULUM_START_MAX_M) / 2.0
+    spawns = [_make_spawn_at(mid, 0.0), _make_spawn_at(_CURRICULUM_MIN_FLOOR_M, 0.0)]
+    dest = env._pick_random_destination(spawns, ego)
+    d = math.hypot(dest.x, dest.y)
+    assert _CURRICULUM_MIN_FLOOR_M <= d <= _CURRICULUM_START_MAX_M
+
+
+def test_pick_destination_falls_back_to_closest_to_window_when_all_outside():
+    from src.ai.training.rl_env import _CURRICULUM_START_MAX_M
+
+    env = _make_env()
+    env.reset()
+    ego = _add_real_distance(Mock(x=0.0, y=0.0, z=0.0))
+    # both beyond the ceiling of the window; the nearer-to-window one must win
+    far = _make_spawn_at(_CURRICULUM_START_MAX_M + 40.0, 0.0)
+    near = _make_spawn_at(_CURRICULUM_START_MAX_M + 5.0, 0.0)
+    dest = env._pick_random_destination([far, near], ego)
+    assert dest.x == pytest.approx(_CURRICULUM_START_MAX_M + 5.0)
+
+
+def test_curriculum_advances_after_a_successful_window():
+    from src.ai.training.rl_env import (
+        _CURRICULUM_START_MAX_M,
+        _CURRICULUM_STEP_M,
+        _CURRICULUM_WINDOW,
+    )
+
+    env = _make_env()
+    for _ in range(_CURRICULUM_WINDOW):
+        env._recent_success.append(True)
+    env._maybe_advance_curriculum()
+    assert env._curriculum_max_m == pytest.approx(
+        _CURRICULUM_START_MAX_M + _CURRICULUM_STEP_M
+    )
+    # window is cleared so the next level must be re-earned, not advanced again
+    assert len(env._recent_success) == 0
+
+
+def test_curriculum_holds_without_enough_success():
+    from src.ai.training.rl_env import _CURRICULUM_START_MAX_M, _CURRICULUM_WINDOW
+
+    env = _make_env()
+    # 40% success over a full window -- below the 50% advance bar
+    for i in range(_CURRICULUM_WINDOW):
+        env._recent_success.append(i < _CURRICULUM_WINDOW * 0.4)
+    env._maybe_advance_curriculum()
+    assert env._curriculum_max_m == pytest.approx(_CURRICULUM_START_MAX_M)
+    assert len(env._recent_success) == _CURRICULUM_WINDOW  # untouched
+
+
+def test_curriculum_does_not_advance_on_a_partial_window():
+    from src.ai.training.rl_env import _CURRICULUM_START_MAX_M
+
+    env = _make_env()
+    env._recent_success.append(True)  # a single success, window not full
+    env._maybe_advance_curriculum()
+    assert env._curriculum_max_m == pytest.approx(_CURRICULUM_START_MAX_M)
+
+
+def test_curriculum_caps_at_ceiling():
+    from src.ai.training.rl_env import _CURRICULUM_CEILING_M, _CURRICULUM_WINDOW
+
+    env = _make_env()
+    env._curriculum_max_m = _CURRICULUM_CEILING_M
+    for _ in range(_CURRICULUM_WINDOW):
+        env._recent_success.append(True)
+    env._maybe_advance_curriculum()
+    assert env._curriculum_max_m == pytest.approx(_CURRICULUM_CEILING_M)
+
+
+def test_curriculum_records_non_success_on_timeout():
+    """A timed-out episode (no destination, no collision) must record a
+    False outcome so a policy that merely survives never advances the
+    curriculum."""
+    env = _make_env(max_episode_steps=1)
+    env.reset()
+    env.step(_ZERO_ACTION)  # step_count reaches max -> truncated
+    assert list(env._recent_success) == [False]
+
+
+def test_curriculum_state_survives_episode_reset():
+    """The distance ceiling and outcome window are cross-episode memory —
+    reset() must NOT wipe them (unlike per-episode counters)."""
+    from src.ai.training.rl_env import _CURRICULUM_STEP_M, _CURRICULUM_START_MAX_M
+
+    env = _make_env()
+    env._curriculum_max_m = _CURRICULUM_START_MAX_M + _CURRICULUM_STEP_M
+    env._recent_success.append(True)
+    env.reset()
+    assert env._curriculum_max_m == pytest.approx(
+        _CURRICULUM_START_MAX_M + _CURRICULUM_STEP_M
+    )
+    # reset() appends nothing itself; the one pre-seeded outcome is still there
+    assert len(env._recent_success) == 1
+
+
+def test_curriculum_constants_v14():
+    """Lock the v14 curriculum schedule on its exact values — a future retune
+    must be deliberate (same convention as test_stall_ramp_constants_v13)."""
+    from src.ai.training import rl_env
+
+    assert rl_env._CURRICULUM_MIN_FLOOR_M == pytest.approx(18.0)
+    assert rl_env._CURRICULUM_START_MAX_M == pytest.approx(30.0)
+    assert rl_env._CURRICULUM_STEP_M == pytest.approx(8.0)
+    assert rl_env._CURRICULUM_CEILING_M == pytest.approx(70.0)
+    assert rl_env._CURRICULUM_WINDOW == 20
+    assert rl_env._CURRICULUM_ADVANCE_RATE == pytest.approx(0.5)
+    assert rl_env._MIN_TRAVEL_FOR_DEST_M == pytest.approx(12.0)
 
 
 def test_episode_reward_components_includes_jerk_penalty():
