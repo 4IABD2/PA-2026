@@ -37,8 +37,16 @@ _PPO_DEFAULTS: dict = dict(
     # once per rollout (SB3 default -1) -- a common starting value for
     # continuous-control tasks, not a derived optimum
     policy_kwargs=dict(
-        net_arch=[128, 128]
-    ),  # bigger obs space and task need more capacity than [64, 64]
+        # bigger obs space and task need more capacity than [64, 64]
+        net_arch=[128, 128],
+        squash_output=True,  # v9..v12 all collapsed deterministic steer to a
+        # saturated +/-1.0 regardless of reward, seed or exploration changes.
+        # With plain clipping the Gaussian mean can drift past the action
+        # bounds, where the clip gradient is zero and saturation self-sustains;
+        # tanh-squashing keeps the mean finite and the gradient informative
+        # near the bounds. SB3 only supports it together with gSDE (use_sde
+        # above), which is already on since v11.
+    ),
     seed=7,  # changed from 42 (frozen since v1) -- v10 (no gSDE) collapsed to
     # full-left steer, v11 (gSDE) collapsed to full-right steer, both on the
     # same frozen seed with different exploration mechanisms. v12's isolated

@@ -1191,6 +1191,47 @@ def test_prev_steer_tracks_last_action_and_resets():
     assert env._prev_steer == pytest.approx(0.0)
 
 
+def test_stall_counter_ramps_reward_across_consecutive_stalled_steps():
+    """Integration (v13 progressive stall): CarlaEnv counts consecutive
+    unjustified stall steps and threads them into compute_reward — the same
+    stalled step must cost more after a long park than right after stopping.
+    (First step is skipped in the comparison: it carries the one-off
+    r_progress artifact of this fixture's zero-distance destination.)"""
+    env = _make_env(max_episode_steps=300)
+    env.reset()
+    rewards = [env.step(_ZERO_ACTION)[1] for _ in range(202)]
+    assert env._stall_steps == 202
+    # step 2 (stall_steps=1, factor 1.005) vs step 202 (stall_steps=201, capped 2x)
+    assert rewards[201] < rewards[1]
+    assert rewards[1] - rewards[201] == pytest.approx(0.199, abs=1e-6)
+
+
+def test_stall_counter_resets_when_vehicle_moves():
+    """The ramp targets *parking*: as soon as the car moves (>= 1 km/h) the
+    consecutive-stall counter must restart from zero."""
+    env = _make_env(max_episode_steps=50)
+    env.reset()
+    for _ in range(5):
+        env.step(_ZERO_ACTION)
+    assert env._stall_steps == 5
+    env.ego.get_velocity.return_value.x = 5.0  # 18 km/h — not stalled
+    env.step(_ZERO_ACTION)
+    assert env._stall_steps == 0
+    env.ego.get_velocity.return_value.x = 0.0
+    env.step(_ZERO_ACTION)
+    assert env._stall_steps == 1
+
+
+def test_stall_counter_resets_on_episode_reset():
+    env = _make_env(max_episode_steps=50)
+    env.reset()
+    for _ in range(3):
+        env.step(_ZERO_ACTION)
+    assert env._stall_steps == 3
+    env.reset()
+    assert env._stall_steps == 0
+
+
 def test_episode_reward_components_includes_jerk_penalty():
     env = _make_env(max_episode_steps=2)
     env.reset()

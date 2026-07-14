@@ -1258,3 +1258,32 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 
 **Prochaine étape** :
 - Une fois le lot complet : lancer un run v12 (≥150k steps) et comparer à v9/v10/v11 via `analyze_run.py`, en particulier sur `center_offset` (ne devrait plus jamais être `0.0` en dehors des tout premiers steps post-reset), sur la corrélation reward/longueur d'épisode, et sur le taux de crash — pour vérifier si le fait de doubler `r_collision` en début de trajet a effectivement réduit l'attractivité du crash rapide, et si changer le seed PPO affecte le collapse ou simplement sa direction.
+
+---
+
+## 2026-07-14 — v13 : tanh-squash de l'action, pénalité de stall progressive, tiebreak benchmark par distance
+
+**Avancement** :
+- Run `ppo_v12_150k` complétée et analysée (6h57 de training, `runs/2026-07-14_11-36_ppo_v12_150k`) : **première run sur quatre où l'attracteur « crasher vite » cède** — crash 92,3 % (99-100 % sur v9/v10/v11), 52 épisodes au timeout de 1000 steps (jamais vu avant), longueur moyenne 224,6 steps (~80 avant), fenêtre 40-90k à 65-77 % de crash avec pic de longueur à ~603 steps. Mais 0 destination : la policy s'est réfugiée dans le **parking** (stall sur 50-64 % des steps des épisodes longs). Arithmétique du refuge, actualisée à γ=0.99 (horizon effectif ~100 steps) : garé pour toujours ≈ -15, crash immédiat ≈ -18 — quasi à égalité, et la run a oscillé entre les deux (régression partielle vers le crash en Q4) sans jamais basculer vers la conduite.
+- Les promesses v12 vérifiées dans `evals/results.json` : `center_offset` exactement 0.0 sur 36,5 % des steps d'éval contre 88,3 % en v11 (le fix d'aliasing fonctionne ; le résidu vient de la convention « centré au spawn » des policies garées qui n'obtiennent jamais de lecture valide) ; le scaling de collision coûte bien -9,7 à -27,8 selon la route restante (moyenne -17,8 contre ~-9,5 plat en v11). Le diagnostic seed est tranché : steer déterministe saturé à **+1.000 (std 0.000) sur tous les checkpoints ≥45k, même direction que v11 malgré le passage de 42 à 7** — le collapse n'est pas piloté par le seed. Ce qui a changé : throttle/brake sont désormais intermédiaires (0.3/0.6), d'où le parking (braquage à fond + frein) au lieu de la spirale v11.
+- Lot v13, trois volets indépendants motivés par ce diagnostic :
+  1. **`squash_output=True`** (`rl_train.py`, `policy_kwargs`) : v9→v12 collapsent tous le steer déterministe à ±1.0, quel que soit le levier essayé (reward, seed, gSDE, ent_coef). Avec le simple clipping SB3, la moyenne de la gaussienne peut dériver au-delà des bornes, où le gradient du clip est nul et la saturation s'auto-entretient ; le tanh garde la moyenne finie et le gradient informatif près des bornes. Supporté par SB3 uniquement avec gSDE — déjà actif depuis v11, donc une ligne.
+  2. **Stall progressif** (`reward_fn.py`, `rl_env.py`) : `compute_reward()` gagne `stall_steps` (défaut 0 — aucun appelant existant ne change) et `r_stall = -0.20 × min(1 + stall_steps/_STALL_RAMP_STEPS, _STALL_MAX_FACTOR)` avec rampe 200 steps (10 s à 20 fps) et cap ×2. `CarlaEnv` tient le compteur de steps immobiles consécutifs *injustifiés* : incrémenté quand `components["r_stall"] < 0` (exactement « ce step a compté comme stall »), remis à zéro au mouvement, sur arrêt légitime (gate feu-rouge/véhicule/piéton existant, inchangé) et au `reset()`. Un stop-and-go de 1-2 s surcoûte ≤10-20 % ; se garer 10 s double le tarif unitaire.
+  3. **Tiebreak benchmark** (`rl_demo.py::pick_best_checkpoint`) : le score passe de (succès, -off_route) à (succès, distance moyenne `max_dist_from_start`, -off_route). Régression v12 : à 0 succès partout, l'ancien ordre a couronné 0105k (2,1 km/h de moyenne, garé) — une voiture immobile n'est jamais off-route par construction — devant les checkpoints 15k-45k qui roulaient réellement (11-13 km/h).
+- TDD : 11 nouveaux tests — 4 rampe stall dans `smoke.py` (dont le verrou de constantes `test_stall_ramp_constants_v13`, même convention que v11), 3 compteur dans `test_rl_env.py` (rampe traversée sur 202 steps réels via `step()`, reset au mouvement, reset au `reset()`), 2 squash dans `test_rl_train.py`, 2 distance dans `test_rl_demo.py` (helper `_candidate` étendu avec `dists` optionnel, absent quand None comme les résultats antérieurs au champ). `README.md` (ligne r_stall) et `params.json` (`stall_ramp_steps`, `stall_max_factor`) mis à jour.
+- **Smoke run réel avant commit** (`runs/2026-07-14_21-05_v13_smoke_2k`, 2500 steps pour couvrir un cycle PPO complet avec n_steps=2048, `--demo-eps 0`) : exit 0 en 11m19s, et la rampe a mordu en conditions réelles — un épisode à `r_stall` -61,84, impossible avec l'ancien tarif plat (233 steps × -0,20 = -46,6 max).
+
+**Difficultés** :
+- Le premier step post-reset du fixture `_make_env()` porte l'artefact `r_progress` connu (destination à distance nulle, voir entrée v10) — le test de rampe compare le step 2 (facteur 1,005) au step 202 (cap ×2, écart exact 0,199), pas le step 1.
+
+**Décisions** :
+- Ni la rampe de 200 steps ni le cap ×2 ne sont des optima dérivés : calibrés pour que « garé pour toujours » (~-25/-30 actualisé) devienne nettement pire que conduire, sans redevenir pire que le crash au point de re-basculer l'attracteur dans l'autre sens (la pathologie que le scaling collision de v12 vient de corriger).
+- Compteur côté env via `components["r_stall"] < 0` plutôt qu'une re-dérivation de `is_legitimate_stop` côté env : une seule source de vérité sur ce qui « compte comme stall », zéro duplication de logique entre les deux fichiers.
+- Distance avant off-route dans le tiebreak, en tuple lexicographique plutôt qu'en score composite pondéré : l'ordre reste lisible et déterministe, et les succès dominent toujours tout.
+- `squash_output` change l'architecture de la policy : aucun checkpoint v9-v12 n'est chargeable contre le nouveau modèle — assumé, chaque version repart déjà de zéro depuis v9.
+
+**Benchmarks** : 265 tests (`uv run pytest benchmarks/ -q`), tout vert (254 avant ce lot). Smoke run CARLA réel : voir ci-dessus.
+
+**Prochaine étape** :
+- Lancer un run v13 (150k) et comparer à v12 via `analyze_run.py` : steer déterministe enfin désaturé sur les évals (std > 0, valeurs intermédiaires) ? Part de stall en baisse ? Le duel parking/conduite bascule-t-il — premières destinations atteintes ?
+- Rédiger `ANALYSIS.md` pour `ppo_v12_150k` (les chiffres consolidés de cette entrée + `analysis_data.json`).

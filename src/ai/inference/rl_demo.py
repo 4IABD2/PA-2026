@@ -1412,19 +1412,27 @@ def eval_model(
 
 def pick_best_checkpoint(all_results: dict[str, dict[str, dict]]) -> str:
     """Returns the all_results key (checkpoint label) with the best real
-    benchmark score: highest Phase 1 success count, tie-broken by lowest
-    mean off_route_pct across all scenarios. EvalCallback's own training-time
-    pick (3 noisy eval episodes) is not trustworthy on its own -- see
-    ppo_v6.3_300k's evals/results.json for a real-world case where it picked
-    the worst checkpoint by off_route_pct.
+    benchmark score: highest Phase 1 success count, tie-broken by highest
+    mean max_dist_from_start, then by lowest mean off_route_pct across all
+    scenarios. EvalCallback's own training-time pick (3 noisy eval episodes)
+    is not trustworthy on its own -- see ppo_v6.3_300k's evals/results.json
+    for a real-world case where it picked the worst checkpoint by
+    off_route_pct.
+
+    Distance ranks above off-route since ppo_v12_150k: with zero successes on
+    every checkpoint, the old off_route-first tie-break crowned a parked
+    policy (a car that never moves is never off-route by construction, so
+    0105k at 2 km/h mean speed beat checkpoints that actually drove).
     """
 
-    def _score(scenarios: dict[str, dict]) -> tuple[int, float]:
+    def _score(scenarios: dict[str, dict]) -> tuple[int, float, float]:
         successes = sum(1 for m in scenarios.values() if m.get("success") is True)
+        dists = [m.get("max_dist_from_start", 0.0) for m in scenarios.values()]
+        mean_dist = sum(dists) / len(dists) if dists else 0.0
         off_route_pcts = [m["off_route_pct"] for m in scenarios.values()]
         mean_off_route = (
             sum(off_route_pcts) / len(off_route_pcts) if off_route_pcts else 1.0
         )
-        return (successes, -mean_off_route)
+        return (successes, mean_dist, -mean_off_route)
 
     return max(all_results, key=lambda label: _score(all_results[label]))

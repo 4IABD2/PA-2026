@@ -78,7 +78,7 @@ CARLA World (sync mode, 20 FPS)
          ├─ r_progress   = (γ·Φ(s') − Φ(s)) × 1.0, Φ(s) = −distance_to_destination(s) normalisée → shaping potential-based vers la destination, garantie théorique contre les raccourcis (remplace r_speed, qui ne récompensait que la vitesse brute) ; pas gaté sur is_on_road (r_offroad reste seul juge de la sortie de route)
          ├─ r_center     = (1 − |lane_offset_norm|) × 0.3 si is_on_road else 0.0 → encourage le centrage ; nul hors route (sinon un center_offset resté à 0.0 par défaut donnerait un faux maximum)
          ├─ r_alive      = +0.05                                            → survie (anti-crash passif)
-         ├─ r_stall      = −0.20 si speed < 1 km/h                          → pénalise l'immobilisme
+         ├─ r_stall      = −0.20 × min(1 + n_stall_consécutifs/200, 2) si speed < 1 km/h → pénalise l'immobilisme, tarif ×2 après 10 s de parking ininterrompu
          ├─ r_offroad    = −0.5  si is_on_road=False                        → pénalité hors route (Karim)
          ├─ r_off_route  = −0.5  si > 15m de la route GPS                   → pénalise la déviation GPS
          ├─ r_following  = −(1 − headway_s/2.0) × 0.2 si headway < 2s       → distance de sécurité, règle des 2s (Franck)
