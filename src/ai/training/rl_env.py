@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
@@ -49,15 +50,37 @@ _SPAWN_SAFETY_MAX_ATTEMPTS = (
     10  # random spawn draws tried before falling back to the best one seen
 )
 
-_MIN_DEST_DIST_M = 30.0  # minimum straight-line distance from spawn to destination
 _DEST_PICK_MAX_ATTEMPTS = (
     10  # random destination draws tried before falling back to the best one seen
 )
 
 _DEST_REACHED_RADIUS_M = 15.0  # matches _OFF_ROUTE_M's "close enough" scale
 _MIN_TRAVEL_FOR_DEST_M = (
-    25.0  # matches benchmark.py's _MIN_DIST_M "must have actually driven" convention
+    12.0  # must-have-actually-driven gate. Lowered 25->12 for the v14 auto-curriculum:
+    # with near destinations (start window [18, 30] m) and a 15 m success radius,
+    # a 25 m travel gate was unreachable (a car entering the radius of an 18-30 m
+    # destination has driven far less than 25 m), so no near destination could
+    # ever count as reached. 12 m still forbids collecting the +10 bonus while
+    # merely drifting a few metres. Intentionally looser than benchmark.py's
+    # _MIN_DIST_M for now -- training-time signal, not the benchmark criterion.
 )
+
+# --- Auto-curriculum on destination distance (v14) ------------------------
+# ppo_v9..v13 never reached a single destination in *training* (0 across every
+# run), so PPO never once saw the +10 terminal bonus -- it learned only to avoid
+# the worst outcomes, never that arriving is possible. The fix: start
+# destinations near (so the bonus is reachable and can bootstrap the value
+# function) and grow the distance only as the policy earns success. Not a
+# derived schedule; revisit the constants once a run actually reaches
+# destinations.
+_CURRICULUM_MIN_FLOOR_M = 18.0  # destinations never closer than this (with the
+# 15 m success radius + 12 m travel gate, the nearest still needs ~12 m of
+# directed driving -- a real "drive to it", not a drift-in-place win)
+_CURRICULUM_START_MAX_M = 30.0  # initial upper bound (matches the old fixed floor)
+_CURRICULUM_STEP_M = 8.0  # upper bound grows by this much per advance
+_CURRICULUM_CEILING_M = 70.0  # upper bound stops growing here
+_CURRICULUM_WINDOW = 20  # recent episodes considered for an advance decision
+_CURRICULUM_ADVANCE_RATE = 0.5  # success rate over the window that triggers a step up
 
 _SPEED_LIMIT_KMH: dict[ObjectClass, float] = {
     ObjectClass.SPEED_30: 30.0,
@@ -164,6 +187,11 @@ class CarlaEnv(gym.Env):
         self._stall_steps: int = (
             0  # consecutive unjustified stall steps (ramps r_stall)
         )
+        # Auto-curriculum state -- persists ACROSS episodes (never reset per
+        # episode): the current destination-distance ceiling and a rolling
+        # window of recent episode outcomes (True = destination reached).
+        self._curriculum_max_m: float = _CURRICULUM_START_MAX_M
+        self._recent_success: deque = deque(maxlen=_CURRICULUM_WINDOW)
         self._route_idx: int = (
             0  # sliding pointer into route.waypoints for efficient off-route check
         )
@@ -196,6 +224,7 @@ class CarlaEnv(gym.Env):
         # Runs AFTER the warmup ticks: set_transform() only takes effect
         # client-side on the next world.tick(), so reading the ego's position
         # any earlier would still see the previous episode's ending location.
+        self._maybe_advance_curriculum()
         if hasattr(self.nav, "plan"):
             try:
                 spawn_pts = self.world.get_map().get_spawn_points()
@@ -302,6 +331,12 @@ class CarlaEnv(gym.Env):
             self._episode_reward_components[key] += value
 
         truncated = self._step_count >= self.max_episode_steps
+        if terminated or truncated:
+            # Record the outcome for the auto-curriculum: success == the
+            # destination bonus fired this step (collision and timeout are both
+            # non-successes). r_destination > 0 is the single source of truth,
+            # matching how the reward itself defines "reached".
+            self._recent_success.append(components["r_destination"] > 0.0)
         info = (
             dict(self._episode_reward_components) if (terminated or truncated) else {}
         )
@@ -443,23 +478,49 @@ class CarlaEnv(gym.Env):
                 best_spawn = candidate
         return best_spawn
 
+    def _maybe_advance_curriculum(self) -> None:
+        """Step the destination-distance ceiling up once the policy clears the
+        success bar over a full window of recent episodes. Called once per
+        reset(), before the destination is drawn. Clearing the window on an
+        advance forces success to be re-earned at the new, harder distance
+        (so it can't advance every single episode off one good streak).
+        """
+        if (
+            len(self._recent_success) >= _CURRICULUM_WINDOW
+            and sum(self._recent_success) / len(self._recent_success)
+            >= _CURRICULUM_ADVANCE_RATE
+            and self._curriculum_max_m < _CURRICULUM_CEILING_M
+        ):
+            self._curriculum_max_m = min(
+                self._curriculum_max_m + _CURRICULUM_STEP_M, _CURRICULUM_CEILING_M
+            )
+            self._recent_success.clear()
+            print(f"    curriculum: destination max -> {self._curriculum_max_m:.0f} m")
+
     def _pick_random_destination(
         self, spawn_pts: list, ego_location: "carla.Location"
     ) -> "carla.Location":
-        """Draws up to _DEST_PICK_MAX_ATTEMPTS random spawn points as a candidate
-        destination and returns the first at least _MIN_DEST_DIST_M from the
-        ego's current position — avoids a degenerate near-zero-length route.
-        Falls back to the farthest candidate seen if none clears the threshold.
+        """Draws up to _DEST_PICK_MAX_ATTEMPTS random spawn points and returns the
+        first whose distance falls in the current curriculum window
+        [_CURRICULUM_MIN_FLOOR_M, self._curriculum_max_m] — near early on so the
+        +10 destination bonus is reachable, widening as the policy earns success
+        (see _maybe_advance_curriculum). Falls back to the candidate closest to
+        that window if none lands inside.
         """
         best_dest = None
-        best_dist = -1.0
+        best_gap = float("inf")
         for _ in range(_DEST_PICK_MAX_ATTEMPTS):
             candidate = spawn_pts[int(self.np_random.integers(len(spawn_pts)))]
             dist = ego_location.distance(candidate.location)
-            if dist >= _MIN_DEST_DIST_M:
+            if _CURRICULUM_MIN_FLOOR_M <= dist <= self._curriculum_max_m:
                 return candidate.location
-            if dist > best_dist:
-                best_dist = dist
+            gap = (
+                _CURRICULUM_MIN_FLOOR_M - dist
+                if dist < _CURRICULUM_MIN_FLOOR_M
+                else dist - self._curriculum_max_m
+            )
+            if gap < best_gap:
+                best_gap = gap
                 best_dest = candidate.location
         return best_dest
 
