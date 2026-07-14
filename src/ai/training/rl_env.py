@@ -161,6 +161,9 @@ class CarlaEnv(gym.Env):
         self._last_lane_offset_norm: float = 0.0
         self._last_image: np.ndarray | None = None
         self._step_count: int = 0
+        self._stall_steps: int = (
+            0  # consecutive unjustified stall steps (ramps r_stall)
+        )
         self._route_idx: int = (
             0  # sliding pointer into route.waypoints for efficient off-route check
         )
@@ -217,6 +220,7 @@ class CarlaEnv(gym.Env):
         self._prev_accel = 0.0
         self._last_lane_offset_norm = 0.0
         self._step_count = 0
+        self._stall_steps = 0
         self._route_idx = 0
         self._current_speed_limit_kmh = _DEFAULT_SPEED_LIMIT_KMH
         self.off_route_count = 0
@@ -289,7 +293,11 @@ class CarlaEnv(gym.Env):
             steer_delta=steer_delta,
             progress_delta=progress_delta,
             remaining_frac=dist_norm,
+            stall_steps=self._stall_steps,
         )
+        # r_stall < 0 is exactly "this step counted as an unjustified stall":
+        # legitimate stops and any movement reset the ramp.
+        self._stall_steps = self._stall_steps + 1 if components["r_stall"] < 0.0 else 0
         for key, value in components.items():
             self._episode_reward_components[key] += value
 

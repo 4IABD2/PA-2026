@@ -103,6 +103,19 @@ def test_make_model_builds_with_gsde_and_predicts_within_bounds():
     assert model.action_space.contains(action.astype(np.float32))
 
 
+def test_ppo_defaults_squash_action_output():
+    """v13: v9..v12 all collapsed deterministic steer to a saturated ±1.0 —
+    the action distribution must be tanh-squashed, not merely clipped."""
+    from src.ai.training.rl_train import _PPO_DEFAULTS
+
+    assert _PPO_DEFAULTS["policy_kwargs"]["squash_output"] is True
+
+
+def test_make_model_policy_squashes_output():
+    model = make_model(_MinimalEnv())
+    assert model.policy.squash_output is True
+
+
 # ---------------------------------------------------------------------------
 # train
 # ---------------------------------------------------------------------------

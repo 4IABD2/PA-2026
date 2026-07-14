@@ -243,6 +243,57 @@ def test_stall_penalised_when_red_light_far_away():
     assert components["r_stall"] == pytest.approx(-0.20)
 
 
+def test_stall_penalty_ramps_with_consecutive_stall_steps():
+    """v13: a policy that *parks* must pay a rising per-step rate — at
+    stall_steps=100 (5 s at 20 fps) the -0.20 base costs 1.5x."""
+    _, _, components = compute_reward(
+        speed_kmh=0.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=False,
+        stall_steps=100,
+    )
+    assert components["r_stall"] == pytest.approx(-0.30)
+
+
+def test_stall_penalty_caps_at_max_factor():
+    """The ramp is bounded at 2x (-0.40/step): parking must stay clearly
+    worse than driving without making an immediate crash the cheaper escape
+    again (the pathology v12's collision scaling just fixed)."""
+    _, _, components = compute_reward(
+        speed_kmh=0.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=False,
+        stall_steps=100_000,
+    )
+    assert components["r_stall"] == pytest.approx(-0.40)
+
+
+def test_stall_ramp_ignored_on_legitimate_stop():
+    """Waiting at a red light must stay free no matter how long the wait —
+    the ramp multiplies the stall penalty, it must never create one."""
+    _, _, components = compute_reward(
+        speed_kmh=0.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=False,
+        red_light_distance_m=5.0,
+        stall_steps=100_000,
+    )
+    assert components["r_stall"] == 0.0
+
+
+def test_stall_ramp_constants_v13():
+    """Locks the v13 ramp constants on their exact values — a future retune
+    must be deliberate, not a silent drive-by (same convention as
+    test_reward_weights_updated_for_v11)."""
+    from src.ai.rewards.reward_fn import _STALL_RAMP_STEPS, _STALL_MAX_FACTOR
+
+    assert _STALL_RAMP_STEPS == 200
+    assert _STALL_MAX_FACTOR == pytest.approx(2.0)
+
+
 def test_collision_scales_with_impact_speed():
     """A faster impact must cost more than a near-stationary one."""
     reward_slow, _, _ = compute_reward(

@@ -520,10 +520,12 @@ def test_clear_spawn_area_spreads_multiple_actors_across_distinct_spawns():
 # ---------------------------------------------------------------------------
 
 
-def _candidate(successes, off_route_pcts):
+def _candidate(successes, off_route_pcts, dists=None):
     """A fake eval_model() result: `successes` scenarios succeed (success=True),
     the rest are Phase-2-style (success=None); off_route_pcts gives each
     scenario's off_route_pct, in order. len(off_route_pcts) must be >= successes.
+    dists optionally gives each scenario's max_dist_from_start — omitted
+    entirely when None, like results predating the field.
     """
     result = {}
     for i, off_route_pct in enumerate(off_route_pcts):
@@ -531,6 +533,8 @@ def _candidate(successes, off_route_pcts):
             "success": True if i < successes else None,
             "off_route_pct": off_route_pct,
         }
+        if dists is not None:
+            result[f"scenario_{i}"]["max_dist_from_start"] = dists[i]
     return result
 
 
@@ -565,6 +569,32 @@ def test_pick_best_checkpoint_all_phase2_falls_back_to_off_route_pct():
         "0120k": _candidate(successes=0, off_route_pcts=[0.05, 0.05]),
     }
     assert pick_best_checkpoint(all_results) == "0120k"
+
+
+def test_pick_best_checkpoint_zero_successes_prefers_distance_driven():
+    """ppo_v12_150k regression: with zero successes everywhere, the old
+    off_route-first tie-break crowned a parked policy — a car that never
+    moves is never off-route by construction. Distance driven must rank
+    above off-route."""
+    all_results = {
+        "0105k": _candidate(  # parked: spotless off-route, goes nowhere
+            successes=0, off_route_pcts=[0.0, 0.0], dists=[0.5, 0.3]
+        ),
+        "0015k": _candidate(  # actually drives
+            successes=0, off_route_pcts=[0.0, 0.0], dists=[40.0, 55.0]
+        ),
+    }
+    assert pick_best_checkpoint(all_results) == "0015k"
+
+
+def test_pick_best_checkpoint_successes_still_beat_distance():
+    """A checkpoint that completes a scenario outranks one that merely
+    drives far without ever succeeding."""
+    all_results = {
+        "0060k": _candidate(successes=1, off_route_pcts=[0.2, 0.2], dists=[5.0, 5.0]),
+        "0120k": _candidate(successes=0, off_route_pcts=[0.0, 0.0], dists=[80.0, 80.0]),
+    }
+    assert pick_best_checkpoint(all_results) == "0060k"
 
 
 # ---------------------------------------------------------------------------
