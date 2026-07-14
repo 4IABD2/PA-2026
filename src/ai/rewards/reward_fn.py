@@ -17,6 +17,15 @@ _P_COLLISION_SPEED_SCALE = -0.20  # per km/h of speed at the moment of impact
 _P_STALL = -0.20  # breaks the lazy-policy attractor (staying still = 0 risk),
 # except when stopping is legitimate (red light ahead, vehicle/walker danger) --
 # see is_legitimate_stop in compute_reward()
+_STALL_RAMP_STEPS = 200  # consecutive unjustified stall steps for the stall
+# penalty to reach its cap: 10 s at 20 fps. A brief stop-and-go (1-2 s, 20-40
+# steps) costs at most 10-20% extra -- only a policy that *parks* pays the full
+# rate. Motivated by ppo_v12_150k: parked-forever (~-15 discounted at gamma=0.99)
+# and an immediate crash (~-18 worst case) were near-equal refuges the policy
+# oscillated between. Not a derived optimum.
+_STALL_MAX_FACTOR = 2.0  # cap on the ramp (-0.40/step): parking must become
+# clearly worse than one crash without turning crash-on-purpose back into the
+# cheaper escape -- the exact pathology v12's collision scaling just fixed
 _P_OFF_ROUTE = -0.5  # re-aligned with _P_OFFROAD (both -0.5)
 
 _W_FOLLOWING = 0.2
@@ -131,6 +140,7 @@ def compute_reward(
     steer_delta: float = 0.0,
     progress_delta: float = 0.0,
     remaining_frac: float = 0.0,
+    stall_steps: int = 0,
 ) -> tuple[float, bool, dict[str, float]]:
     """Compute the per-step reward and whether the episode should terminate.
 
@@ -181,6 +191,13 @@ def compute_reward(
                        distance must not scale the penalty past 2x). Default
                        0.0 (no scaling) so every existing caller/test that
                        doesn't pass it keeps today's flat collision cost.
+        stall_steps:   Number of consecutive unjustified stall steps *before*
+                       this one, tracked by CarlaEnv (reset on movement, on a
+                       legitimate stop and at episode reset). Ramps the stall
+                       penalty by min(1 + stall_steps/_STALL_RAMP_STEPS,
+                       _STALL_MAX_FACTOR): parking pays a rising per-step rate
+                       while a brief stop-and-go barely notices. Default 0
+                       keeps the flat -0.20 for callers that don't pass it.
 
     Returns:
         (reward, terminated, components) where terminated is True on
@@ -221,7 +238,13 @@ def compute_reward(
         "r_alive": _W_ALIVE,
         "r_offroad": 0.0 if is_on_road else _P_OFFROAD,
         "r_stall": (
-            0.0 if is_legitimate_stop else (_P_STALL if speed_kmh < 1.0 else 0.0)
+            0.0
+            if is_legitimate_stop
+            else (
+                _P_STALL * min(1.0 + stall_steps / _STALL_RAMP_STEPS, _STALL_MAX_FACTOR)
+                if speed_kmh < 1.0
+                else 0.0
+            )
         ),
         "r_off_route": _P_OFF_ROUTE if off_route else 0.0,
         "r_following": _following_penalty(nearest_vehicle_m, speed_kmh),
