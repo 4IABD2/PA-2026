@@ -39,7 +39,15 @@ _PPO_DEFAULTS: dict = dict(
     policy_kwargs=dict(
         net_arch=[128, 128]
     ),  # bigger obs space and task need more capacity than [64, 64]
-    seed=42,
+    seed=7,  # changed from 42 (frozen since v1) -- v10 (no gSDE) collapsed to
+    # full-left steer, v11 (gSDE) collapsed to full-right steer, both on the
+    # same frozen seed with different exploration mechanisms. v12's isolated
+    # seed diagnostic: check whether the collapse itself, or just its
+    # direction, is seed-driven (runs/2026-07-12_00-45_ppo_v11_150k/
+    # ANALYSIS.md, "Pistes pour la suite" #2). Environment-level seeding
+    # (scripts/run_rl_training.py's random.seed/np.random.seed/
+    # set_random_device_seed) stays at 42 -- this is the only changed
+    # variable between v11 and v12.
     verbose=1,
     device="cpu",  # MlpPolicy trains faster on CPU than GPU
 )

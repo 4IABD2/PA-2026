@@ -69,7 +69,7 @@ def test_ppo_defaults_have_entropy_coefficient():
 def test_ppo_defaults_are_seeded():
     from src.ai.training.rl_train import _PPO_DEFAULTS
 
-    assert _PPO_DEFAULTS["seed"] == 42
+    assert _PPO_DEFAULTS["seed"] == 7
 
 
 def test_ppo_defaults_learning_rate_is_a_decaying_schedule():
@@ -85,7 +85,7 @@ def test_ppo_defaults_learning_rate_is_a_decaying_schedule():
 def test_make_model_builds_with_new_defaults():
     model = make_model(_MinimalEnv())
     assert model.ent_coef == pytest.approx(0.05)
-    assert model.seed == 42
+    assert model.seed == 7
 
 
 def test_ppo_defaults_use_gsde():

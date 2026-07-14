@@ -264,6 +264,66 @@ def test_collision_scales_with_impact_speed():
     assert reward_fast == pytest.approx(-5.0 + (-0.20 * 60.0))
 
 
+def test_collision_penalty_unscaled_by_default():
+    """remaining_frac defaults to 0.0 (scale=1.0x) -- every existing caller
+    that doesn't know about remaining_frac must see today's exact flat
+    penalty, unchanged."""
+    reward, _, _ = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=True
+    )
+    assert reward == pytest.approx(-5.0)
+
+
+def test_collision_penalty_doubles_at_full_remaining_route():
+    """A collision right after spawn (remaining_frac=1.0, the whole route
+    still ahead) must cost exactly 2x the base+speed-scaled penalty --
+    runs/AUDIT.md section 2.1 option (b): an early, easily-avoidable-feeling
+    crash must cost more than one right before arrival."""
+    reward, _, _ = compute_reward(
+        speed_kmh=30.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=True,
+        remaining_frac=1.0,
+    )
+    assert reward == pytest.approx(-5.0 * 2.0)
+
+
+def test_collision_penalty_scales_at_half_remaining_route():
+    reward, _, _ = compute_reward(
+        speed_kmh=30.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=True,
+        remaining_frac=0.5,
+    )
+    assert reward == pytest.approx(-5.0 * 1.5)
+
+
+def test_collision_penalty_clamps_remaining_frac_above_one():
+    """A car that drove further from the destination than its starting
+    distance (remaining_frac > 1.0) must not scale the penalty past 2x."""
+    reward, _, _ = compute_reward(
+        speed_kmh=30.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=True,
+        remaining_frac=1.7,
+    )
+    assert reward == pytest.approx(-5.0 * 2.0)
+
+
+def test_collision_penalty_clamps_remaining_frac_below_zero():
+    reward, _, _ = compute_reward(
+        speed_kmh=30.0,
+        center_offset=0.0,
+        is_on_road=True,
+        collision=True,
+        remaining_frac=-0.3,
+    )
+    assert reward == pytest.approx(-5.0 * 1.0)
+
+
 def test_following_penalty_none_when_vehicle_far():
     reward_far, _, _ = compute_reward(
         speed_kmh=50.0,

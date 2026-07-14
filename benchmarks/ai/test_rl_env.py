@@ -715,6 +715,31 @@ def test_obs_lane_offset_clipped_to_bounds():
     assert obs[4] == pytest.approx(1.0)
 
 
+def test_obs_lane_offset_holds_last_valid_reading_when_lane_lost():
+    """If lane detection is lost (direction="NONE"), the last known valid
+    offset must be reused instead of resetting to lane_geometry()'s NO_LANE
+    default of 0.0 -- that 0.0 means "no measurement", not "centered", and
+    feeding it straight to the policy falsely signals "you are centered"
+    the instant the car leaves the road (runs/2026-07-12_00-45_ppo_v11_150k/
+    ANALYSIS.md, Constat #2)."""
+    env = _make_env(lane_offset=0.7, on_road=True)
+    env.reset()
+    env._lane_estimate.return_value = ("NONE", 0.0, 0.0)
+    obs, *_ = env.step(_ZERO_ACTION)
+    assert obs[4] == pytest.approx(0.7, abs=1e-4)
+
+
+def test_obs_lane_offset_defaults_to_zero_before_any_detection():
+    """Before any successful lane detection has ever happened, the held
+    offset must default to 0.0 (assume centered at spawn) -- even if
+    lane_geometry() itself would have reported a nonzero offset alongside
+    direction="NONE" (which never happens in production, but must not leak
+    through the hold-last-value logic if it did)."""
+    env = _make_env(on_road=False, lane_offset=0.9)
+    obs, _ = env.reset()
+    assert obs[4] == pytest.approx(0.0)
+
+
 def test_obs_is_on_road_when_aligned():
     env = _make_env(on_road=True)
     obs, _ = env.reset()
@@ -1126,6 +1151,32 @@ def test_step_reports_positive_accumulated_r_progress_when_moving_closer():
     _, _, _, truncated, info = env.step(_ZERO_ACTION)
     assert truncated is True
     assert info["r_progress"] > 0.0
+
+
+def test_collision_reward_scales_with_remaining_route_fraction():
+    """A collision far from the destination (most of the route still ahead)
+    must cost more than an otherwise-identical collision right next to it --
+    integration check that CarlaEnv.step() actually threads remaining_frac
+    through to compute_reward() using the same dist_norm already computed
+    for r_progress."""
+    env_early = _make_env(max_episode_steps=2)
+    env_early.nav.plan.return_value = Route(
+        waypoints=[], destination=Waypoint(x=1000.0, y=0.0, z=0.0, yaw_deg=0.0)
+    )
+    env_early.reset()  # ego at (0,0), dist_to_dest_initial ~= 1000m
+    env_early._collision_flag = True
+    _, reward_early, _, _, _ = env_early.step(_ZERO_ACTION)  # still ~1000m out
+
+    env_late = _make_env(max_episode_steps=2)
+    env_late.nav.plan.return_value = Route(
+        waypoints=[], destination=Waypoint(x=1000.0, y=0.0, z=0.0, yaw_deg=0.0)
+    )
+    env_late.reset()
+    _set_ego_location(env_late, 999.0, 0.0)  # 1m from the destination
+    env_late._collision_flag = True
+    _, reward_late, _, _, _ = env_late.step(_ZERO_ACTION)
+
+    assert reward_early < reward_late
 
 
 def test_prev_steer_tracks_last_action_and_resets():

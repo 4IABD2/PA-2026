@@ -86,7 +86,7 @@ CARLA World (sync mode, 20 FPS)
          ├─ r_speeding   = −((speed − limite − 5) / 90.0) × 0.3 si dépassement → pénalise l'excès de vitesse (Franck)
          ├─ r_red_light  = −2.0 si franchissement de feu rouge              → sanctionne le "grillage" de feu (Franck)
          ├─ r_stop_yield = −1.0 si franchissement de stop/yield             → sanctionne le "grillage" de panneau (Franck)
-         ├─ r_collision  = (−5.0 − 0.20 × vitesse_impact_kmh) + done=True   → épisode terminé, pénalité ∝ vitesse d'impact
+         ├─ r_collision  = (−5.0 − 0.20 × vitesse_impact_kmh) × (1.0 à 2.0 selon distance restante) + done=True   → épisode terminé, pénalité ∝ vitesse d'impact et à la distance qu'il restait à parcourir
          ├─ r_destination = +10.0 si destination atteinte (≥25m parcourus, <15m de la cible) → épisode terminé, succès
          ├─ r_safe       = +0.05 si aucun danger actif (following/walker/speeding tous OK)   → renforcement positif de la prudence
          └─ r_jerk       = −|steer_t − steer_t-1| × 0.1                     → pénalise le pilotage saccadé
