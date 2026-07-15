@@ -1307,3 +1307,22 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Smoke CARLA réel** (`runs/2026-07-15_00-38_v14_smoke_1k`, 1500 steps, `--demo-eps 0`) : exit 0 en 5m19, **aucune erreur `nav.plan`** (le routage vers destinations proches tient en conditions réelles), rampe de stall active (-30/ep). 0 destination sur 7 épisodes de policy aléatoire — attendu, pas de régression.
 
 **Prochaine étape** : run v14 60k (`--demo-eps 0`, itération rapide, lecture directe du CSV). **Métrique décisive : `r_destination > 0` apparaît-il ?** Si oui → le curriculum débloque le cold-start, on pousse (plafond plus haut, run plus long). Si toujours 0 même à 18-30 m → la distance n'est pas le mur → v15 = expérience obs vérité-terrain (offset latéral waypoint CARLA au lieu du détecteur de Karim) pour isoler perception vs RL.
+
+**Résultat v14** (`runs/2026-07-15_00-45_ppo_v14_60k/ANALYSIS.md`) : **68 destinations atteintes (10 %), premières réussites du projet** — cold-start cassé. Mais taux plat (12 %→9 %), 0 avancement de palier, et surtout hors-piste ~70 % du temps **même dans les épisodes réussis** (r_offroad/step -0.351 en succès vs -0.372 en échec). → le mur est désormais la perception/le contrôle. On enchaîne sur v15.
+
+---
+
+## 2026-07-15 — v15 : expérience obs vérité-terrain (isoler perception vs contrôle)
+
+**Objectif** : trancher la question laissée ouverte par v14 — la voiture est hors-piste ~70 % du temps même quand elle réussit ; est-ce parce qu'elle est **nourrie d'une position latérale peu fiable** (détecteur de ligne de Karim, qui renvoie `NONE`/offset 0.0 sur une large fraction des steps, cf. v11/v12) ou parce qu'elle **n'arrive pas à contrôler** même avec une bonne perception ? Expérience diagnostique : remplacer les deux scalaires perception-dépendants de l'observation par la vérité-terrain CARLA.
+
+**Implémentation** (`rl_env.py`, `run_rl_training.py`) :
+- Flag `use_ground_truth_lane` (constructeur `CarlaEnv`, défaut `False` → chemin de prod inchangé) + option CLI `--ground-truth-lane`. C'est une **expérience**, pas un chemin livrable : la vérité-terrain n'existe pas sur une vraie voiture, ça sert uniquement à localiser le goulot.
+- Quand actif, `_get_obs` écrase `obs[4]` (lane_offset_norm) et `obs[5]` (is_on_road) par `_ground_truth_lane(wp)` : offset = distance latérale signée de l'ego au centre de voie du waypoint CARLA le plus proche, normalisée par la demi-largeur de voie ; on_road = requête `get_waypoint(project_to_road=False, lane_type=Driving)` non-nulle. La géométrie signée est extraite dans `_signed_lane_offset_norm()`, fonction pure testable sans CARLA. `import carla` en lazy (uniquement si le flag est actif → module importable et tests exécutables sans runtime CARLA).
+- Bénéfice de bord : `is_on_road` alimente aussi la pénalité `r_offroad` du reward — la vérité-terrain rend donc le reward **plus juste** en même temps que l'observation (l'expérience teste « avec une connaissance exacte de la route partout, sait-elle apprendre »).
+
+**TDD** : 4 nouveaux tests (`test_signed_lane_offset_norm_geometry` : droite/gauche/centré/clip ; flag off par défaut ; lecture géométrie quand actif ; off-road quand waypoint non-projeté nul). **279 tests verts** (275 avant).
+
+**Smoke CARLA réel avec `--ground-truth-lane`** (`runs/2026-07-15_03-29_v15_smoke_1k`, 1500 steps) : exit 0, **le code géométrique tient en conditions réelles** (aucune `AttributeError` sur `get_right_vector`/`lane_width`/`LaneType`). Indice notable sur 10 épisodes : **hors-piste ~5 %/step (r_offroad -16.6/ep) contre ~70 % en v14**, et `r_center` positif (25.9/ep). À confirmer sur 60k, mais suggère qu'une grosse part du « 70 % hors-piste » de v14 était un **faux signal du détecteur** (la voiture était plus sur la route que Karim ne le disait, et le reward la punissait à tort).
+
+**Prochaine étape** : run v15 60k `--ground-truth-lane`, comparé à v14 (seul l'obs change). Si le temps sur route et le taux de succès bondissent → **la perception était le plafond** (implication majeure : prioriser la fiabilisation du détecteur de Karim, ou un frame-stack/filtrage). Si ça reste ~10 % de succès et hors-piste élevé → c'est le contrôle/RL (implication : revoir l'action, l'exploration, ou passer au pont CIL→RL abandonné).
