@@ -23,13 +23,15 @@ if TYPE_CHECKING:
 #         lane_offset_norm, is_on_road,
 #         nearest_vehicle_norm, red_light_distance_norm, speed_limit_norm,
 #         nearest_walker_norm, nearest_stop_yield_norm,
-#         prev_steer_norm, prev_accel_norm]
+#         prev_steer_norm, prev_accel_norm,
+#         goal_bearing_norm]   # v16: signed heading error to destination, [-1,1]
 _OBS_LOW = np.array(
-    [0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0],
+    [0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -1.0],
     dtype=np.float32,
 )
 _OBS_HIGH = np.array(
-    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32
+    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    dtype=np.float32,
 )
 
 _MAX_SPEED_KMH = 90.0
@@ -156,6 +158,21 @@ def _signed_lane_offset_norm(
     half_width = max(lane_width / 2.0, 0.1)
     lateral = (ego_x - wp_x) * right_x + (ego_y - wp_y) * right_y
     return float(np.clip(lateral / half_width, -1.0, 1.0))
+
+
+def _signed_bearing_norm(
+    ego_x: float, ego_y: float, yaw_deg: float, dest_x: float, dest_y: float
+) -> float:
+    """Signed heading error from the ego to a destination, normalised to
+    [-1, 1] (angle / pi): 0 = destination dead ahead, ±1 = directly behind.
+    Sign follows atan2 in CARLA's frame — it is consistent, so the policy
+    learns the left/right mapping (the exact handedness convention does not
+    matter). Pure 2D geometry — unit-testable without a CARLA runtime.
+    """
+    bearing = math.atan2(dest_y - ego_y, dest_x - ego_x)
+    heading = math.radians(yaw_deg)
+    err = math.atan2(math.sin(bearing - heading), math.cos(bearing - heading))
+    return float(np.clip(err / math.pi, -1.0, 1.0))
 
 
 class CarlaEnv(gym.Env):
@@ -451,6 +468,19 @@ class CarlaEnv(gym.Env):
             np.clip(self._current_speed_limit_kmh / _MAX_SPEED_KMH, 0.0, 1.0)
         )
 
+        # obs[13]: signed heading error to the destination (bearing-to-goal),
+        # normalised to [-1, 1]. The discrete nav commands (obs[1..3]) only say
+        # "turn soon", not which way the goal actually lies — this continuous
+        # scalar gives the policy a direct steer-toward-goal signal (v16, to
+        # attack the navigation gap left open by v15).
+        dest = self.route.destination if self.route is not None else None
+        if dest is not None:
+            goal_bearing_norm = _signed_bearing_norm(
+                v_loc.x, v_loc.y, v_transform.rotation.yaw, dest.x, dest.y
+            )
+        else:
+            goal_bearing_norm = 0.0
+
         return np.array(
             [
                 speed_norm,
@@ -466,6 +496,7 @@ class CarlaEnv(gym.Env):
                 nearest_stop_yield_norm,
                 self._prev_steer,
                 self._prev_accel,
+                goal_bearing_norm,
             ],
             dtype=np.float32,
         )

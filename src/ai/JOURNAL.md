@@ -1326,3 +1326,26 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 **Smoke CARLA réel avec `--ground-truth-lane`** (`runs/2026-07-15_03-29_v15_smoke_1k`, 1500 steps) : exit 0, **le code géométrique tient en conditions réelles** (aucune `AttributeError` sur `get_right_vector`/`lane_width`/`LaneType`). Indice notable sur 10 épisodes : **hors-piste ~5 %/step (r_offroad -16.6/ep) contre ~70 % en v14**, et `r_center` positif (25.9/ep). À confirmer sur 60k, mais suggère qu'une grosse part du « 70 % hors-piste » de v14 était un **faux signal du détecteur** (la voiture était plus sur la route que Karim ne le disait, et le reward la punissait à tort).
 
 **Prochaine étape** : run v15 60k `--ground-truth-lane`, comparé à v14 (seul l'obs change). Si le temps sur route et le taux de succès bondissent → **la perception était le plafond** (implication majeure : prioriser la fiabilisation du détecteur de Karim, ou un frame-stack/filtrage). Si ça reste ~10 % de succès et hors-piste élevé → c'est le contrôle/RL (implication : revoir l'action, l'exploration, ou passer au pont CIL→RL abandonné).
+
+**Résultat v15** (`runs/2026-07-15_03-36_ppo_v15_gtlane_60k/ANALYSIS.md`) — **meilleur résultat du projet, réponse en deux couches** :
+- **Couche 1 (résolue)** : hors-piste **70 % → ~1,7 %**, épisodes 2-5× plus longs, crash 92 %→70 %, reward moyen par bloc **-17.6 → +16.9** (positif, une première), 8 timeouts (épisodes complets sans crash) sur les 50 derniers. **La perception ÉTAIT un vrai goulot** pour le maintien sur route — le détecteur criait « hors route » à tort, le reward punissait, la voiture crashait. Première courbe d'apprentissage ascendante monotone du projet.
+- **Couche 2 (ouverte)** : le taux de succès monte (8 %→15 %) mais reste modeste, 0 avancement de palier. Une perception juste règle le maintien de voie, pas la navigation dirigée. → le signal d'orientation vers le but (commandes discrètes de la GPS) semble trop grossier.
+- Implication production : fiabiliser le détecteur de Karim (frame-stack / filtrage temporel de l'offset) devrait transférer une grosse part du gain, puisque la vérité-terrain n'est qu'un diagnostic.
+- Éval 13-scénarios `--ground-truth-lane` sur `model_final.zip` lancée (vidéo + JSON + lecture du steer déterministe : test du `squash_output` de v13).
+
+**Candidat v16** : ajouter un scalaire **bearing-to-goal** (cap continu signé vers la destination) à l'observation, pour attaquer la couche 2 (navigation) sur la base saine de v15. Alternative : prolonger v15 à 150k (la courbe montait encore à 60k).
+
+---
+
+## 2026-07-15 — v16 : scalaire bearing-to-goal dans l'observation (attaque la navigation)
+
+**Objectif** : attaquer la « couche 2 » laissée ouverte par v15 — la voiture tient sa voie et survit (perception vérité-terrain) mais navigue mal vers le but (succès plafonné ~15 %). Hypothèse : les 3 commandes discrètes de la GPS de Victor (`cmd_left`/`right`/`straight`, obs[1..3]) disent « tourne bientôt » sans dire **de quel côté est réellement la destination**. On ajoute un signal continu d'orientation.
+
+**Implémentation** (`rl_env.py`) : observation **13 → 14 scalaires**, nouveau `obs[13] = goal_bearing_norm` = erreur de cap signée ego→destination, normalisée `[-1, 1]` (`angle/π`, 0 = but droit devant, ±1 = but derrière). Calcul dans `_get_obs` via `_signed_bearing_norm()` (fonction pure : `atan2(dest−ego)` − yaw, wrap `[-π,π]`, /π), testable sans CARLA. Ajouté **en fin de vecteur** — aucun indice `obs[0..12]` existant n'est décalé (reward, `step()`, `rl_demo` inchangés). La convention de signe (handedness CARLA) n'a pas besoin d'être « correcte » au sens humain : elle est **cohérente**, donc la policy apprend le mapping bearing→steer.
+
+- `_OBS_LOW`/`_OBS_HIGH` étendus d'un élément `[-1, 1]`. Espace d'obs 14 → aucun checkpoint v9-v15 rechargeable (assumé, on repart de zéro comme d'habitude).
+- v16 hérite de tout le stack v15 : curriculum de distance (v14) + `use_ground_truth_lane` (v15) + `squash_output`/stall progressif (v13). Le run se lancera donc avec `--ground-truth-lane` pour bâtir sur la base saine.
+
+**TDD** : 2 nouveaux tests (`test_signed_bearing_norm_geometry` : droit devant→0, derrière→±1, 90°→±0.5, côtés opposés = signes opposés, cap déjà aligné→0 ; `test_obs_includes_goal_bearing_at_index_13`). 4 assertions de dimension d'obs mises à jour 13→14 (`test_rl_env.py`), `_MinimalEnv` de `test_rl_train.py` mis à 14. **281 tests verts** (279 avant).
+
+**Prochaine étape** : smoke CARLA `--ground-truth-lane` (après libération du serveur par l'éval v15), puis run v16 60k `--ground-truth-lane`. Comparaison à v15 (seul le +1 scalaire change) : le taux de succès et l'avancement de curriculum décollent-ils quand la policy sait de quel côté est le but ? Si oui → la navigation était bien le facteur limitant de la couche 2. Si non → le contrôle fin reste le mur (piste : revoir la dynamique d'action / passer au pont CIL→RL abandonné pour un warmstart).
