@@ -234,7 +234,18 @@ def compute_reward(
 
     components = {
         "r_progress": progress_delta * _W_PROGRESS,
-        "r_center": (1.0 - abs(center_offset)) * _W_CENTER if is_on_road else 0.0,
+        # r_center is gated on MOVING (speed >= 1 km/h), not just on-road: v15's
+        # eval exposed a passive local optimum -- with ground-truth on-road, a
+        # stationary centred car banked r_center (+0.285) + r_alive (+0.05),
+        # roughly cancelling the stall penalty, so the deterministic policy
+        # learned to sit still on the road. Rewarding lane-centring only while
+        # actually driving removes that optimum (sitting now nets r_alive -
+        # r_stall < 0). Same 1 km/h threshold as r_stall.
+        "r_center": (
+            (1.0 - abs(center_offset)) * _W_CENTER
+            if (is_on_road and speed_kmh >= 1.0)
+            else 0.0
+        ),
         "r_alive": _W_ALIVE,
         "r_offroad": 0.0 if is_on_road else _P_OFFROAD,
         "r_stall": (

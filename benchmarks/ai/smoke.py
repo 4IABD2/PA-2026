@@ -124,23 +124,40 @@ def test_r_speed_no_longer_a_component():
 
 
 def test_centering_reward_maximal_at_center():
-    """An offset of 0 must give more reward than an offset of 1."""
+    """An offset of 0 must give more reward than an offset of 1 — while moving
+    (r_center is gated on speed >= 1 km/h since v16)."""
     reward_center, _, _ = compute_reward(
-        speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False
     )
     reward_edge, _, _ = compute_reward(
-        speed_kmh=0.0, center_offset=1.0, is_on_road=True, collision=False
+        speed_kmh=30.0, center_offset=1.0, is_on_road=True, collision=False
     )
     assert reward_center > reward_edge
 
 
 def test_alive_bonus_always_present():
-    """Even when stopped and centered, the reward must include the survival bonus."""
-    reward, done, _ = compute_reward(
+    """The survival bonus must be present every non-terminal step, including
+    when stopped (the total may still be negative once the stall penalty
+    applies — see test_r_center_gated_on_motion for the v16 anti-passivity gate)."""
+    _, done, components = compute_reward(
         speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
     )
     assert done is False
-    assert reward >= 0.01
+    assert components["r_alive"] == pytest.approx(0.05)
+
+
+def test_r_center_gated_on_motion():
+    """v16: a stationary centred car must NOT bank r_center — that was the
+    passive local optimum v15's eval exposed (sit still on-road, collect
+    r_center+r_alive). It fires only while moving."""
+    _, _, stopped = compute_reward(
+        speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    _, _, moving = compute_reward(
+        speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False
+    )
+    assert stopped["r_center"] == pytest.approx(0.0)
+    assert moving["r_center"] == pytest.approx(0.3)
 
 
 def test_reward_components_sum_at_max():
