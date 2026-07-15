@@ -116,6 +116,12 @@ def main() -> None:
     parser.add_argument("--model", required=True, help="Path to .zip model file")
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=2000)
+    parser.add_argument(
+        "--ground-truth-lane",
+        action="store_true",
+        help="feed lane offset / on-road from CARLA map geometry instead of the "
+        "detector — must match how the model was trained (e.g. v15)",
+    )
     args = parser.parse_args()
 
     model_path = Path(args.model)
@@ -165,6 +171,7 @@ def main() -> None:
             camera=camera,
             collision_sensor=col_sensor,
             max_episode_steps=500,
+            use_ground_truth_lane=args.ground_truth_lane,
         )
 
         # high-res demo camera
