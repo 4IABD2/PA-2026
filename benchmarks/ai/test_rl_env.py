@@ -650,28 +650,29 @@ def test_max_steps_truncates_episode():
 
 
 def test_reward_center_term_uses_lane_offset_when_centered():
-    # Large heading angle but laterally centred → r_center should be at its max (0.3).
-    env = _make_env(lane_angle=80.0, lane_offset=0.0)
+    # Large heading angle but laterally centred → r_center at its max (0.3).
+    # Runs at 18 km/h: r_center is gated on motion since v16, so the car must be
+    # moving for it to fire (speed_mps=5.0 → 18 km/h, under the 30 km/h limit so
+    # no speeding penalty and r_safe still fires).
+    env = _make_env(lane_angle=80.0, lane_offset=0.0, speed_mps=5.0)
     env.reset()
     _, reward, _, _, _ = env.step(_ZERO_ACTION)
-    # speed=0 -> r_center=0.3, r_alive=0.05, r_stall=-0.20 (speed < 1 km/h),
-    # r_safe=0.05 (no vehicle/walker/speed-limit configured, so nothing dangerous is
-    # active). r_progress=0.0: this fixture's mocked destination sits exactly at
-    # the ego's fixed spawn location (dist0=0) and the ego never moves, so there's
-    # no distance change to reward.
-    assert reward == pytest.approx(0.20, abs=1e-4)
+    # moving -> r_center=0.3, r_alive=0.05, r_stall=0.0 (speed >= 1 km/h),
+    # r_safe=0.05 (nothing dangerous). r_progress=0.0: this fixture's mocked
+    # destination sits at the ego's fixed spawn location and the ego never moves.
+    assert reward == pytest.approx(0.40, abs=1e-4)
 
 
 def test_reward_center_term_uses_lane_offset_when_off_center():
-    # Small heading angle but laterally off-centre → r_center should be penalised.
-    env = _make_env(lane_angle=0.0, lane_offset=0.9)
+    # Small heading angle but laterally off-centre → r_center penalised. Moving
+    # (18 km/h) so the v16 motion gate lets r_center fire.
+    env = _make_env(lane_angle=0.0, lane_offset=0.9, speed_mps=5.0)
     env.reset()
     _, reward, _, _, _ = env.step(_ZERO_ACTION)
-    # speed=0 -> r_center=(1-0.9)*0.3=0.03, r_alive=0.05, r_stall=-0.20,
-    # r_safe=0.05 (no vehicle/walker/speed-limit configured, so nothing dangerous is
-    # active). r_progress=0.0, same zero-progress reasoning as
-    # test_reward_center_term_uses_lane_offset_when_centered.
-    assert reward == pytest.approx(-0.07, abs=1e-4)
+    # moving -> r_center=(1-0.9)*0.3=0.03, r_alive=0.05, r_stall=0.0,
+    # r_safe=0.05 (nothing dangerous). r_progress=0.0, same zero-progress
+    # reasoning as test_reward_center_term_uses_lane_offset_when_centered.
+    assert reward == pytest.approx(0.13, abs=1e-4)
 
 
 # ---------------------------------------------------------------------------
