@@ -17,17 +17,17 @@ from src.ai.training.rl_train import make_model, train
 
 
 class _MinimalEnv(gym.Env):
-    observation_space = spaces.Box(low=-1.0, high=1.0, shape=(13,), dtype=np.float32)
+    observation_space = spaces.Box(low=-1.0, high=1.0, shape=(14,), dtype=np.float32)
     action_space = spaces.Box(
         low=np.array([-1.0, -1.0], dtype=np.float32),
         high=np.array([1.0, 1.0], dtype=np.float32),
     )
 
     def reset(self, **kwargs):
-        return np.zeros(13, dtype=np.float32), {}
+        return np.zeros(14, dtype=np.float32), {}
 
     def step(self, action):
-        return np.zeros(13, dtype=np.float32), 0.0, False, False, {}
+        return np.zeros(14, dtype=np.float32), 0.0, False, False, {}
 
 
 # ---------------------------------------------------------------------------

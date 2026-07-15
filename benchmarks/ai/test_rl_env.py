@@ -207,15 +207,18 @@ _ZERO_ACTION = np.array([0.0, 0.0], dtype=np.float32)
 
 def test_observation_space_shape_and_dtype():
     env = _make_env()
-    assert env.observation_space.shape == (13,)
+    assert env.observation_space.shape == (14,)
     assert env.observation_space.dtype == np.float32
 
 
-def test_observation_space_grows_to_13_scalars():
+def test_observation_space_grows_to_14_scalars():
     env = _make_env()
-    assert env.observation_space.shape == (13,)
+    assert env.observation_space.shape == (14,)
     np.testing.assert_array_equal(env.observation_space.low[11:13], [-1.0, -1.0])
     np.testing.assert_array_equal(env.observation_space.high[11:13], [1.0, 1.0])
+    # obs[13] = goal_bearing_norm (v16), bounded [-1, 1]
+    assert env.observation_space.low[13] == pytest.approx(-1.0)
+    assert env.observation_space.high[13] == pytest.approx(1.0)
 
 
 def test_obs_prev_steer_and_prev_accel_start_at_zero_after_reset():
@@ -253,7 +256,7 @@ def test_reset_returns_obs_and_empty_info():
 
 def test_reset_obs_shape_and_dtype():
     obs, _ = _make_env().reset()
-    assert obs.shape == (13,)
+    assert obs.shape == (14,)
     assert obs.dtype == np.float32
 
 
@@ -560,7 +563,7 @@ def test_step_returns_five_tuple_correct_types():
     env = _make_env()
     env.reset()
     obs, reward, terminated, truncated, info = env.step(_ZERO_ACTION)
-    assert obs.shape == (13,)
+    assert obs.shape == (14,)
     assert isinstance(reward, float)
     assert isinstance(terminated, bool)
     assert isinstance(truncated, bool)
@@ -1353,6 +1356,32 @@ def test_curriculum_state_survives_episode_reset():
     )
     # reset() appends nothing itself; the one pre-seeded outcome is still there
     assert len(env._recent_success) == 1
+
+
+def test_signed_bearing_norm_geometry():
+    from src.ai.training.rl_env import _signed_bearing_norm
+
+    # ego at origin heading east (yaw 0). Destination due east -> dead ahead -> 0
+    assert _signed_bearing_norm(0.0, 0.0, 0.0, 10.0, 0.0) == pytest.approx(0.0)
+    # destination directly behind (due west) -> magnitude 1
+    assert abs(_signed_bearing_norm(0.0, 0.0, 0.0, -10.0, 0.0)) == pytest.approx(1.0)
+    # destination 90 deg to one side -> magnitude 0.5 (pi/2 over pi)
+    assert abs(_signed_bearing_norm(0.0, 0.0, 0.0, 0.0, 10.0)) == pytest.approx(0.5)
+    # opposite sides have opposite signs (consistent handedness)
+    left = _signed_bearing_norm(0.0, 0.0, 0.0, 0.0, 10.0)
+    right = _signed_bearing_norm(0.0, 0.0, 0.0, 0.0, -10.0)
+    assert left == pytest.approx(-right)
+    # heading already pointing at the destination -> 0 regardless of position
+    assert _signed_bearing_norm(5.0, 5.0, 45.0, 15.0, 15.0) == pytest.approx(
+        0.0, abs=1e-6
+    )
+
+
+def test_obs_includes_goal_bearing_at_index_13():
+    env = _make_env()
+    obs, _ = env.reset()
+    assert obs.shape == (14,)
+    assert -1.0 <= obs[13] <= 1.0
 
 
 def test_ground_truth_lane_flag_defaults_off():
