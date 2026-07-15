@@ -1385,6 +1385,103 @@ def test_obs_includes_goal_bearing_at_index_13():
     assert -1.0 <= obs[13] <= 1.0
 
 
+# ---------------------------------------------------------------------------
+# Route-aware guidance (v17): bearing + r_progress follow the planned route
+# ---------------------------------------------------------------------------
+
+
+def _straight_route(n: int = 6, step: float = 2.0) -> Route:
+    """A route of n waypoints along +x at `step` m spacing; destination = last."""
+    wps = [Waypoint(x=i * step, y=0.0, z=0.0, yaw_deg=0.0) for i in range(n)]
+    return Route(waypoints=wps, destination=wps[-1])
+
+
+def test_route_lookahead_target_aims_ahead_of_nearest():
+    from src.ai.training.rl_env import _ROUTE_LOOKAHEAD_WPS
+
+    env = _make_env()
+    env.route = _straight_route(n=6, step=2.0)  # x = 0,2,4,6,8,10
+    env._route_idx = 0
+    _set_ego_location(env, 0.0, 0.0)  # nearest waypoint = index 0
+    target = env._route_lookahead_target()
+    assert target.x == pytest.approx(2.0 * _ROUTE_LOOKAHEAD_WPS)  # index 3 -> x=6
+
+
+def test_route_lookahead_target_clamps_at_route_end():
+    env = _make_env()
+    env.route = _straight_route(n=6, step=2.0)
+    env._route_idx = 5
+    _set_ego_location(env, 10.0, 0.0)
+    target = env._route_lookahead_target()
+    assert target.x == pytest.approx(10.0)  # clamped to the last waypoint
+
+
+def test_route_lookahead_target_falls_back_to_destination_without_waypoints():
+    env = _make_env()  # default fixture route has empty waypoints
+    assert env._route_lookahead_target() is env.route.destination
+
+
+def test_compute_route_cumulative_totals_segment_lengths():
+    env = _make_env()
+    env.route = _straight_route(n=4, step=2.0)  # 3 segments of 2 m = 6 m
+    env._compute_route_cumulative()
+    assert env._route_total == pytest.approx(6.0)
+    assert env._route_cum == pytest.approx([0.0, 2.0, 4.0, 6.0])
+
+
+def test_compute_route_cumulative_none_for_empty_route():
+    env = _make_env()  # empty waypoints
+    env._compute_route_cumulative()
+    assert env._route_total is None
+    assert env._route_cum is None
+
+
+def test_route_remaining_decreases_as_index_advances():
+    env = _make_env()
+    env.route = _straight_route(n=6, step=2.0)  # total 10 m
+    env._compute_route_cumulative()
+    env._route_idx = 0
+    _set_ego_location(env, 0.0, 0.0)
+    rem_start = env._route_remaining_dist()
+    env._route_idx = 3
+    _set_ego_location(env, 6.0, 0.0)
+    rem_mid = env._route_remaining_dist()
+    assert rem_start == pytest.approx(10.0)
+    assert rem_mid == pytest.approx(4.0)
+    assert rem_mid < rem_start
+
+
+def test_route_remaining_survives_a_curve_that_straight_line_would_punish():
+    # Route goes out +x then turns +y (an L): the straight-line distance to the
+    # destination briefly *increases* around the corner, but remaining-along-
+    # route must keep decreasing as the ego advances waypoint by waypoint.
+    wps = [
+        Waypoint(x=0.0, y=0.0, z=0.0, yaw_deg=0.0),
+        Waypoint(x=10.0, y=0.0, z=0.0, yaw_deg=0.0),
+        Waypoint(x=10.0, y=10.0, z=0.0, yaw_deg=0.0),
+    ]
+    env = _make_env()
+    env.route = Route(waypoints=wps, destination=wps[-1])
+    env._compute_route_cumulative()  # total = 20 m
+    env._route_idx = 0
+    _set_ego_location(env, 0.0, 0.0)
+    rem0 = env._route_remaining_dist()  # 20
+    env._route_idx = 1
+    _set_ego_location(env, 10.0, 0.0)  # at the corner: straight-line to dest = 10
+    rem1 = env._route_remaining_dist()  # 10 along route
+    assert rem0 == pytest.approx(20.0)
+    assert rem1 == pytest.approx(10.0)
+    assert rem1 < rem0  # kept decreasing despite the corner
+
+
+def test_reset_precomputes_route_total_with_real_route():
+    env = _make_env()
+    env.nav.plan.return_value = _straight_route(n=6, step=2.0)
+    env.reset()
+    assert env._route_total == pytest.approx(10.0)
+    assert env._prev_route_progress_norm == pytest.approx(1.0, abs=0.2)
+
+
 def test_ground_truth_lane_flag_defaults_off():
     """The v15 ground-truth-lane path must be opt-in — the default env keeps
     feeding Karim's detector so production behaviour is unchanged."""
