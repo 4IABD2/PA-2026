@@ -1386,3 +1386,21 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 - **Honnêteté** : l'écart stochastique/déterministe persiste (entraînement brillant, déterministe à 2/13). Causes probables : sous-entraînement des paliers durs à 80k, et décalage distances curriculum (≤54 m) vs benchmark (fixes, plus loin).
 
 **Couche 3 encore ouverte → v18** : (1) **run plus long (150k)** aux réglages v17 pour convertir les dynamiques d'entraînement en compétence déterministe et laisser le curriculum atteindre 70 m (plus proche du benchmark) — sans changement de code ; (2) aligner les distances benchmark/curriculum ; (3) réduire l'écart stochastique/déterministe (baisser ent_coef/gSDE en fin d'entraînement). Le fix du guidage (v17) est acquis et validé — il reste à lui donner assez d'entraînement.
+
+---
+
+## 2026-07-15 — v18 : run plus long (110k) aux réglages v17 — meilleur modèle du projet, navigation dirigée débloquée
+
+**Run 110k, réglages v17 (route-aware) inchangés** (`runs/2026-07-15_13-34_ppo_v18_long_110k/ANALYSIS.md`). But : tester l'hypothèse de sous-entraînement (v17 montait encore à 80k). Lancé d'abord à 150k puis relancé à 110k pour livrer un verdict avant le retour utilisateur.
+
+**Éval déterministe : 3/8 Phase 1** (v17 : 2/8, v16 : 1/13), 91 % moving, 0 crash — meilleur du projet.
+- **Gain qualitatif majeur** : les 2 nouveaux succès sont `turn_right` et `junction_straight`, tous deux en `_success_reached_dest` (**atteindre la destination GPS exacte**, le critère le plus dur). v17 n'en réussissait aucun. Plus d'entraînement a débloqué la **navigation dirigée** — la couche 3 visée.
+- **Régressions** : `curve_left` (25.4→20.1 m, juste sous le seuil), `curve_right` (21.4→11.7 m) — revers de la variance CARLA (v18 a consolidé à **38 m avec 1 seul palier**, là où v17 a grimpé à 54 m en 3 paliers, même config/seed — CARLA non déterministe). Reward d'entraînement +107 (record) mais mécaniquement gonflé par le palier plus facile → **les rewards bruts ne sont pas comparables entre runs**.
+- **`straight` = 0.1 m, 0 % moving : très probablement un artefact de benchmark, pas la policy** — ce scénario utilise `spawn_idx=13`, signalé 6× dans ce journal comme cassé (« tue l'agent en 1 step ») et jamais remplacé. La vraie perf de v18 est donc > 3/8.
+
+**Enseignements** :
+1. La navigation dirigée s'améliore avec l'entraînement (validé : reach-dest passe de 0 à 2 succès). Direction confirmée.
+2. **La variance run-to-run est réelle malgré les seeds fixes** (CARLA non déterministe) — un seul run n'est pas un A/B propre ; il faudrait plusieurs seeds ou juger sur plusieurs checkpoints.
+3. Le benchmark lui-même a un test invalide (`spawn_idx=13`) qui corrompt l'éval du scénario `straight`.
+
+**Pistes v19** : (1) **réparer `spawn_idx=13`** (benchmark fiable) ; (2) continuer l'entraînement route-aware, en gérant la variance (seuil d'avancement de curriculum un peu plus bas pour couvrir toutes les distances, ou juger sur le meilleur checkpoint plutôt que `model_final`).
