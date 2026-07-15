@@ -1355,6 +1355,61 @@ def test_curriculum_state_survives_episode_reset():
     assert len(env._recent_success) == 1
 
 
+def test_ground_truth_lane_flag_defaults_off():
+    """The v15 ground-truth-lane path must be opt-in — the default env keeps
+    feeding Karim's detector so production behaviour is unchanged."""
+    env = _make_env()
+    assert env._use_ground_truth_lane is False
+
+
+def test_signed_lane_offset_norm_geometry():
+    from src.ai.training.rl_env import _signed_lane_offset_norm
+
+    # lane centre at origin, lane runs +y (heading north), so the right vector
+    # points +x. Ego 1.0 m to the right of centre in a 3.5 m lane (half 1.75):
+    right = (1.0, 0.0)
+    assert _signed_lane_offset_norm(
+        1.0, 0.0, 0.0, 0.0, right[0], right[1], 3.5
+    ) == pytest.approx(1.0 / 1.75)
+    # ego to the LEFT of centre -> negative
+    assert _signed_lane_offset_norm(
+        -1.0, 0.0, 0.0, 0.0, right[0], right[1], 3.5
+    ) == pytest.approx(-1.0 / 1.75)
+    # perfectly centred -> 0
+    assert _signed_lane_offset_norm(
+        0.0, 5.0, 0.0, 5.0, right[0], right[1], 3.5
+    ) == pytest.approx(0.0)
+    # far past the lane edge -> clipped to +1
+    assert _signed_lane_offset_norm(
+        10.0, 0.0, 0.0, 0.0, right[0], right[1], 3.5
+    ) == pytest.approx(1.0)
+
+
+def test_ground_truth_lane_reads_map_geometry_when_enabled():
+    """With the flag on, _ground_truth_lane returns the signed offset from the
+    waypoint's lane centre and on-road=1 when the ego sits on a driving lane."""
+    env = _make_env()
+    env._use_ground_truth_lane = True
+    _set_ego_location(env, 1.0, 0.0)  # 1 m right of a centre at the origin
+    wp = Mock()
+    wp.transform.location.x, wp.transform.location.y = 0.0, 0.0
+    wp.transform.get_right_vector.return_value = Mock(x=1.0, y=0.0)
+    wp.lane_width = 3.5
+    # world.get_map().get_waypoint(...) (the unprojected on-road query) returns
+    # a truthy Mock by default in _make_env -> on-road
+    offset, on_road = env._ground_truth_lane(wp)
+    assert offset == pytest.approx(1.0 / 1.75)
+    assert on_road == 1.0
+
+
+def test_ground_truth_lane_off_road_when_unprojected_waypoint_is_none():
+    env = _make_env()
+    env._use_ground_truth_lane = True
+    env.world.get_map.return_value.get_waypoint.return_value = None  # not on a lane
+    offset, on_road = env._ground_truth_lane(None)
+    assert on_road == 0.0
+
+
 def test_curriculum_constants_v14():
     """Lock the v14 curriculum schedule on its exact values — a future retune
     must be deliberate (same convention as test_stall_ramp_constants_v13)."""

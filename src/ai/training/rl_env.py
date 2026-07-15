@@ -139,6 +139,25 @@ def _in_ego_path(obj, image_width: float) -> bool:
     return image_width / 3.0 <= cx <= 2.0 * image_width / 3.0
 
 
+def _signed_lane_offset_norm(
+    ego_x: float,
+    ego_y: float,
+    wp_x: float,
+    wp_y: float,
+    right_x: float,
+    right_y: float,
+    lane_width: float,
+) -> float:
+    """Signed lateral offset of the ego from a lane-centre waypoint, normalised
+    to [-1, 1] by the lane half-width. Sign follows the lane's right vector
+    (positive = ego is to the right of centre). Pure 2D geometry — no CARLA
+    types — so it is unit-testable without a running simulator.
+    """
+    half_width = max(lane_width / 2.0, 0.1)
+    lateral = (ego_x - wp_x) * right_x + (ego_y - wp_y) * right_y
+    return float(np.clip(lateral / half_width, -1.0, 1.0))
+
+
 class CarlaEnv(gym.Env):
     def __init__(
         self,
@@ -151,11 +170,16 @@ class CarlaEnv(gym.Env):
         camera: "carla.Sensor",
         collision_sensor: "carla.Sensor",
         max_episode_steps: int = 1000,
+        use_ground_truth_lane: bool = False,
     ) -> None:
         super().__init__()
         self.world = world
         self.ego = ego_vehicle
         self.nav = nav
+        # v15 diagnostic: when True, obs[4]/obs[5] (lane offset, on-road) come
+        # from CARLA's map geometry instead of Karim's detector -- isolates
+        # perception quality as the bottleneck. Default False = production path.
+        self._use_ground_truth_lane = use_ground_truth_lane
         self.route = route
         self.perception = perception
         self._lane_estimate = lane_estimate_fn
@@ -378,6 +402,16 @@ class CarlaEnv(gym.Env):
             1.0 if (direction != "NONE" or (wp is not None and wp.is_junction)) else 0.0
         )
 
+        if self._use_ground_truth_lane:
+            # v15 diagnostic: overwrite the two perception-derived scalars with
+            # ground truth from CARLA's map. Tests whether the ~70%-off-road
+            # behaviour (even in v14's *successful* episodes) is the policy being
+            # fed unreliable lateral position vs a real control ceiling. Ground
+            # truth is unavailable on a real car -- this localises the bottleneck,
+            # it is not a shippable observation.
+            lane_offset_norm, is_on_road = self._ground_truth_lane(wp)
+            self._last_lane_offset_norm = lane_offset_norm
+
         # Franck: nearest vehicle, red light distance, speed limit sign, walker, stop/yield
         objects, _ = self.perception.perceive(image)
         self.last_objects = objects
@@ -477,6 +511,37 @@ class CarlaEnv(gym.Env):
                 best_dist = dist
                 best_spawn = candidate
         return best_spawn
+
+    def _ground_truth_lane(self, wp) -> tuple[float, float]:
+        """Ground-truth (lane_offset_norm, is_on_road) from CARLA's map, for the
+        v15 diagnostic. `wp` is the nearest driving-lane waypoint (projected, as
+        already fetched in _get_obs). Offset is the signed perpendicular distance
+        from the ego to that lane's centre, normalised by the lane half-width;
+        is_on_road is whether the ego actually sits on a driving lane (an
+        unprojected query, which returns None off-lane).
+        """
+        # Lazy import: only runs when the experiment flag is on, so the module
+        # stays importable (and unit tests runnable) without a CARLA runtime.
+        import carla
+
+        loc = self.ego.get_transform().location
+        on_wp = self.world.get_map().get_waypoint(
+            loc, project_to_road=False, lane_type=carla.LaneType.Driving
+        )
+        is_on_road = 1.0 if on_wp is not None else 0.0
+        if wp is None:
+            return self._last_lane_offset_norm, is_on_road
+        right = wp.transform.get_right_vector()
+        offset_norm = _signed_lane_offset_norm(
+            loc.x,
+            loc.y,
+            wp.transform.location.x,
+            wp.transform.location.y,
+            right.x,
+            right.y,
+            wp.lane_width,
+        )
+        return offset_norm, is_on_road
 
     def _maybe_advance_curriculum(self) -> None:
         """Step the destination-distance ceiling up once the policy clears the

@@ -329,6 +329,12 @@ def main() -> None:
     parser.add_argument(
         "--pedestrians", type=int, default=6, help="number of NPC pedestrians spawned"
     )
+    parser.add_argument(
+        "--ground-truth-lane",
+        action="store_true",
+        help="v15 diagnostic: feed lane offset / on-road from CARLA map geometry "
+        "instead of Karim's detector, to isolate perception as the bottleneck",
+    )
     args = parser.parse_args()
 
     run_dir = make_run_dir(tag=f"{args.tag}_{args.timesteps // 1000}k")
@@ -384,6 +390,7 @@ def main() -> None:
                 "curriculum_ceiling_m": _CURRICULUM_CEILING_M,
                 "curriculum_window": _CURRICULUM_WINDOW,
                 "curriculum_advance_rate": _CURRICULUM_ADVANCE_RATE,
+                "ground_truth_lane": args.ground_truth_lane,
                 "npcs": args.npcs,
                 "pedestrians": args.pedestrians,
             },
@@ -451,6 +458,7 @@ def main() -> None:
                 camera=camera,
                 collision_sensor=col_sensor,
                 max_episode_steps=args.max_episode_steps,
+                use_ground_truth_lane=args.ground_truth_lane,
             )
 
             # SB3 Monitor wrapper — logs episode reward/length to CSV automatically
