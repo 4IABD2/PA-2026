@@ -1358,3 +1358,24 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 - Le gate anti-passivité a supprimé l'optimum immobile ; le bearing-to-goal oriente le mouvement. Ensemble ils font passer la policy déterministe de « immobile » à « conduit ~36 m sans crasher ».
 
 **Couche 3 ouverte (v17)** : la voiture *conduit* mais n'atteint pas encore la *cible précise* (1/13 succès formel) — la navigation dirigée fine reste imparfaite. Pistes par ordre : (1) **prolonger l'entraînement** (40k coupe tôt, la courbe montait encore) ; (2) durcir le curriculum pour exiger d'atteindre la cible (pas seulement de rouler) ; (3) renforcer le poids du bearing / `r_progress` ; (4) investiguer le scénario `curve_left` resté bloqué (0.7 m). Rappel production : tout ceci tourne en vérité-terrain (`--ground-truth-lane`) — le transfert au détecteur réel de Karim reste à valider, et confirme que fiabiliser ce détecteur est prioritaire.
+
+---
+
+## 2026-07-15 — v17 : guidage route-aware (bearing + r_progress suivent la route, pas la ligne droite)
+
+**Bug de conception trouvé en relisant le feed de données** (piste soulevée par l'utilisateur : « un souci dans la nav ou l'offset ? »). Trois signaux censés guider la voiture vers le but étaient **incohérents** :
+- **commande nav** `obs[1..3]` : vise le **prochain waypoint de route** (A* de Victor) → suit la route ✅ ;
+- **bearing-to-goal** `obs[13]` (ajouté en v16) : visait `route.destination`, la cible **finale à vol d'oiseau** ❌ ;
+- **`r_progress`** : shaping sur la **distance en ligne droite** à la destination finale (`_dist_to_destination`) ❌.
+
+**Conséquence — piège dans les virages** : sur une route qui tourne (fréquent sur Town02 en grille, même pour une cible curriculum à 18-30 m), le bearing pointait « tout droit vers le but » à travers un bâtiment, et `r_progress` devenait **négatif quand la voiture suivait correctement le virage** (la distance à vol d'oiseau augmente en contournant le coin) → on **punissait la bonne conduite**. La commande nav disait « tourne » pendant ce temps : signaux contradictoires. Colle au symptôme v16 : conduit bien en ligne droite, rate la cible précise (1/13), et le seul scénario **complètement bloqué** était `curve_left`.
+
+**Fix — rendre les deux signaux route-aware** (`rl_env.py`, aucune signature publique changée) :
+- **bearing** → `_route_lookahead_target()` : vise le waypoint `_ROUTE_LOOKAHEAD_WPS=3` (~6 m) devant le waypoint de route le plus proche (pure-pursuit), plus `route.destination` à vol d'oiseau. Réutilise l'index glissant `_route_idx` (extrait dans `_update_nearest_route_idx()`, partagé avec `_is_off_route`).
+- **`r_progress`** → potentiel = **distance restante LE LONG de la route** (`_route_remaining_dist()` = ego→waypoint le plus proche + arc-length jusqu'à la fin), précalculée en `reset()` via `_compute_route_cumulative()`. Décroît de façon monotone quand la voiture suit la route → ne pénalise plus jamais un virage bien pris.
+- **Inchangé volontairement** : `_reached_destination` et le `remaining_frac` de la pénalité de collision gardent la distance à vol d'oiseau (« être arrivé » = proximité physique du but, correct ; c'est le *guidage* qui devait suivre la route, pas le critère d'arrivée).
+- Piège attrapé par un test : `Route` a un `__len__`, donc une route à waypoints vides est *falsy* — tous les checks de route sont des `is None` explicites, jamais une truthiness nue.
+
+**TDD** : 9 nouveaux tests (lookahead vise devant / clampe en fin de route / fallback destination sans waypoints ; cumul arc-length ; None pour route vide ; remaining décroît ; **remaining survit à un virage en L là où la ligne droite pénaliserait** ; reset précalcule le total). Les tests mocks existants (routes à waypoints vides) passent inchangés via le fallback straight-line. **290 tests verts** (281 avant).
+
+**Prochaine étape** : smoke `--ground-truth-lane` (valide le chemin route-aware sur les vraies routes A*, non couvrable en mock), puis run v17 plus long que 40k (la courbe montait encore) `--ground-truth-lane`. Comparaison à v16 par **éval déterministe** : le taux de succès formel monte-t-il (v16 : 1/13) maintenant que le guidage suit la route dans les virages ? `curve_left` se débloque-t-il ?

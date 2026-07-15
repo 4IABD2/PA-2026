@@ -40,6 +40,9 @@ _WARMUP_TICKS = 5  # ticks after teleport so physics settles and sensors fill
 _OFF_ROUTE_M = 15.0  # metres from nearest route waypoint before off_route penalty fires
 _PROGRESS_GAMMA = 0.99  # must match PPO's own gamma (src/ai/training/rl_train.py's
 # _PPO_DEFAULTS) for the potential-based shaping's policy-invariance guarantee to hold
+_ROUTE_LOOKAHEAD_WPS = 3  # waypoints ahead of the nearest one that the bearing-to-goal
+# obs aims at (~6 m at the A* 2 m resolution) -- a pure-pursuit lookahead so the policy
+# steers ALONG the planned route, not straight at the crow-flies destination (v17)
 _ROUTE_GRACE_STEPS = (
     20  # steps after reset where off-route is not penalised (car joins route)
 )
@@ -222,6 +225,13 @@ class CarlaEnv(gym.Env):
         self._prev_accel: float = 0.0
         self._dist_to_dest_initial: float = 1.0
         self._prev_dist_to_dest_norm: float = 1.0
+        # Route-aware progress shaping (v17): cumulative arc-length along the
+        # planned waypoints, total route length, and the last normalised
+        # remaining-along-route. _route_total is None when there is no waypoint
+        # route (unit-test mocks), which falls back to straight-line shaping.
+        self._route_cum: list | None = None
+        self._route_total: float | None = None
+        self._prev_route_progress_norm: float = 1.0
         self._last_lane_offset_norm: float = 0.0
         self._last_image: np.ndarray | None = None
         self._step_count: int = 0
@@ -275,10 +285,22 @@ class CarlaEnv(gym.Env):
                 self.route = self.nav.plan(self.ego.get_transform().location, dest)
             except Exception as exc:
                 print(f"    nav.plan failed at reset: {exc}")
+        # Straight-line distance to the final goal — still used for
+        # _reached_destination and the collision remaining_frac scaling.
         dist0 = self._dist_to_destination()
         self._dist_to_dest_initial = max(dist0, 1.0) if dist0 is not None else 1.0
         self._prev_dist_to_dest_norm = (
             dist0 / self._dist_to_dest_initial if dist0 is not None else 1.0
+        )
+        # Route-aware progress (v17): reset the sliding index, precompute the
+        # arc-length table, and seed the previous normalised remaining (~1.0 at
+        # the start of the route).
+        self._route_idx = 0
+        self._compute_route_cumulative()
+        self._prev_route_progress_norm = (
+            self._route_remaining_dist() / self._route_total
+            if self._route_total
+            else 1.0
         )
         self._collision_flag = False
         self._collision_speed_kmh = 0.0
@@ -291,7 +313,7 @@ class CarlaEnv(gym.Env):
         self._last_lane_offset_norm = 0.0
         self._step_count = 0
         self._stall_steps = 0
-        self._route_idx = 0
+        # _route_idx already reset above, before the route arc-length precompute
         self._current_speed_limit_kmh = _DEFAULT_SPEED_LIMIT_KMH
         self.off_route_count = 0
         self._last_image = None
@@ -333,15 +355,30 @@ class CarlaEnv(gym.Env):
             _STOP_YIELD_VIOLATION_SPEED_KMH,
         )
 
+        # Straight-line distance to the final goal drives the collision
+        # remaining_frac scaling (how much of the crow-flies trip is forfeited).
         dist_to_dest = self._dist_to_destination()
-        if dist_to_dest is not None:
-            dist_norm = dist_to_dest / self._dist_to_dest_initial
-            phi_now = -dist_norm
-            phi_prev = -self._prev_dist_to_dest_norm
-            progress_delta = _PROGRESS_GAMMA * phi_now - phi_prev
+        dist_norm = (
+            dist_to_dest / self._dist_to_dest_initial
+            if dist_to_dest is not None
+            else 1.0
+        )
+
+        # r_progress shaping: measured ALONG the route when a waypoint route
+        # exists (v17 -- straight-line shaping went negative when correctly
+        # rounding a curve, punishing good navigation), else straight-line.
+        if self._route_total is not None:
+            rem_norm = self._route_remaining_dist() / self._route_total
+            progress_delta = _PROGRESS_GAMMA * (-rem_norm) - (
+                -self._prev_route_progress_norm
+            )
+            self._prev_route_progress_norm = rem_norm
+        elif dist_to_dest is not None:
+            progress_delta = _PROGRESS_GAMMA * (-dist_norm) - (
+                -self._prev_dist_to_dest_norm
+            )
             self._prev_dist_to_dest_norm = dist_norm
         else:
-            dist_norm = 1.0
             progress_delta = 0.0
 
         reward, terminated, components = compute_reward(
@@ -468,15 +505,17 @@ class CarlaEnv(gym.Env):
             np.clip(self._current_speed_limit_kmh / _MAX_SPEED_KMH, 0.0, 1.0)
         )
 
-        # obs[13]: signed heading error to the destination (bearing-to-goal),
-        # normalised to [-1, 1]. The discrete nav commands (obs[1..3]) only say
-        # "turn soon", not which way the goal actually lies — this continuous
-        # scalar gives the policy a direct steer-toward-goal signal (v16, to
-        # attack the navigation gap left open by v15).
-        dest = self.route.destination if self.route is not None else None
-        if dest is not None:
+        # obs[13]: signed heading error to the route lookahead point
+        # (bearing-to-goal), normalised to [-1, 1]. The discrete nav commands
+        # (obs[1..3]) only say "turn soon"; this continuous scalar gives a
+        # direct steer signal. v17: it aims at the next route waypoint
+        # (_route_lookahead_target), NOT the crow-flies destination -- aiming at
+        # the final goal pointed through buildings on any curve and fought the
+        # planned route (see runs .../ppo_v16 ANALYSIS: curve_left got stuck).
+        target = self._route_lookahead_target()
+        if target is not None:
             goal_bearing_norm = _signed_bearing_norm(
-                v_loc.x, v_loc.y, v_transform.rotation.yaw, dest.x, dest.y
+                v_loc.x, v_loc.y, v_transform.rotation.yaw, target.x, target.y
             )
         else:
             goal_bearing_norm = 0.0
@@ -680,14 +719,16 @@ class CarlaEnv(gym.Env):
             and dist_travelled >= _MIN_TRAVEL_FOR_DEST_M
         )
 
-    def _is_off_route(self) -> bool:
-        """True if ego is more than _OFF_ROUTE_M metres from the nearest route waypoint.
-
-        Uses a sliding window around _route_idx for O(1) amortised cost instead of
-        scanning the whole route each step.
+    def _update_nearest_route_idx(self) -> float:
+        """Slides _route_idx to the nearest route waypoint and returns the
+        squared distance to it (inf if there is no waypoint route). Uses a
+        sliding window around _route_idx for O(1) amortised cost instead of
+        scanning the whole route each step. Shared by _is_off_route, the
+        bearing lookahead and the route-remaining progress measure so they all
+        agree on where the ego is along the route within a single step.
         """
         if not (self.route and self.route.waypoints):
-            return False
+            return float("inf")
         wps = self.route.waypoints
         n = len(wps)
         start = max(0, self._route_idx - 5)
@@ -702,7 +743,63 @@ class CarlaEnv(gym.Env):
                 min_dist_sq = d_sq
                 min_idx = i
         self._route_idx = min_idx
-        return min_dist_sq > _OFF_ROUTE_M**2
+        return min_dist_sq
+
+    def _is_off_route(self) -> bool:
+        """True if ego is more than _OFF_ROUTE_M metres from the nearest route waypoint."""
+        if not (self.route and self.route.waypoints):
+            return False
+        return self._update_nearest_route_idx() > _OFF_ROUTE_M**2
+
+    def _route_lookahead_target(self) -> "Waypoint | None":
+        """The waypoint the bearing-to-goal obs aims at: _ROUTE_LOOKAHEAD_WPS
+        ahead of the nearest route waypoint (updating _route_idx). Falls back
+        to the crow-flies destination when there is no waypoint route (mocks).
+
+        Note: an empty Route is falsy (Route.__len__ delegates to len(waypoints)),
+        so every route check here is an explicit `is None` / `not .waypoints`,
+        never a bare truthiness test.
+        """
+        if self.route is None:
+            return None
+        if not self.route.waypoints:
+            return self.route.destination
+        self._update_nearest_route_idx()
+        wps = self.route.waypoints
+        target_idx = min(self._route_idx + _ROUTE_LOOKAHEAD_WPS, len(wps) - 1)
+        return wps[target_idx]
+
+    def _compute_route_cumulative(self) -> None:
+        """Precompute cumulative arc-length along the route waypoints (called
+        once per reset). Sets _route_cum/_route_total to None for a route with
+        fewer than 2 waypoints, which routes progress shaping to the
+        straight-line fallback.
+        """
+        wps = self.route.waypoints if self.route else None
+        if not wps or len(wps) < 2:
+            self._route_cum = None
+            self._route_total = None
+            return
+        cum = [0.0]
+        for j in range(1, len(wps)):
+            cum.append(
+                cum[-1] + math.hypot(wps[j].x - wps[j - 1].x, wps[j].y - wps[j - 1].y)
+            )
+        self._route_cum = cum
+        self._route_total = max(cum[-1], 1.0)
+
+    def _route_remaining_dist(self) -> float:
+        """Distance still to travel ALONG the route: ego → nearest waypoint,
+        plus the arc-length from that waypoint to the destination. Monotonically
+        decreases as the ego follows the route, so shaping on it never punishes
+        correctly rounding a curve (unlike straight-line distance). Only called
+        when _route_total is not None (a real waypoint route exists).
+        """
+        wps = self.route.waypoints
+        i = min(self._route_idx, len(wps) - 1)
+        ego = self.ego.get_transform().location
+        dist_to_wp = math.hypot(ego.x - wps[i].x, ego.y - wps[i].y)
+        return dist_to_wp + (self._route_total - self._route_cum[i])
 
     def _on_collision(self, event) -> None:
         self._collision_flag = True
