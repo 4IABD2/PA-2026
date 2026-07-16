@@ -1404,3 +1404,18 @@ runs/YYYY-MM-DD_HH-MM_<tag>/
 3. Le benchmark lui-même a un test invalide (`spawn_idx=13`) qui corrompt l'éval du scénario `straight`.
 
 **Pistes v19** : (1) **réparer `spawn_idx=13`** (benchmark fiable) ; (2) continuer l'entraînement route-aware, en gérant la variance (seuil d'avancement de curriculum un peu plus bas pour couvrir toutes les distances, ou juger sur le meilleur checkpoint plutôt que `model_final`).
+
+**Correction (spawn_idx=13)** : vérifié en conditions réelles — spawn_idx=13 **conduit normalement** (4.1 m / 17.8 km/h, identique aux spawns 5/19, aucune collision). Le « cassé » du journal datait des vieux bugs de reset (corrigés le 09/07), pas du spawn. Le `straight=0 m` de v18 est de la **variance policy**, pas un test corrompu → benchmark laissé intact (le réparer masquerait une faiblesse réelle).
+
+---
+
+## 2026-07-16 — v19 (150k) + passage en mode « sélection du meilleur modèle »
+
+Objectif requalifié par l'utilisateur : dernière ligne droite, **proposer le meilleur modèle possible**. Leaderboard tenu dans `runs/LEADERBOARD.md`.
+
+**v19 (150k route-aware)** : `model_final` **0/8**, meilleur checkpoint (90k) **2/8** — **ne bat pas le champion v18 (3/8)**. Trois enseignements décisifs :
+1. **Sur-entraînement réel** : à 150k la policy roule beaucoup mais crashe (téméraire) → `model_final`=0/8, alors que son checkpoint 90k=2/8. **`model_final` n'est jamais fiable ; toujours miner les checkpoints.** Pic déterministe vers ~90-120k.
+2. **Plus long ne bat pas 110k** — le levier n'est pas la durée. Futurs runs ~100-120k max.
+3. **Variance dominante** entre runs de même config → sélection = multiplier candidats + checkpoints + **ré-évaluer le meilleur** (l'éval elle-même est bruitée).
+
+**Suite** : miner les checkpoints du champion v18 (+ mesurer le bruit d'éval en le ré-évaluant), puis tester une vraie amélioration ciblée en v20 (réduire le crash de fin d'entraînement / aligner le seuil de trajet sur le benchmark), et enfin **ré-évaluer le meilleur candidat avant de le proposer**.
