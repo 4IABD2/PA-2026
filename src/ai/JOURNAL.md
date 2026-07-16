@@ -1435,3 +1435,19 @@ Objectif final : proposer le meilleur modèle. ~15 modèles évalués en déterm
 **🏆 Modèle final proposé : `runs/2026-07-15_13-34_ppo_v18_long_110k/model_final.zip` (3/8).** Réussit 2 navigations GPS (turn_right, junction_straight) + npc_crossing, 98 % en mouvement, 0 crash. Config route-aware complète, 110k.
 
 **Trajectoire de la session** (v13→v20, ~24 h) : de 0/8 (voiture immobile en déterministe) à 3/8 (conduit, atteint des destinations GPS, ne crashe jamais). Leviers décisifs, dans l'ordre : curriculum (cold-start), vérité-terrain (perception = goulot prouvé), gate anti-passivité, guidage route-aware (virages), sélection par checkpoint (sur-entraînement). Le plafond restant (3/8) est un problème de **variance**, pas de capacité — pistes futures pour le dépasser : réduire l'écart stochastique/déterministe, ou entraînement multi-seed avec sélection.
+
+---
+
+## 2026-07-16 — « dé-cheat » de la navigation : commande discrète vs bearing (Options 1 & 2)
+
+**Constat gênant** (repéré en regardant la démo v18) : `obs[13]` (le bearing-to-goal) donne à la policy **l'angle de braquage exact à chaque instant** → elle ne conduit pas vraiment, elle asservit un signal quasi-oracle. Et `next_command` de Victor est **mort** : il renvoie STRAIGHT 100 % du temps, même dans les scénarios `turn_left`/`turn_right` (vérifié sur `eval_model_final.json` : 0 LEFT, 0 RIGHT sur tous les scénarios). Donc v18 ignore complètement la commande de Victor et re-dérive la nav elle-même. On teste deux navigations « moins cheatées », toutes deux réentraînées à partir de la recette v18.
+
+**Réparation de `next_command`** (`navigation.py`, code de Victor, autorisé par l'utilisateur) : l'ancienne dérivation (braquage vers le waypoint à 2 m puis seuil ±0.4) ne se déclenchait jamais. Remplacée par le **changement de cap de la route sur ~16 m devant** (`_COMMAND_LOOKAHEAD_WPS=8` waypoints, seuil `_COMMAND_TURN_DEG=25°`) : un vrai virage de carrefour fait pivoter la route au-delà du seuil, une ligne droite/courbe douce reste dessous. Vérifié en réel : sur 4 routes Town02, **30-50 virages LEFT/RIGHT émis** aux bons endroits (avant : 0). La commande de Victor est enfin fonctionnelle.
+
+**Option 1 (v21) — commande discrète, pas de bearing** : `obs[13]` retiré → obs à 13 scalaires ; la policy navigue sur `cmd_left/right/straight` (obs[1..3], maintenant vivant) + perception. C'est le standard de la conduite conditionnée (CARLA CIL). Pour éviter le churn 13↔14 entre les deux options, l'obs est **piloté par un flag** `use_goal_bearing` (défaut False = Option 1) + `goal_bearing_lookahead_wps` configurable, threadé via `--goal-bearing`/`--goal-bearing-lookahead` dans les deux scripts.
+
+**Option 2 (v22) — bearing continu mais à horizon lointain** : `use_goal_bearing=True` + lookahead ~24 m (`--goal-bearing-lookahead 12`) au lieu de 6 m (v18) → « direction générale du but », pas le braquage instantané ; la policy doit quand même faire le fin suivi de voie via la perception.
+
+**TDD** : 4 tests `next_command` (droit→STRAIGHT, virage→LEFT/RIGHT, vide→LANE_FOLLOW) dans `test_navigation_smoke.py` ; tests d'obs adaptés (défaut 13, flag→14, lookahead configurable). **295 tests verts**.
+
+**Reste** : `--ground-truth-lane` gardé (on traitera la perception réelle de Karim plus tard). Prochaine étape : smoke, puis entraîner v21 (Option 1) + v22 (Option 2), 110k `--ground-truth-lane` chacun, éval déterministe, et **bilan comparatif v18 (near bearing) / v21 (discret) / v22 (far bearing)**.

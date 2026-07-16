@@ -335,6 +335,20 @@ def main() -> None:
         help="v15 diagnostic: feed lane offset / on-road from CARLA map geometry "
         "instead of Karim's detector, to isolate perception as the bottleneck",
     )
+    parser.add_argument(
+        "--goal-bearing",
+        action="store_true",
+        help="append a continuous bearing-to-goal scalar to the observation "
+        "(Option 2). Off = navigate on the discrete high-level command (Option 1)",
+    )
+    parser.add_argument(
+        "--goal-bearing-lookahead",
+        type=int,
+        default=3,
+        metavar="WPS",
+        help="route waypoints ahead the bearing aims at (~2 m each): 3=near/precise "
+        "(v18), 12=far/coarse heading (Option 2). Only used with --goal-bearing",
+    )
     args = parser.parse_args()
 
     run_dir = make_run_dir(tag=f"{args.tag}_{args.timesteps // 1000}k")
@@ -391,6 +405,8 @@ def main() -> None:
                 "curriculum_window": _CURRICULUM_WINDOW,
                 "curriculum_advance_rate": _CURRICULUM_ADVANCE_RATE,
                 "ground_truth_lane": args.ground_truth_lane,
+                "goal_bearing": args.goal_bearing,
+                "goal_bearing_lookahead_wps": args.goal_bearing_lookahead,
                 "npcs": args.npcs,
                 "pedestrians": args.pedestrians,
             },
@@ -459,6 +475,8 @@ def main() -> None:
                 collision_sensor=col_sensor,
                 max_episode_steps=args.max_episode_steps,
                 use_ground_truth_lane=args.ground_truth_lane,
+                use_goal_bearing=args.goal_bearing,
+                goal_bearing_lookahead_wps=args.goal_bearing_lookahead,
             )
 
             # SB3 Monitor wrapper — logs episode reward/length to CSV automatically
