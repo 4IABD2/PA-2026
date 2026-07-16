@@ -23,14 +23,16 @@ if TYPE_CHECKING:
 #         lane_offset_norm, is_on_road,
 #         nearest_vehicle_norm, red_light_distance_norm, speed_limit_norm,
 #         nearest_walker_norm, nearest_stop_yield_norm,
-#         prev_steer_norm, prev_accel_norm,
-#         goal_bearing_norm]   # v16: signed heading error to destination, [-1,1]
+#         prev_steer_norm, prev_accel_norm]
+# 13 base scalars. A 14th, goal_bearing_norm ∈ [-1,1], is appended only when
+# CarlaEnv(use_goal_bearing=True) -- otherwise the policy navigates on the
+# discrete high-level command obs[1..3] + perception (Option 1).
 _OBS_LOW = np.array(
-    [0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -1.0],
+    [0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0],
     dtype=np.float32,
 )
 _OBS_HIGH = np.array(
-    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
     dtype=np.float32,
 )
 
@@ -191,6 +193,8 @@ class CarlaEnv(gym.Env):
         collision_sensor: "carla.Sensor",
         max_episode_steps: int = 1000,
         use_ground_truth_lane: bool = False,
+        use_goal_bearing: bool = False,
+        goal_bearing_lookahead_wps: int = _ROUTE_LOOKAHEAD_WPS,
     ) -> None:
         super().__init__()
         self.world = world
@@ -200,13 +204,23 @@ class CarlaEnv(gym.Env):
         # from CARLA's map geometry instead of Karim's detector -- isolates
         # perception quality as the bottleneck. Default False = production path.
         self._use_ground_truth_lane = use_ground_truth_lane
+        # Navigation input: with use_goal_bearing=False the policy steers on the
+        # discrete high-level command obs[1..3] (Option 1); True appends a
+        # continuous bearing scalar aimed goal_bearing_lookahead_wps waypoints
+        # ahead (small = precise/near-oracle like v18, large = coarse heading).
+        self._use_goal_bearing = use_goal_bearing
+        self._goal_bearing_lookahead_wps = goal_bearing_lookahead_wps
         self.route = route
         self.perception = perception
         self._lane_estimate = lane_estimate_fn
         self.max_episode_steps = max_episode_steps
 
+        obs_low, obs_high = _OBS_LOW, _OBS_HIGH
+        if use_goal_bearing:  # append the goal_bearing_norm bound
+            obs_low = np.append(obs_low, -1.0).astype(np.float32)
+            obs_high = np.append(obs_high, 1.0).astype(np.float32)
         self.observation_space = spaces.Box(
-            low=_OBS_LOW, high=_OBS_HIGH, dtype=np.float32
+            low=obs_low, high=obs_high, dtype=np.float32
         )
         self.action_space = spaces.Box(
             low=np.array([-1.0, -1.0], dtype=np.float32),
@@ -505,40 +519,37 @@ class CarlaEnv(gym.Env):
             np.clip(self._current_speed_limit_kmh / _MAX_SPEED_KMH, 0.0, 1.0)
         )
 
-        # obs[13]: signed heading error to the route lookahead point
-        # (bearing-to-goal), normalised to [-1, 1]. The discrete nav commands
-        # (obs[1..3]) only say "turn soon"; this continuous scalar gives a
-        # direct steer signal. v17: it aims at the next route waypoint
-        # (_route_lookahead_target), NOT the crow-flies destination -- aiming at
-        # the final goal pointed through buildings on any curve and fought the
-        # planned route (see runs .../ppo_v16 ANALYSIS: curve_left got stuck).
-        target = self._route_lookahead_target()
-        if target is not None:
-            goal_bearing_norm = _signed_bearing_norm(
-                v_loc.x, v_loc.y, v_transform.rotation.yaw, target.x, target.y
+        obs = [
+            speed_norm,
+            cmd_left,
+            cmd_right,
+            cmd_straight,
+            lane_offset_norm,
+            is_on_road,
+            nearest_vehicle_norm,
+            red_light_distance_norm,
+            speed_limit_norm,
+            nearest_walker_norm,
+            nearest_stop_yield_norm,
+            self._prev_steer,
+            self._prev_accel,
+        ]
+        # Optional obs[13]: continuous signed heading error to the route
+        # lookahead waypoint (bearing-to-goal). Off by default -- the policy then
+        # navigates on the discrete high-level command (obs[1..3]) + perception
+        # (Option 1). When on, the lookahead distance controls how "precise" the
+        # signal is: near (v18) = near-oracle steering; far (Option 2) = general
+        # heading only. Aims at a route waypoint, never the crow-flies goal.
+        if self._use_goal_bearing:
+            target = self._route_lookahead_target()
+            obs.append(
+                _signed_bearing_norm(
+                    v_loc.x, v_loc.y, v_transform.rotation.yaw, target.x, target.y
+                )
+                if target is not None
+                else 0.0
             )
-        else:
-            goal_bearing_norm = 0.0
-
-        return np.array(
-            [
-                speed_norm,
-                cmd_left,
-                cmd_right,
-                cmd_straight,
-                lane_offset_norm,
-                is_on_road,
-                nearest_vehicle_norm,
-                red_light_distance_norm,
-                speed_limit_norm,
-                nearest_walker_norm,
-                nearest_stop_yield_norm,
-                self._prev_steer,
-                self._prev_accel,
-                goal_bearing_norm,
-            ],
-            dtype=np.float32,
-        )
+        return np.array(obs, dtype=np.float32)
 
     def render(self) -> np.ndarray | None:
         return self._last_image
@@ -766,7 +777,9 @@ class CarlaEnv(gym.Env):
             return self.route.destination
         self._update_nearest_route_idx()
         wps = self.route.waypoints
-        target_idx = min(self._route_idx + _ROUTE_LOOKAHEAD_WPS, len(wps) - 1)
+        target_idx = min(
+            self._route_idx + self._goal_bearing_lookahead_wps, len(wps) - 1
+        )
         return wps[target_idx]
 
     def _compute_route_cumulative(self) -> None:
