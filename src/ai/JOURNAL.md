@@ -1419,3 +1419,19 @@ Objectif requalifié par l'utilisateur : dernière ligne droite, **proposer le m
 3. **Variance dominante** entre runs de même config → sélection = multiplier candidats + checkpoints + **ré-évaluer le meilleur** (l'éval elle-même est bruitée).
 
 **Suite** : miner les checkpoints du champion v18 (+ mesurer le bruit d'éval en le ré-évaluant), puis tester une vraie amélioration ciblée en v20 (réduire le crash de fin d'entraînement / aligner le seuil de trajet sur le benchmark), et enfin **ré-évaluer le meilleur candidat avant de le proposer**.
+
+---
+
+## 2026-07-16 — Clôture : sélection du modèle final (leaderboard complet)
+
+Objectif final : proposer le meilleur modèle. ~15 modèles évalués en déterministe (`--ground-truth-lane`) à travers 5 runs (v16-v20) et leurs checkpoints. Leaderboard complet : `runs/LEADERBOARD.md`.
+
+**Résultats de sélection** :
+- **Éval reproductible** (v18 `model_final` ré-évalué = 3/8 identique) → une éval par modèle suffit, classement fiable.
+- **Plafond de 3/8 par modèle**, mais **union = 6/8** à travers les modèles (chaque modèle gagne un trio différent) → la config *sait* tout faire, la **variance** l'empêche de tout réussir dans un seul modèle.
+- `model_final` peu fiable (sur-entraînement : v19 150k final = 0/8 vs son checkpoint 90k = 2/8) → toujours miner les checkpoints ; sweet spot ~90-110k.
+- Plus d'entraînement (v19 150k) et un tirage de plus (v20) n'ont pas battu v18 (110k).
+
+**🏆 Modèle final proposé : `runs/2026-07-15_13-34_ppo_v18_long_110k/model_final.zip` (3/8).** Réussit 2 navigations GPS (turn_right, junction_straight) + npc_crossing, 98 % en mouvement, 0 crash. Config route-aware complète, 110k.
+
+**Trajectoire de la session** (v13→v20, ~24 h) : de 0/8 (voiture immobile en déterministe) à 3/8 (conduit, atteint des destinations GPS, ne crashe jamais). Leviers décisifs, dans l'ordre : curriculum (cold-start), vérité-terrain (perception = goulot prouvé), gate anti-passivité, guidage route-aware (virages), sélection par checkpoint (sur-entraînement). Le plafond restant (3/8) est un problème de **variance**, pas de capacité — pistes futures pour le dépasser : réduire l'écart stochastique/déterministe, ou entraînement multi-seed avec sélection.
