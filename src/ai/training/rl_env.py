@@ -247,6 +247,7 @@ class CarlaEnv(gym.Env):
         self._route_total: float | None = None
         self._prev_route_progress_norm: float = 1.0
         self._last_lane_offset_norm: float = 0.0
+        self._last_is_on_road: float = 1.0  # held when the detector returns NONE
         self._last_image: np.ndarray | None = None
         self._step_count: int = 0
         self._stall_steps: int = (
@@ -325,6 +326,7 @@ class CarlaEnv(gym.Env):
         self._prev_steer = 0.0
         self._prev_accel = 0.0
         self._last_lane_offset_norm = 0.0
+        self._last_is_on_road = 1.0
         self._step_count = 0
         self._stall_steps = 0
         # _route_idx already reset above, before the route arc-length precompute
@@ -465,9 +467,16 @@ class CarlaEnv(gym.Env):
         # policy a false "you're centered" signal the instant it loses the
         # road (runs/2026-07-12_00-45_ppo_v11_150k/ANALYSIS.md, Constat #2).
         lane_offset_norm = self._last_lane_offset_norm
+        if direction != "NONE":
+            self._last_is_on_road = 1.0  # detector confidently on a lane
+        # Karim's YOLOPv2 returns NONE most of the time on Town02 (few visible
+        # markings) even while on-road; treating every NONE as off-road swamped
+        # the reward with false -0.5/step penalties (~87 % of steps, run v21).
+        # Hold the last confident on-road reading instead (symmetric with the
+        # offset hold above); a junction has no markings so also counts as on-road.
         wp = self.world.get_map().get_waypoint(self.ego.get_transform().location)
         is_on_road = (
-            1.0 if (direction != "NONE" or (wp is not None and wp.is_junction)) else 0.0
+            1.0 if (wp is not None and wp.is_junction) else self._last_is_on_road
         )
 
         if self._use_ground_truth_lane:
