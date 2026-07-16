@@ -760,10 +760,14 @@ def test_obs_is_on_road_when_aligned():
     assert obs[5] == pytest.approx(1.0)
 
 
-def test_obs_is_off_road_when_none():
-    env = _make_env(on_road=False)
+def test_obs_is_on_road_held_when_detector_returns_none():
+    # Karim's YOLOPv2 returns direction="NONE" most of the time on Town02 even
+    # while on-road. Rather than falsely flag off-road (which swamped the reward
+    # with -0.5/step, run v21), obs[5] holds the last confident on-road value
+    # (starts on-road at spawn).
+    env = _make_env(on_road=False)  # detector always NONE
     obs, _ = env.reset()
-    assert obs[5] == pytest.approx(0.0)
+    assert obs[5] == pytest.approx(1.0)  # held on-road, not falsely off-road
 
 
 def test_obs_is_on_road_when_in_junction_without_lane_lines():
