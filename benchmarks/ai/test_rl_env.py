@@ -28,6 +28,8 @@ def _make_env(
     nearest_walker_m: float | None = None,
     nearest_stop_yield_m: float | None = None,
     max_episode_steps: int = 10,
+    use_goal_bearing: bool = False,
+    goal_bearing_lookahead_wps: int = 3,
 ) -> CarlaEnv:
     world = Mock()
     ego = Mock()
@@ -124,6 +126,8 @@ def _make_env(
         camera=camera,
         collision_sensor=col_sensor,
         max_episode_steps=max_episode_steps,
+        use_goal_bearing=use_goal_bearing,
+        goal_bearing_lookahead_wps=goal_bearing_lookahead_wps,
     )
 
 
@@ -205,18 +209,19 @@ _ZERO_ACTION = np.array([0.0, 0.0], dtype=np.float32)
 # ---------------------------------------------------------------------------
 
 
-def test_observation_space_shape_and_dtype():
+def test_observation_space_is_13_scalars_by_default():
+    # Option 1: no goal-bearing scalar -> 13 base scalars.
     env = _make_env()
-    assert env.observation_space.shape == (14,)
+    assert env.observation_space.shape == (13,)
     assert env.observation_space.dtype == np.float32
-
-
-def test_observation_space_grows_to_14_scalars():
-    env = _make_env()
-    assert env.observation_space.shape == (14,)
     np.testing.assert_array_equal(env.observation_space.low[11:13], [-1.0, -1.0])
     np.testing.assert_array_equal(env.observation_space.high[11:13], [1.0, 1.0])
-    # obs[13] = goal_bearing_norm (v16), bounded [-1, 1]
+
+
+def test_observation_space_grows_to_14_with_goal_bearing():
+    # Option 2 / v18: use_goal_bearing appends goal_bearing_norm ∈ [-1, 1].
+    env = _make_env(use_goal_bearing=True)
+    assert env.observation_space.shape == (14,)
     assert env.observation_space.low[13] == pytest.approx(-1.0)
     assert env.observation_space.high[13] == pytest.approx(1.0)
 
@@ -256,7 +261,7 @@ def test_reset_returns_obs_and_empty_info():
 
 def test_reset_obs_shape_and_dtype():
     obs, _ = _make_env().reset()
-    assert obs.shape == (14,)
+    assert obs.shape == (13,)
     assert obs.dtype == np.float32
 
 
@@ -563,7 +568,7 @@ def test_step_returns_five_tuple_correct_types():
     env = _make_env()
     env.reset()
     obs, reward, terminated, truncated, info = env.step(_ZERO_ACTION)
-    assert obs.shape == (14,)
+    assert obs.shape == (13,)
     assert isinstance(reward, float)
     assert isinstance(terminated, bool)
     assert isinstance(truncated, bool)
@@ -1378,11 +1383,25 @@ def test_signed_bearing_norm_geometry():
     )
 
 
-def test_obs_includes_goal_bearing_at_index_13():
-    env = _make_env()
-    obs, _ = env.reset()
-    assert obs.shape == (14,)
-    assert -1.0 <= obs[13] <= 1.0
+def test_goal_bearing_appended_only_when_enabled():
+    # Default (Option 1): no bearing scalar. Enabled (Option 2): obs[13] present.
+    obs_off, _ = _make_env().reset()
+    assert obs_off.shape == (13,)
+    obs_on, _ = _make_env(use_goal_bearing=True).reset()
+    assert obs_on.shape == (14,)
+    assert -1.0 <= obs_on[13] <= 1.0
+
+
+def test_goal_bearing_lookahead_is_configurable():
+    # Option 2's "far" lookahead aims further along the route than v18's near one.
+    env_near = _make_env(use_goal_bearing=True, goal_bearing_lookahead_wps=3)
+    env_far = _make_env(use_goal_bearing=True, goal_bearing_lookahead_wps=12)
+    route = _straight_route(n=20, step=2.0)  # x = 0,2,...,38
+    for env, look in ((env_near, 3), (env_far, 12)):
+        env.route = route
+        env._route_idx = 0
+        _set_ego_location(env, 0.0, 0.0)
+        assert env._route_lookahead_target().x == pytest.approx(2.0 * look)
 
 
 # ---------------------------------------------------------------------------

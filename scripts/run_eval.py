@@ -130,6 +130,19 @@ def main() -> None:
         help="instead of the 13-scenario benchmark, record N continuous free-run "
         "episodes to demo_<model>.mp4 (fixed spawn, HUD overlay) — for slides/footage",
     )
+    parser.add_argument(
+        "--goal-bearing",
+        action="store_true",
+        help="append the bearing-to-goal obs scalar — must match how the model "
+        "was trained (Option 2 models; off for Option 1 discrete-command models)",
+    )
+    parser.add_argument(
+        "--goal-bearing-lookahead",
+        type=int,
+        default=3,
+        metavar="WPS",
+        help="route waypoints ahead the bearing aims at — must match training",
+    )
     args = parser.parse_args()
 
     model_path = Path(args.model)
@@ -181,6 +194,8 @@ def main() -> None:
             collision_sensor=col_sensor,
             max_episode_steps=500,
             use_ground_truth_lane=args.ground_truth_lane,
+            use_goal_bearing=args.goal_bearing,
+            goal_bearing_lookahead_wps=args.goal_bearing_lookahead,
         )
 
         # high-res demo camera

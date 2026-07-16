@@ -5,6 +5,14 @@ import math
 from src.tools.matplot_visualizer import MatplotVisualizer
 from src.interfaces.navigation_types import HighLevelCommand, Waypoint, Route
 
+# High-level command from the route's heading swing over the next
+# _COMMAND_LOOKAHEAD_WPS waypoints (~16 m at the 2 m route resolution): a real
+# junction turn swings the route heading past _COMMAND_TURN_DEG, a straight or
+# gently-curving road stays under it. Replaces the earlier steer-threshold
+# derivation, which stayed STRAIGHT even through junction turns.
+_COMMAND_LOOKAHEAD_WPS = 8
+_COMMAND_TURN_DEG = 25.0
+
 
 class Navigation:
 
@@ -219,14 +227,21 @@ class Navigation:
         if best_idx >= self.index_way:
             self.index_way = best_idx
 
-        target_idx = min(self.index_way + 1, len(route.waypoints) - 1)
-        target_wp = route.waypoints[target_idx]
-
-        dist_to_target = math.sqrt(dist2(vx, vy, vz, target_wp))
-        if dist_to_target < 1.5 and self.index_way < len(route.waypoints) - 1:
-            self.index_way = min(self.index_way + 1, len(route.waypoints) - 1)
-            target_idx = min(self.index_way + 1, len(route.waypoints) - 1)
-            target_wp = route.waypoints[target_idx]
-
-        control = self.get_control(target_wp)
-        return self.control_to_only_direction(control)
+        # High-level command from the route's heading change over the next
+        # ~16 m: a junction turn swings the route heading, a straight or gently
+        # curving road barely moves it. (CARLA yaw grows clockwise, so a
+        # positive swing = the route bends right.)
+        ahead_idx = min(
+            self.index_way + _COMMAND_LOOKAHEAD_WPS, len(route.waypoints) - 1
+        )
+        if ahead_idx <= self.index_way:
+            return HighLevelCommand.LANE_FOLLOW  # at/near the end of the route
+        delta = (
+            route.waypoints[ahead_idx].yaw_deg - route.waypoints[self.index_way].yaw_deg
+        )
+        delta = ((delta + 180.0) % 360.0) - 180.0  # wrap to [-180, 180]
+        if delta > _COMMAND_TURN_DEG:
+            return HighLevelCommand.RIGHT
+        if delta < -_COMMAND_TURN_DEG:
+            return HighLevelCommand.LEFT
+        return HighLevelCommand.STRAIGHT
