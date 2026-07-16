@@ -34,7 +34,7 @@ from src.navigation.navigation import Navigation
 from src.perception.pipeline import PerceptionPipeline
 from src.lane_detection.lane_perception import estimate as lane_estimate
 from src.ai.training.rl_env import CarlaEnv
-from src.ai.inference.rl_demo import load_model, eval_model
+from src.ai.inference.rl_demo import load_model, eval_model, record_episode
 
 # ---------------------------------------------------------------------------
 # CARLA helpers (same pattern as run_rl_training.py)
@@ -122,6 +122,14 @@ def main() -> None:
         help="feed lane offset / on-road from CARLA map geometry instead of the "
         "detector — must match how the model was trained (e.g. v15)",
     )
+    parser.add_argument(
+        "--demo",
+        type=int,
+        default=0,
+        metavar="N",
+        help="instead of the 13-scenario benchmark, record N continuous free-run "
+        "episodes to demo_<model>.mp4 (fixed spawn, HUD overlay) — for slides/footage",
+    )
     args = parser.parse_args()
 
     model_path = Path(args.model)
@@ -129,7 +137,8 @@ def main() -> None:
         print(f"Model not found: {model_path}")
         sys.exit(1)
 
-    output_path = str(model_path.parent / f"eval_{model_path.stem}.mp4")
+    prefix = "demo" if args.demo > 0 else "eval"
+    output_path = str(model_path.parent / f"{prefix}_{model_path.stem}.mp4")
     print(f"Model  : {model_path}")
     print(f"Output : {output_path}")
 
@@ -195,6 +204,28 @@ def main() -> None:
             world.tick()
 
         model = load_model(str(model_path))
+
+        # ── demo mode: continuous free-run footage, no benchmark ──────────
+        if args.demo > 0:
+            print(f"\nRecording {args.demo} continuous demo episode(s) …\n")
+            try:
+                record_episode(
+                    model,
+                    env,
+                    output_path=output_path,
+                    fps=20,
+                    max_steps=500,
+                    n_episodes=args.demo,
+                    render_fn=lambda: demo_frame[0],
+                    reset_seed=42,  # reproducible spawn/route across models
+                    spawn_idx=0,
+                )
+            finally:
+                demo_cam.stop()
+                demo_cam.destroy()
+            print(f"\nDemo video → {output_path}")
+            return  # outer `finally` restores async mode + destroys ego/sensors
+
         print(f"\nRunning 13-scenario benchmark …\n")
 
         try:
