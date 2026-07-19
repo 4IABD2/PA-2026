@@ -1451,3 +1451,74 @@ Objectif final : proposer le meilleur modèle. ~15 modèles évalués en déterm
 **TDD** : 4 tests `next_command` (droit→STRAIGHT, virage→LEFT/RIGHT, vide→LANE_FOLLOW) dans `test_navigation_smoke.py` ; tests d'obs adaptés (défaut 13, flag→14, lookahead configurable). **295 tests verts**.
 
 **Reste** : `--ground-truth-lane` gardé (on traitera la perception réelle de Karim plus tard). Prochaine étape : smoke, puis entraîner v21 (Option 1) + v22 (Option 2), 110k `--ground-truth-lane` chacun, éval déterministe, et **bilan comparatif v18 (near bearing) / v21 (discret) / v22 (far bearing)**.
+
+---
+
+## 2026-07-17 — Intégration 0 GT : les 4 modules branchés (détecteur réel de Karim)
+
+**Objectif requalifié (final soutenance)** : plus de vérité-terrain CARLA. Les 4 parties branchées (Victor `next_command` + Karim/Franck perception + policy RL), la voiture **roule droit + sait tourner** ; les collisions sont tolérées. On réentraîne v21 (Option 1) et v22 (Option 2) directement avec le **détecteur réel** (0 GT) et on garde le meilleur = livrable. Plus de piste GT.
+
+**Difficulté — reward écrasé à -186** : le détecteur YOLOPv2 de Karim renvoie `direction="NONE"` ~87 % du temps sur Town02 → chaque NONE était traité comme hors-piste → pénalité `r_offroad` ≈ -0.43/step, ~-154/épisode. La policy ne pouvait rien apprendre.
+**Tweak autorisé (`rl_env.py`, `bf5a205`)** : `is_on_road` **tient sa dernière valeur confiante** quand le détecteur ne voit rien (au lieu de forcer hors-piste), forcé à 1.0 dans les carrefours (map). Aucune vérité-terrain ajoutée — on ne fait que ne pas *punir* l'absence de détection. Reward @2048 steps : **-186 → -28**, puis apprentissage normal. 295 tests verts.
+
+**v21 (Option 1, discret, détecteur réel) — 1/8 déterministe.** Détail : `runs/2026-07-16_20-40_ppo_v21_discrete_real_110k/ANALYSIS.md`.
+- Entraînement propre (reward -28 → plateau -8/-12 dès ~32k ; commande discrète = signal grossier → monte vite puis stagne).
+- Éval : seul `curve_left` passe. **Biais de braquage gauche systématique** (`steer mean=-0.475` sur route droite) → la voiture dérive à gauche et crashe à ~12 m ; ne tourne pas à droite.
+- **Cause** : en Option 1 le seul signal continu de position serait le `lane_offset` du détecteur, trop peu fiable (NONE 87 %) → pas de retour de recentrage → biais par défaut appris. La commande de Victor marche bien (STRAIGHT/LEFT/RIGHT émis correctement) mais dit *quand* tourner, pas *combien* rester droit.
+
+**v22 (Option 2, bearing lointain, détecteur réel) — lancé** (`runs/2026-07-17_04-01_v22_farbearing_real_110k`, 110k, `--goal-bearing-lookahead 12`, 0 GT). Le bearing-to-goal donne une direction absolue indépendante de l'offset bruité → doit corriger exactement le biais/dérive de v21. C'est l'hypothèse à valider.
+
+**Note infra** : l'interpréteur qui a carla+sb3 est le **venv uv `.venv/Scripts/python.exe` (Python 3.10.9)**, pas le `python` système (Python310 sans carla). Toujours l'utiliser pour train/éval.
+
+**Prochaine étape** : éval déterministe de v22 → **bilan comparatif v21 (discret) vs v22 (bearing lointain), tous deux 0 GT** → choisir le gagnant = livrable des 4 modules branchés + démo continue. Un tweak supplémentaire autorisé (ex. correction du décalage caméra/offset) si le détecteur réel fait encore souffrir.
+
+---
+
+## 2026-07-17 (suite) — Résultats v22 + comparatif final : **v22 = livrable**
+
+**v22 entraîné** (~5,5 h GPU, vs 7 h CPU pour v21) : reward -10 → **+10 (positif)**, franchit le plateau de v21 (jamais > -7). Détail : `runs/2026-07-17_04-01_v22_farbearing_real_110k/ANALYSIS.md`.
+
+**Bug corrigé (replanification de route)** : l'auto-éval de fin d'entraînement a crashé (`IndexError` dans `_route_remaining_dist`, `rl_env.py:824`). Le benchmark replanifie `env.route` vers la destination du scénario (`rl_demo.py:1061`) **sans** reconstruire `_route_cum` → l'index débordait l'ancienne route (plus courte) **dès que l'ego roulait assez loin** — donc déclenché précisément parce que v22 conduit mieux que v21 (v21, trop passif, ne l'atteignait pas). Fix racine : `_route_remaining_dist` **reconstruit `_route_cum` s'il est périmé** (auto-réparation, tolère tout swap de route externe). `rem_norm` ne sert qu'au reward shaping (pas à l'observation) → **le fix ne change ni le comportement du policy ni le scoring**, il débloque juste l'éval. Test de régression ajouté, **117/117 verts, black OK. À commiter.**
+
+**Comparatif best-vs-best (0 GT, détecteur réel, checkpoints minés 77k/88k/99k/final)** :
+
+| | best Phase-1 | roule droit | tourne |
+|---|---|---|---|
+| v21 (discret) | model_final **1/8** | 12 m puis crash (biais gauche) | gauche seule |
+| **v22 (bearing)** | **88k 2/8** | model_final **40 m** | **gauche + droite**, 6/13 sans crash |
+
+v21 : tous les checkpoints ≤ 1/8, **biais gauche systémique** (pas de signal continu de position → braquage par défaut appris). v22 : le bearing donne une **direction absolue** indépendante de l'offset bruité → roule droit et tourne des deux côtés. **Limite 0-GT assumée** : conduite **décentrée** (offset 0.8-0.97) car le détecteur de Karim (NONE 87 %) ne fournit pas de recentrage fiable → n'atteint pas les destinations au mètre près (plafond 2/8, pas plus).
+
+**🏆 Livrable soutenance = v22** (Option 2, bearing lointain, 0 GT) : les 4 modules branchés (Victor `next_command` + Karim détecteur + Franck perception + policy RL). **88k** pour le meilleur score (2/8), **model_final** pour la meilleure démo « roule droit » (40 m). Démos free-run : `demo_model_final.mp4` + `demo_rl_model_88000_steps.mp4`. **Barre remplie** : roule droit + capable de tourner, sans vérité terrain.
+
+**Piste future (non faite, barre = décentrage toléré)** : tenir/lisser le `lane_offset` quand le détecteur renvoie NONE (comme le tweak `is_on_road`) → viserait le recentrage, mais demande un réentraînement ~7 h.
+
+---
+
+## 2026-07-18/19 — v23 : fallback « zone roulable » → **7/8, 0 crash — livrable final**
+
+Feu vert utilisateur : un jour d'amélioration « si le problème est flagrant », contrainte « la voiture roule droit, **sans trop toucher au code des autres** ».
+
+**Validation avant de coder** (sonde jetable, 400 frames Town02 sur v22) : détecteur lignes = NONE **93,8 %** ; offset dérivé du masque **drivable** de YOLOPv2 dispo **98,2 %** (et 98,1 % des frames NONE) ; corr(drivable, GT) = **-0,57** vs corr(lignes, GT) = -0,18. La GT n'a servi qu'à noter la sonde. → problème flagrant + fix viable, on y va.
+
+**Fix — 0 modification du code de Karim** : nouveau `src/ai/inference/lane_fusion.py` : `estimate_with_drivable()` appelle `LaneDetector.detect()` (API publique de Karim) et convertit le masque `drivable` qu'il produit déjà en offset latéral (centroïde horizontal pondéré de la bande basse de l'image, même convention de signe que son offset lignes). `rl_env._get_obs` accepte un 3- ou 4-tuple (rétrocompatible) et n'utilise le drivable **que** quand les lignes renvoient NONE — lignes prioritaires, hold inchangé en dernier recours. Les 3 scripts (train/eval/mockup) rebranchés sur la fusion. TDD : 6 tests lane_fusion + 4 tests rl_env (127/127 verts), smoke 2k bout-en-bout (5m49s, fps identique à v22 → perception GPU inchangée).
+
+**v23 (110k, 5h03, config v22 + fallback, 0 GT)** : reward -8 → **+62** (v22 : +8 au même stade), curriculum jusqu'à **70 m** (v22 : 38 m). Auto-éval 10 checkpoints **sans** l'IndexError de replan (le fix `_route_cum` auto-réparant validé en réel). **Best = 88k : 7/8 Phase-1, offset moyen 0,40, 0 crash sur les 13 scénarios** (v22 88k : 2/8, 0,74, crashe presque partout). 7/8 = les 5 scénarios « rouler proprement » + 2 des 3 destinations GPS (turn_right, junction_straight) ; seul échec turn_left (66 m sans crash, cible non atteinte). `model_final` 1/8 → sur-entraînement reconfirmé ; sweet-spot ~88k pour la 4e fois. Détail : `runs/2026-07-18_10-47_v23_drivable_real_110k/ANALYSIS.md`.
+
+**HUD vidéo corrigé** (`rl_demo.py`, demande utilisateur) : le panneau affichait 3 sorties (steer/throttle/brake) et 8 entrées sur 14, avec du français. Désormais : **« OBS (14 inputs) » complet** (+ goal bearing, speed limit, prev steer/accel) et **« ACTION (2 outputs) »** — steer + accel, thr/brk explicitement marqués *dérivés* du signe d'accel — tout en anglais ; la **minimap** (tracé de route + position ego, bas-gauche) est maintenant dessinée aussi dans le chemin démo, pas seulement au benchmark. 45/45 tests rl_demo verts.
+
+**Démos** : `demo_route_success.mp4` = parcours **156 m sans collision** (spawn 0 → 72, virages compris). **Limite honnête mesurée** : fiable jusqu'à ~150 m par trajet ; les routes de 490-673 m échouent toutes (dérive → collision/cale), un tour continu multi-legs atteint 180 m — cohérent avec le curriculum ≤ 70 m. Piste : réentraîner avec curriculum ~200 m si on veut des longs trajets.
+
+**🏆 Livrable final = v23 88k** (`best_model.zip`) : 4 modules branchés (Victor next_command + Karim détecteur + Franck perception + policy RL), **0 ground-truth**, roule droit + tourne des deux côtés, **7/8** — au-dessus du plafond historique *avec* GT (v18 : 3/8). Leaderboard 0-GT mis à jour. Reste : commit du lot (fix replan, lane_fusion, HUD, docs) après feu vert utilisateur.
+
+---
+
+## 2026-07-19 (suite) — Démos finales, test multi-maps, dossier de soutenance
+
+**Démo « destination atteinte »** : `demo_route_success.mp4` refaite proprement — rayon d'arrivée resserré à 5 m (démo uniquement ; le benchmark garde ses 15 m pour tous), la voiture roule les 156 m **jusqu'au point** (4,9 m), 0 collision, carton final « DESTINATION REACHED ». 3 tentatives nécessaires : la perception GPU est non-déterministe (variance de run confirmée) → l'enregistreur réessaie et ne garde qu'une arrivée vérifiée.
+
+**Test de généralisation multi-maps** (`demo_multi_map.mp4`, 1 parcours par ville, policy = Town02 uniquement) : sur trois villes jamais vues (Town01/03/05) la voiture roule **~200 m sans collision** ; Town04 (autoroutes) échoue vite ; protocole involontairement sévère (routes tirées à 280-630 m ≫ portée ~150 m). Enseignement : la perception neuronale généralise, la limite est la **portée** (curriculum ≤ 70 m), pas le visuel. Détail : addendum de `runs/2026-07-18_10-47_v23_drivable_real_110k/ANALYSIS.md`.
+
+**Dossier de soutenance** : création de **`src/ai/ANALYSE_FINALE.md`** — document de synthèse unique pour diapo + rapport (schéma du système, chiffres complets v23 et comparatifs, validation du fix drivable, inventaire des démos, limites assumées, scénario 7 slides « problème → fix », phrase-clé, réponse jury sur la GT). Plan de slides retenu : 7 versions (v10-13 fusionnées, v14, v15, v16, v17-18, v21-22, v23), chiffres affichés uniquement sur l'ère 0-GT.
+
+**Reste** : commit du lot complet (fix replan + lane_fusion + HUD/minimap + docs) — en attente du feu vert.
