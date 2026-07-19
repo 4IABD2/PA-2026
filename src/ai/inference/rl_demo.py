@@ -257,7 +257,10 @@ def _add_hud(frame: np.ndarray, info: dict) -> np.ndarray:
     left = f"Ep {ep} | Step {step}/{max_s}   {speed:.1f} km/h"
     throttle = max(action[1], 0.0)
     brake = max(-action[1], 0.0)
-    right = f"r={reward:+.2f} S={total_r:+.1f}  S={action[0]:+.2f} T={throttle:.2f} B={brake:.2f}"
+    right = (
+        f"r={reward:+.2f} sum={total_r:+.1f}  "
+        f"steer={action[0]:+.2f} accel={action[1]:+.2f} (T{throttle:.2f}/B{brake:.2f})"
+    )
     draw.text((4, h - 17), left, fill=(200, 200, 200))
     draw.text((w // 2, h - 17), right, fill=(200, 200, 200))
 
@@ -484,7 +487,7 @@ def _draw_obs_panel(
     if w <= 400:
         return
 
-    PW, PH = 215, 183
+    PW, PH = 230, 232
     PAD = 6
     x0 = w - PW - 6
     y0 = 18
@@ -511,29 +514,35 @@ def _draw_obs_panel(
     VAL = (210, 210, 210)  # value colour
     HDR = (170, 130, 60)  # section header colour
 
-    VAL_X = x0 + PAD + 88  # x position for value column
+    VAL_X = x0 + PAD + 96  # x position for value column
 
     on_road = obs[5] > 0.5
 
     rows = [
-        # (label, value_str, value_colour)
-        ("OBS SPACE", None, HDR),
+        # (label, value_str, value_colour). The model consumes 14 obs scalars and
+        # emits a 2-D action [steer, accel]; throttle/brake are DERIVED from accel's
+        # sign (max(accel,0) / max(-accel,0)), not separate network outputs.
+        (f"OBS  ({len(obs)} inputs)", None, HDR),
         ("speed", f"{obs[0] * 90:5.1f} km/h", VAL),
-        ("nav", nav_cmd, nav_col),
+        ("nav cmd", nav_cmd, nav_col),
+        ("goal bearing", f"{obs[13]:+.2f}" if len(obs) > 13 else "off", VAL),
         ("lane offset", f"{obs[4]:+.3f}", VAL),
         (
             "on road",
             "YES" if on_road else "NO",
             (60, 220, 80) if on_road else (60, 60, 220),
         ),
-        ("vehicle", f"{obs[6] * 50:5.1f} m", VAL),
-        ("red light", f"{obs[7] * 50:5.1f} m", VAL),
-        ("walker", f"{obs[9] * 50:5.1f} m", VAL),
-        ("stop/yield", f"{obs[10] * 50:5.1f} m", VAL),
-        ("ACTION", None, HDR),
+        ("vehicle", f"{obs[6] * 50:4.1f} m", VAL),
+        ("red light", f"{obs[7] * 50:4.1f} m", VAL),
+        ("speed limit", f"{obs[8] * 90:4.0f} km/h", VAL),
+        ("walker", f"{obs[9] * 50:4.1f} m", VAL),
+        ("stop/yield", f"{obs[10] * 50:4.1f} m", VAL),
+        ("prev steer", f"{obs[11]:+.2f}", VAL),
+        ("prev accel", f"{obs[12]:+.2f}", VAL),
+        ("ACTION  (2 outputs)", None, HDR),
         ("steer", f"{action[0]:+.3f}", VAL),
-        ("throttle", f"{max(action[1], 0.0):.3f}", VAL),
-        ("brake", f"{max(-action[1], 0.0):.3f}", VAL),
+        ("accel", f"{action[1]:+.3f}", VAL),
+        ("-> thr/brk", f"{max(action[1], 0.0):.2f} / {max(-action[1], 0.0):.2f}", LBL),
     ]
 
     y = y0 + 13
@@ -873,6 +882,9 @@ def _record_episodes(
         frame_bgr = cv2.cvtColor(_add_hud(frame, info), cv2.COLOR_RGB2BGR)
         _draw_bboxes(frame_bgr, getattr(env, "last_objects", []), cv2)
         _draw_obs_panel(frame_bgr, obs, [0.0, 0.0], cv2)
+        _draw_minimap(
+            frame_bgr, route, env.ego.get_transform().location, out_w, out_h, cv2
+        )
         for _ in range(pause_frames):
             writer.write(frame_bgr)
 
@@ -899,6 +911,9 @@ def _record_episodes(
             frame_bgr = cv2.cvtColor(_add_hud(frame, info), cv2.COLOR_RGB2BGR)
             _draw_bboxes(frame_bgr, getattr(env, "last_objects", []), cv2)
             _draw_obs_panel(frame_bgr, obs, action, cv2)
+            _draw_minimap(
+                frame_bgr, route, env.ego.get_transform().location, out_w, out_h, cv2
+            )
             writer.write(frame_bgr)
             if recorder is not None:
                 recorder.push(
