@@ -95,7 +95,7 @@ from src.dataset.encodings import CAMERA_LOCATION, CAMERA_ROTATION_PITCH
 from src.interfaces.navigation_types import HighLevelCommand, Route, Waypoint
 from src.navigation.navigation import Navigation
 from src.perception.pipeline import PerceptionPipeline
-from src.lane_detection.lane_perception import estimate as lane_estimate
+from src.ai.inference.lane_fusion import estimate_with_drivable as lane_estimate
 from src.ai.training.rl_env import (
     CarlaEnv,
     _OBS_LOW,
