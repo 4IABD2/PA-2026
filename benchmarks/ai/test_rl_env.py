@@ -112,7 +112,7 @@ def _make_env(
 
     # Karim's lane estimate mock
     direction = "ALIGNE" if on_road else "NONE"
-    lane_estimate_fn = Mock(return_value=(direction, lane_angle, lane_offset))
+    lane_estimate_fn = Mock(return_value=(direction, lane_angle, lane_offset, None))
 
     route = Route(waypoints=[], destination=Waypoint(0.0, 0.0, 0.0, 0.0))
 
@@ -168,7 +168,7 @@ def _make_spawn(distance_to_nearest: float) -> Mock:
     """A spawn-point Mock whose location reports a fixed nearest-actor distance,
     regardless of which actor is queried. Its (x, y, z) is set to a fixed point
     25m from the default (0, 0, 0) ego mock position (see _make_env()) — inside
-    the v14 curriculum window [18, 30] so _pick_random_destination() accepts it
+    the curriculum start window [18, 30] so _pick_random_destination() accepts it
     on the first draw, and its real ego_location.distance(candidate.location)
     call (see _add_real_distance()) succeeds with a genuine value instead of
     raising a TypeError that reset()'s broad except would otherwise silently
@@ -210,7 +210,7 @@ _ZERO_ACTION = np.array([0.0, 0.0], dtype=np.float32)
 
 
 def test_observation_space_is_13_scalars_by_default():
-    # Option 1: no goal-bearing scalar -> 13 base scalars.
+    # default: no goal-bearing scalar -> 13 base scalars.
     env = _make_env()
     assert env.observation_space.shape == (13,)
     assert env.observation_space.dtype == np.float32
@@ -219,7 +219,7 @@ def test_observation_space_is_13_scalars_by_default():
 
 
 def test_observation_space_grows_to_14_with_goal_bearing():
-    # Option 2 / v18: use_goal_bearing appends goal_bearing_norm ∈ [-1, 1].
+    # use_goal_bearing appends goal_bearing_norm ∈ [-1, 1].
     env = _make_env(use_goal_bearing=True)
     assert env.observation_space.shape == (14,)
     assert env.observation_space.low[13] == pytest.approx(-1.0)
@@ -528,8 +528,8 @@ def test_reset_picks_different_destination_across_differently_seeded_episodes():
 
 
 def test_pick_random_destination_skips_out_of_window_returns_in_window():
-    # v14 curriculum: a below-floor candidate is skipped in favour of one
-    # inside the [_CURRICULUM_MIN_FLOOR_M, curriculum_max] window.
+    # A below-floor candidate is skipped in favour of one inside the
+    # [_CURRICULUM_MIN_FLOOR_M, curriculum_max] window.
     env = _make_env()
     ego_loc = _add_real_distance(Mock(x=0.0, y=0.0, z=0.0))
     below = _make_spawn_at(5.0, 0.0)  # below the 18m floor -> out of window
@@ -656,7 +656,7 @@ def test_max_steps_truncates_episode():
 
 def test_reward_center_term_uses_lane_offset_when_centered():
     # Large heading angle but laterally centred → r_center at its max (0.3).
-    # Runs at 18 km/h: r_center is gated on motion since v16, so the car must be
+    # Runs at 18 km/h: r_center is gated on motion, so the car must be
     # moving for it to fire (speed_mps=5.0 → 18 km/h, under the 30 km/h limit so
     # no speeding penalty and r_safe still fires).
     env = _make_env(lane_angle=80.0, lane_offset=0.0, speed_mps=5.0)
@@ -670,7 +670,7 @@ def test_reward_center_term_uses_lane_offset_when_centered():
 
 def test_reward_center_term_uses_lane_offset_when_off_center():
     # Small heading angle but laterally off-centre → r_center penalised. Moving
-    # (18 km/h) so the v16 motion gate lets r_center fire.
+    # (18 km/h) so the motion gate lets r_center fire.
     env = _make_env(lane_angle=0.0, lane_offset=0.9, speed_mps=5.0)
     env.reset()
     _, reward, _, _, _ = env.step(_ZERO_ACTION)
@@ -731,14 +731,11 @@ def test_obs_lane_offset_clipped_to_bounds():
 
 def test_obs_lane_offset_holds_last_valid_reading_when_lane_lost():
     """If lane detection is lost (direction="NONE"), the last known valid
-    offset must be reused instead of resetting to lane_geometry()'s NO_LANE
-    default of 0.0 -- that 0.0 means "no measurement", not "centered", and
-    feeding it straight to the policy falsely signals "you are centered"
-    the instant the car leaves the road (runs/2026-07-12_00-45_ppo_v11_150k/
-    ANALYSIS.md, Constat #2)."""
+    offset must be reused instead of resetting to the NO_LANE default of 0.0 --
+    that 0.0 means "no measurement", not "centered"."""
     env = _make_env(lane_offset=0.7, on_road=True)
     env.reset()
-    env._lane_estimate.return_value = ("NONE", 0.0, 0.0)
+    env._lane_estimate.return_value = ("NONE", 0.0, 0.0, None)
     obs, *_ = env.step(_ZERO_ACTION)
     assert obs[4] == pytest.approx(0.7, abs=1e-4)
 
@@ -756,8 +753,8 @@ def test_obs_lane_offset_defaults_to_zero_before_any_detection():
 
 def test_obs_lane_offset_uses_drivable_fallback_when_lane_lost():
     """When the lane-line detector returns NONE but lane_fusion supplies a
-    drivable-area offset (optional 4th element), the policy gets that fresh
-    estimate instead of a stale held reading -- the v22 off-centre-driving fix."""
+    drivable-area offset (4th element), the policy gets that fresh estimate
+    instead of a stale held reading."""
     env = _make_env(lane_offset=0.7, on_road=True)
     env.reset()  # establishes a held offset of 0.7 from a detected frame
     env._lane_estimate.return_value = ("NONE", 0.0, 0.0, 0.3)  # NONE + drivable=0.3
@@ -766,8 +763,8 @@ def test_obs_lane_offset_uses_drivable_fallback_when_lane_lost():
 
 
 def test_obs_lane_offset_prefers_lane_lines_over_drivable_when_detected():
-    """When the lane-line detector DOES fire, its offset wins over the drivable
-    fallback -- Karim's geometry stays primary, drivable is only a NONE fallback."""
+    """When the lane-line detector DOES fire, its offset wins -- lane lines
+    stay primary, the drivable area is only a fallback."""
     env = _make_env()
     env.reset()
     env._lane_estimate.return_value = ("ALIGNE", 0.0, 0.6, 0.1)
@@ -800,17 +797,16 @@ def test_obs_is_on_road_when_aligned():
 
 
 def test_obs_is_on_road_held_when_detector_returns_none():
-    # Karim's YOLOPv2 returns direction="NONE" most of the time on Town02 even
-    # while on-road. Rather than falsely flag off-road (which swamped the reward
-    # with -0.5/step, run v21), obs[5] holds the last confident on-road value
-    # (starts on-road at spawn).
+    # The detector returns direction="NONE" most of the time on Town02 even
+    # while on-road. Rather than falsely flag off-road, obs[5] holds the last
+    # confident on-road value (starts on-road at spawn).
     env = _make_env(on_road=False)  # detector always NONE
     obs, _ = env.reset()
     assert obs[5] == pytest.approx(1.0)  # held on-road, not falsely off-road
 
 
 def test_obs_is_on_road_when_in_junction_without_lane_lines():
-    # Intersections have no lane markings, so Karim's lane detector reports
+    # Intersections have no lane markings, so the lane detector reports
     # direction="NONE" there. Being inside a CARLA junction must still count
     # as on-road so legitimately crossing an intersection isn't punished.
     env = _make_env(on_road=False)
@@ -1249,7 +1245,7 @@ def test_prev_steer_tracks_last_action_and_resets():
 
 
 def test_stall_counter_ramps_reward_across_consecutive_stalled_steps():
-    """Integration (v13 progressive stall): CarlaEnv counts consecutive
+    """Integration (progressive stall): CarlaEnv counts consecutive
     unjustified stall steps and threads them into compute_reward — the same
     stalled step must cost more after a long park than right after stopping.
     (First step is skipped in the comparison: it carries the one-off
@@ -1290,7 +1286,7 @@ def test_stall_counter_resets_on_episode_reset():
 
 
 # ---------------------------------------------------------------------------
-# Auto-curriculum on destination distance (v14)
+# Auto-curriculum on destination distance
 # ---------------------------------------------------------------------------
 
 
@@ -1427,7 +1423,7 @@ def test_signed_bearing_norm_geometry():
 
 
 def test_goal_bearing_appended_only_when_enabled():
-    # Default (Option 1): no bearing scalar. Enabled (Option 2): obs[13] present.
+    # Default: no bearing scalar. Enabled: obs[13] present.
     obs_off, _ = _make_env().reset()
     assert obs_off.shape == (13,)
     obs_on, _ = _make_env(use_goal_bearing=True).reset()
@@ -1436,7 +1432,7 @@ def test_goal_bearing_appended_only_when_enabled():
 
 
 def test_goal_bearing_lookahead_is_configurable():
-    # Option 2's "far" lookahead aims further along the route than v18's near one.
+    # A far lookahead aims further along the route than a near one.
     env_near = _make_env(use_goal_bearing=True, goal_bearing_lookahead_wps=3)
     env_far = _make_env(use_goal_bearing=True, goal_bearing_lookahead_wps=12)
     route = _straight_route(n=20, step=2.0)  # x = 0,2,...,38
@@ -1448,7 +1444,7 @@ def test_goal_bearing_lookahead_is_configurable():
 
 
 # ---------------------------------------------------------------------------
-# Route-aware guidance (v17): bearing + r_progress follow the planned route
+# Route-aware guidance: bearing + r_progress follow the planned route
 # ---------------------------------------------------------------------------
 
 
@@ -1564,8 +1560,8 @@ def test_reset_precomputes_route_total_with_real_route():
 
 
 def test_ground_truth_lane_flag_defaults_off():
-    """The v15 ground-truth-lane path must be opt-in — the default env keeps
-    feeding Karim's detector so production behaviour is unchanged."""
+    """The ground-truth-lane path must be opt-in — the default env keeps
+    feeding the real detector so production behaviour is unchanged."""
     env = _make_env()
     assert env._use_ground_truth_lane is False
 
@@ -1618,9 +1614,9 @@ def test_ground_truth_lane_off_road_when_unprojected_waypoint_is_none():
     assert on_road == 0.0
 
 
-def test_curriculum_constants_v14():
-    """Lock the v14 curriculum schedule on its exact values — a future retune
-    must be deliberate (same convention as test_stall_ramp_constants_v13)."""
+def test_curriculum_constants():
+    """Lock the curriculum schedule on its exact values — a future retune
+    must be deliberate."""
     from src.ai.training import rl_env
 
     assert rl_env._CURRICULUM_MIN_FLOOR_M == pytest.approx(18.0)
