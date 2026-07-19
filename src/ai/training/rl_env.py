@@ -458,14 +458,24 @@ class CarlaEnv(gym.Env):
         cmd_straight = 1.0 if cmd == HighLevelCommand.STRAIGHT else 0.0
 
         # Karim: lateral offset, on-road status (lane heading angle is not fed to the model)
-        direction, _angle, offset = self._lane_estimate(image)
+        lane_result = self._lane_estimate(image)
+        direction, _angle, offset = lane_result[0], lane_result[1], lane_result[2]
+        # Optional 4th element (lane_fusion.estimate_with_drivable): a lateral
+        # offset from YOLOPv2's drivable-area mask -- a fresh signal for the ~94%
+        # of Town02 frames where the lane-line detector returns NONE. None when
+        # unavailable or not wired in (backward-compatible with the 3-tuple API).
+        drivable_off = lane_result[3] if len(lane_result) > 3 else None
         if direction != "NONE":
             self._last_lane_offset_norm = float(np.clip(offset, -1.0, 1.0))
-        # else: lane_geometry() couldn't track both edges and returned its
-        # NO_LANE default (offset=0.0) -- that means "no measurement", not
-        # "centered", so hold the last real reading instead of feeding the
-        # policy a false "you're centered" signal the instant it loses the
-        # road (runs/2026-07-12_00-45_ppo_v11_150k/ANALYSIS.md, Constat #2).
+        elif drivable_off is not None:
+            # lane_geometry() couldn't track both edges (NO_LANE default
+            # offset=0.0 = "no measurement", not "centered"), but the drivable
+            # area gives a fresh lateral estimate -- use it instead of holding a
+            # stale reading (the v22 off-centre-driving fix; validated r=-0.57 vs
+            # GT, available 98% of NONE frames).
+            self._last_lane_offset_norm = float(np.clip(drivable_off, -1.0, 1.0))
+        # else: no measurement at all -- hold the last real reading rather than
+        # feed a false "you're centered" signal (v11 Constat #2).
         lane_offset_norm = self._last_lane_offset_norm
         if direction != "NONE":
             self._last_is_on_road = 1.0  # detector confidently on a lane
@@ -818,7 +828,15 @@ class CarlaEnv(gym.Env):
         when _route_total is not None (a real waypoint route exists).
         """
         wps = self.route.waypoints
-        i = min(self._route_idx, len(wps) - 1)
+        # The route can be swapped out mid-episode (the benchmark replans toward a
+        # scenario destination, rl_demo.py). Rebuild the cumulative arc-length table
+        # if it went stale, otherwise the index below runs past the old (shorter)
+        # route's end once the ego drives beyond it → IndexError.
+        if self._route_cum is None or len(self._route_cum) != len(wps):
+            self._compute_route_cumulative()
+            if self._route_total is None:
+                return 0.0
+        i = min(self._route_idx, len(self._route_cum) - 1)
         ego = self.ego.get_transform().location
         dist_to_wp = math.hypot(ego.x - wps[i].x, ego.y - wps[i].y)
         return dist_to_wp + (self._route_total - self._route_cum[i])

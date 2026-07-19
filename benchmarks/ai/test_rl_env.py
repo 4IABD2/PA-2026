@@ -754,6 +754,45 @@ def test_obs_lane_offset_defaults_to_zero_before_any_detection():
     assert obs[4] == pytest.approx(0.0)
 
 
+def test_obs_lane_offset_uses_drivable_fallback_when_lane_lost():
+    """When the lane-line detector returns NONE but lane_fusion supplies a
+    drivable-area offset (optional 4th element), the policy gets that fresh
+    estimate instead of a stale held reading -- the v22 off-centre-driving fix."""
+    env = _make_env(lane_offset=0.7, on_road=True)
+    env.reset()  # establishes a held offset of 0.7 from a detected frame
+    env._lane_estimate.return_value = ("NONE", 0.0, 0.0, 0.3)  # NONE + drivable=0.3
+    obs, *_ = env.step(_ZERO_ACTION)
+    assert obs[4] == pytest.approx(0.3, abs=1e-4)  # fresh drivable, not held 0.7
+
+
+def test_obs_lane_offset_prefers_lane_lines_over_drivable_when_detected():
+    """When the lane-line detector DOES fire, its offset wins over the drivable
+    fallback -- Karim's geometry stays primary, drivable is only a NONE fallback."""
+    env = _make_env()
+    env.reset()
+    env._lane_estimate.return_value = ("ALIGNE", 0.0, 0.6, 0.1)
+    obs, *_ = env.step(_ZERO_ACTION)
+    assert obs[4] == pytest.approx(0.6, abs=1e-4)
+
+
+def test_obs_lane_offset_holds_when_lost_and_no_drivable():
+    """NONE with no drivable estimate (4th element None) falls back to holding
+    the last valid reading, exactly as before the fusion existed."""
+    env = _make_env(lane_offset=0.7, on_road=True)
+    env.reset()
+    env._lane_estimate.return_value = ("NONE", 0.0, 0.0, None)
+    obs, *_ = env.step(_ZERO_ACTION)
+    assert obs[4] == pytest.approx(0.7, abs=1e-4)
+
+
+def test_obs_lane_offset_drivable_fallback_clipped():
+    env = _make_env(on_road=True)
+    env.reset()
+    env._lane_estimate.return_value = ("NONE", 0.0, 0.0, 1.8)
+    obs, *_ = env.step(_ZERO_ACTION)
+    assert obs[4] == pytest.approx(1.0)
+
+
 def test_obs_is_on_road_when_aligned():
     env = _make_env(on_road=True)
     obs, _ = env.reset()
@@ -1495,6 +1534,25 @@ def test_route_remaining_survives_a_curve_that_straight_line_would_punish():
     assert rem0 == pytest.approx(20.0)
     assert rem1 == pytest.approx(10.0)
     assert rem1 < rem0  # kept decreasing despite the corner
+
+
+def test_route_remaining_survives_route_replanned_to_longer_route():
+    # The benchmark swaps env.route mid-episode (replan toward a scenario
+    # destination, rl_demo.py) without recomputing _route_cum. If the new route
+    # is longer and the ego drives past the old route's end, _route_remaining_dist
+    # used to IndexError on the stale (shorter) cumulative table. It must self-heal
+    # by rebuilding the table rather than crash.
+    env = _make_env()
+    env.route = _straight_route(n=4, step=2.0)  # short: cum has 4 entries
+    env._compute_route_cumulative()
+    env.route = _straight_route(
+        n=10, step=2.0
+    )  # replanned longer route, cum left stale
+    env._route_idx = 8  # index past the old 4-entry cum → would IndexError
+    _set_ego_location(env, 16.0, 0.0)  # on waypoint 8 (x=16)
+    rem = env._route_remaining_dist()  # must not raise
+    assert rem == pytest.approx(2.0)  # one 2 m segment (18 m total − 16 m) left
+    assert env._route_cum is not None and len(env._route_cum) == 10  # rebuilt
 
 
 def test_reset_precomputes_route_total_with_real_route():
