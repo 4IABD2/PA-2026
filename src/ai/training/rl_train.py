@@ -24,38 +24,20 @@ _PPO_DEFAULTS: dict = dict(
     gamma=0.99,
     gae_lambda=0.95,
     clip_range=0.2,
-    ent_coef=0.05,  # raised again from 0.02 -- v9 and v10 both showed the policy
-    # collapsing to action-space extremes (steer/accel saturated at -1/+1, never
-    # intermediate values) despite different reward functions; still not a derived
-    # optimum, revisit if v11 shows the same collapse
+    ent_coef=0.05,  # high enough that exploration does not collapse to the
+    # action-space extremes (steer/accel stuck at -1/+1)
     use_sde=True,  # generalized State-Dependent Exploration: temporally-correlated
-    # exploration noise instead of independent-per-step Gaussian noise, SB3's
-    # standard mechanism for smoother continuous-control exploration -- targets
-    # the same collapse-to-extremes symptom directly (see JOURNAL.md for the
-    # v9/v10 comparison that motivated this)
+    # noise instead of per-step Gaussian noise, smoother for continuous control
     sde_sample_freq=4,  # resample exploration noise every 4 steps rather than
-    # once per rollout (SB3 default -1) -- a common starting value for
-    # continuous-control tasks, not a derived optimum
+    # once per rollout
     policy_kwargs=dict(
         # bigger obs space and task need more capacity than [64, 64]
         net_arch=[128, 128],
-        squash_output=True,  # v9..v12 all collapsed deterministic steer to a
-        # saturated +/-1.0 regardless of reward, seed or exploration changes.
-        # With plain clipping the Gaussian mean can drift past the action
-        # bounds, where the clip gradient is zero and saturation self-sustains;
-        # tanh-squashing keeps the mean finite and the gradient informative
-        # near the bounds. SB3 only supports it together with gSDE (use_sde
-        # above), which is already on since v11.
+        squash_output=True,  # tanh-squash the action mean: with plain clipping
+        # it can drift past the bounds where the gradient is zero and the
+        # saturation self-sustains. Only supported by SB3 together with gSDE.
     ),
-    seed=7,  # changed from 42 (frozen since v1) -- v10 (no gSDE) collapsed to
-    # full-left steer, v11 (gSDE) collapsed to full-right steer, both on the
-    # same frozen seed with different exploration mechanisms. v12's isolated
-    # seed diagnostic: check whether the collapse itself, or just its
-    # direction, is seed-driven (runs/2026-07-12_00-45_ppo_v11_150k/
-    # ANALYSIS.md, "Pistes pour la suite" #2). Environment-level seeding
-    # (scripts/run_rl_training.py's random.seed/np.random.seed/
-    # set_random_device_seed) stays at 42 -- this is the only changed
-    # variable between v11 and v12.
+    seed=7,  # fixed for reproducibility (environment-level seeding stays at 42)
     verbose=1,
     device="cpu",  # MlpPolicy trains faster on CPU than GPU
 )

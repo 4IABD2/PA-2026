@@ -519,9 +519,8 @@ def _draw_obs_panel(
     on_road = obs[5] > 0.5
 
     rows = [
-        # (label, value_str, value_colour). The model consumes 14 obs scalars and
-        # emits a 2-D action [steer, accel]; throttle/brake are DERIVED from accel's
-        # sign (max(accel,0) / max(-accel,0)), not separate network outputs.
+        # (label, value_str, value_colour). The action is [steer, accel];
+        # throttle/brake are derived from accel's sign, not network outputs.
         (f"OBS  ({len(obs)} inputs)", None, HDR),
         ("speed", f"{obs[0] * 90:5.1f} km/h", VAL),
         ("nav cmd", nav_cmd, nav_col),
@@ -1429,15 +1428,12 @@ def pick_best_checkpoint(all_results: dict[str, dict[str, dict]]) -> str:
     """Returns the all_results key (checkpoint label) with the best real
     benchmark score: highest Phase 1 success count, tie-broken by highest
     mean max_dist_from_start, then by lowest mean off_route_pct across all
-    scenarios. EvalCallback's own training-time pick (3 noisy eval episodes)
-    is not trustworthy on its own -- see ppo_v6.3_300k's evals/results.json
-    for a real-world case where it picked the worst checkpoint by
-    off_route_pct.
+    scenarios. EvalCallback's own training-time pick (a few noisy eval
+    episodes) is not trustworthy on its own.
 
-    Distance ranks above off-route since ppo_v12_150k: with zero successes on
-    every checkpoint, the old off_route-first tie-break crowned a parked
-    policy (a car that never moves is never off-route by construction, so
-    0105k at 2 km/h mean speed beat checkpoints that actually drove).
+    Distance ranks above off-route: with zero successes on every checkpoint,
+    an off_route-first tie-break would crown a parked policy (a car that
+    never moves is never off-route by construction).
     """
 
     def _score(scenarios: dict[str, dict]) -> tuple[int, float, float]:

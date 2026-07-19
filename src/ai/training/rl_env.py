@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 #         prev_steer_norm, prev_accel_norm]
 # 13 base scalars. A 14th, goal_bearing_norm ∈ [-1,1], is appended only when
 # CarlaEnv(use_goal_bearing=True) -- otherwise the policy navigates on the
-# discrete high-level command obs[1..3] + perception (Option 1).
+# discrete high-level command obs[1..3] + perception.
 _OBS_LOW = np.array(
     [0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0],
     dtype=np.float32,
@@ -40,11 +40,10 @@ _MAX_SPEED_KMH = 90.0
 _MAX_OBSTACLE_M = 50.0
 _WARMUP_TICKS = 5  # ticks after teleport so physics settles and sensors fill
 _OFF_ROUTE_M = 15.0  # metres from nearest route waypoint before off_route penalty fires
-_PROGRESS_GAMMA = 0.99  # must match PPO's own gamma (src/ai/training/rl_train.py's
-# _PPO_DEFAULTS) for the potential-based shaping's policy-invariance guarantee to hold
-_ROUTE_LOOKAHEAD_WPS = 3  # waypoints ahead of the nearest one that the bearing-to-goal
-# obs aims at (~6 m at the A* 2 m resolution) -- a pure-pursuit lookahead so the policy
-# steers ALONG the planned route, not straight at the crow-flies destination (v17)
+_PROGRESS_GAMMA = 0.99  # must match PPO's gamma so the shaping stays policy-invariant
+_ROUTE_LOOKAHEAD_WPS = 3  # waypoints ahead that the bearing obs aims at (~6 m at the
+# A* 2 m resolution), so the policy steers along the planned route, not straight
+# at the crow-flies destination
 _ROUTE_GRACE_STEPS = (
     20  # steps after reset where off-route is not penalised (car joins route)
 )
@@ -63,26 +62,14 @@ _DEST_PICK_MAX_ATTEMPTS = (
 
 _DEST_REACHED_RADIUS_M = 15.0  # matches _OFF_ROUTE_M's "close enough" scale
 _MIN_TRAVEL_FOR_DEST_M = (
-    12.0  # must-have-actually-driven gate. Lowered 25->12 for the v14 auto-curriculum:
-    # with near destinations (start window [18, 30] m) and a 15 m success radius,
-    # a 25 m travel gate was unreachable (a car entering the radius of an 18-30 m
-    # destination has driven far less than 25 m), so no near destination could
-    # ever count as reached. 12 m still forbids collecting the +10 bonus while
-    # merely drifting a few metres. Intentionally looser than benchmark.py's
-    # _MIN_DIST_M for now -- training-time signal, not the benchmark criterion.
+    12.0  # minimum distance actually driven before the arrival bonus can count
+    # (blocks collecting the +10 by spawning right next to the destination)
 )
 
-# --- Auto-curriculum on destination distance (v14) ------------------------
-# ppo_v9..v13 never reached a single destination in *training* (0 across every
-# run), so PPO never once saw the +10 terminal bonus -- it learned only to avoid
-# the worst outcomes, never that arriving is possible. The fix: start
-# destinations near (so the bonus is reachable and can bootstrap the value
-# function) and grow the distance only as the policy earns success. Not a
-# derived schedule; revisit the constants once a run actually reaches
-# destinations.
-_CURRICULUM_MIN_FLOOR_M = 18.0  # destinations never closer than this (with the
-# 15 m success radius + 12 m travel gate, the nearest still needs ~12 m of
-# directed driving -- a real "drive to it", not a drift-in-place win)
+# --- Auto-curriculum on destination distance ------------------------------
+# Destinations start near, so the arrival bonus is reachable early, and move
+# further away as the policy starts succeeding.
+_CURRICULUM_MIN_FLOOR_M = 18.0  # destinations never closer than this
 _CURRICULUM_START_MAX_M = 30.0  # initial upper bound (matches the old fixed floor)
 _CURRICULUM_STEP_M = 8.0  # upper bound grows by this much per advance
 _CURRICULUM_CEILING_M = 70.0  # upper bound stops growing here
@@ -188,7 +175,9 @@ class CarlaEnv(gym.Env):
         nav: "Navigation",
         route: Route,
         perception: "PerceptionPipeline",
-        lane_estimate_fn: Callable[[np.ndarray], tuple[str, float, float]],
+        lane_estimate_fn: Callable[
+            [np.ndarray], tuple[str, float, float, float | None]
+        ],
         camera: "carla.Sensor",
         collision_sensor: "carla.Sensor",
         max_episode_steps: int = 1000,
@@ -200,14 +189,12 @@ class CarlaEnv(gym.Env):
         self.world = world
         self.ego = ego_vehicle
         self.nav = nav
-        # v15 diagnostic: when True, obs[4]/obs[5] (lane offset, on-road) come
-        # from CARLA's map geometry instead of Karim's detector -- isolates
-        # perception quality as the bottleneck. Default False = production path.
+        # Diagnostic mode: when True, obs[4]/obs[5] (lane offset, on-road) come
+        # from CARLA's map geometry instead of the detector. Default False.
         self._use_ground_truth_lane = use_ground_truth_lane
-        # Navigation input: with use_goal_bearing=False the policy steers on the
-        # discrete high-level command obs[1..3] (Option 1); True appends a
-        # continuous bearing scalar aimed goal_bearing_lookahead_wps waypoints
-        # ahead (small = precise/near-oracle like v18, large = coarse heading).
+        # With use_goal_bearing=False the policy steers on the discrete
+        # high-level command obs[1..3]; True appends a continuous bearing scalar
+        # aimed goal_bearing_lookahead_wps waypoints ahead.
         self._use_goal_bearing = use_goal_bearing
         self._goal_bearing_lookahead_wps = goal_bearing_lookahead_wps
         self.route = route
@@ -239,10 +226,10 @@ class CarlaEnv(gym.Env):
         self._prev_accel: float = 0.0
         self._dist_to_dest_initial: float = 1.0
         self._prev_dist_to_dest_norm: float = 1.0
-        # Route-aware progress shaping (v17): cumulative arc-length along the
-        # planned waypoints, total route length, and the last normalised
-        # remaining-along-route. _route_total is None when there is no waypoint
-        # route (unit-test mocks), which falls back to straight-line shaping.
+        # Progress shaping along the route: cumulative arc-length of the planned
+        # waypoints, total route length, and the last normalised remaining.
+        # _route_total is None when there is no waypoint route, which falls
+        # back to straight-line shaping.
         self._route_cum: list | None = None
         self._route_total: float | None = None
         self._prev_route_progress_norm: float = 1.0
@@ -307,9 +294,8 @@ class CarlaEnv(gym.Env):
         self._prev_dist_to_dest_norm = (
             dist0 / self._dist_to_dest_initial if dist0 is not None else 1.0
         )
-        # Route-aware progress (v17): reset the sliding index, precompute the
-        # arc-length table, and seed the previous normalised remaining (~1.0 at
-        # the start of the route).
+        # Reset the route-progress state: sliding index, arc-length table, and
+        # the previous normalised remaining (~1.0 at the start of the route).
         self._route_idx = 0
         self._compute_route_cumulative()
         self._prev_route_progress_norm = (
@@ -380,9 +366,9 @@ class CarlaEnv(gym.Env):
             else 1.0
         )
 
-        # r_progress shaping: measured ALONG the route when a waypoint route
-        # exists (v17 -- straight-line shaping went negative when correctly
-        # rounding a curve, punishing good navigation), else straight-line.
+        # r_progress shaping: measured along the route when a waypoint route
+        # exists (straight-line distance would punish correctly rounding a
+        # curve), else straight-line.
         if self._route_total is not None:
             rem_norm = self._route_remaining_dist() / self._route_total
             progress_delta = _PROGRESS_GAMMA * (-rem_norm) - (
@@ -458,44 +444,30 @@ class CarlaEnv(gym.Env):
         cmd_straight = 1.0 if cmd == HighLevelCommand.STRAIGHT else 0.0
 
         # Karim: lateral offset, on-road status (lane heading angle is not fed to the model)
-        lane_result = self._lane_estimate(image)
-        direction, _angle, offset = lane_result[0], lane_result[1], lane_result[2]
-        # Optional 4th element (lane_fusion.estimate_with_drivable): a lateral
-        # offset from YOLOPv2's drivable-area mask -- a fresh signal for the ~94%
-        # of Town02 frames where the lane-line detector returns NONE. None when
-        # unavailable or not wired in (backward-compatible with the 3-tuple API).
-        drivable_off = lane_result[3] if len(lane_result) > 3 else None
+        direction, _angle, offset, drivable_off = self._lane_estimate(image)
         if direction != "NONE":
             self._last_lane_offset_norm = float(np.clip(offset, -1.0, 1.0))
         elif drivable_off is not None:
-            # lane_geometry() couldn't track both edges (NO_LANE default
-            # offset=0.0 = "no measurement", not "centered"), but the drivable
-            # area gives a fresh lateral estimate -- use it instead of holding a
-            # stale reading (the v22 off-centre-driving fix; validated r=-0.57 vs
-            # GT, available 98% of NONE frames).
+            # no lane lines found: fall back to the drivable-area offset, a
+            # fresh reading instead of a stale held one
             self._last_lane_offset_norm = float(np.clip(drivable_off, -1.0, 1.0))
-        # else: no measurement at all -- hold the last real reading rather than
-        # feed a false "you're centered" signal (v11 Constat #2).
+        # else: no measurement at all -- keep the last real reading (an offset
+        # of 0.0 would falsely mean "centered")
         lane_offset_norm = self._last_lane_offset_norm
         if direction != "NONE":
             self._last_is_on_road = 1.0  # detector confidently on a lane
-        # Karim's YOLOPv2 returns NONE most of the time on Town02 (few visible
-        # markings) even while on-road; treating every NONE as off-road swamped
-        # the reward with false -0.5/step penalties (~87 % of steps, run v21).
-        # Hold the last confident on-road reading instead (symmetric with the
-        # offset hold above); a junction has no markings so also counts as on-road.
+        # The detector often returns NONE while still on the road (few painted
+        # markings), so hold the last confident on-road reading; junctions have
+        # no markings at all and count as on-road.
         wp = self.world.get_map().get_waypoint(self.ego.get_transform().location)
         is_on_road = (
             1.0 if (wp is not None and wp.is_junction) else self._last_is_on_road
         )
 
         if self._use_ground_truth_lane:
-            # v15 diagnostic: overwrite the two perception-derived scalars with
-            # ground truth from CARLA's map. Tests whether the ~70%-off-road
-            # behaviour (even in v14's *successful* episodes) is the policy being
-            # fed unreliable lateral position vs a real control ceiling. Ground
-            # truth is unavailable on a real car -- this localises the bottleneck,
-            # it is not a shippable observation.
+            # Diagnostic mode: overwrite the two perception-derived scalars with
+            # ground truth from CARLA's map, to isolate perception quality from
+            # control quality. Not available on a real car.
             lane_offset_norm, is_on_road = self._ground_truth_lane(wp)
             self._last_lane_offset_norm = lane_offset_norm
 
@@ -553,12 +525,10 @@ class CarlaEnv(gym.Env):
             self._prev_steer,
             self._prev_accel,
         ]
-        # Optional obs[13]: continuous signed heading error to the route
-        # lookahead waypoint (bearing-to-goal). Off by default -- the policy then
-        # navigates on the discrete high-level command (obs[1..3]) + perception
-        # (Option 1). When on, the lookahead distance controls how "precise" the
-        # signal is: near (v18) = near-oracle steering; far (Option 2) = general
-        # heading only. Aims at a route waypoint, never the crow-flies goal.
+        # Optional obs[13]: signed heading error to the route lookahead waypoint
+        # (bearing-to-goal). Off by default. The lookahead distance controls how
+        # precise the signal is (near = detailed steering hint, far = general
+        # heading only). Aims at a route waypoint, never the crow-flies goal.
         if self._use_goal_bearing:
             target = self._route_lookahead_target()
             obs.append(
@@ -614,7 +584,7 @@ class CarlaEnv(gym.Env):
 
     def _ground_truth_lane(self, wp) -> tuple[float, float]:
         """Ground-truth (lane_offset_norm, is_on_road) from CARLA's map, for the
-        v15 diagnostic. `wp` is the nearest driving-lane waypoint (projected, as
+        diagnostic mode. `wp` is the nearest driving-lane waypoint (projected, as
         already fetched in _get_obs). Offset is the signed perpendicular distance
         from the ego to that lane's centre, normalised by the lane half-width;
         is_on_road is whether the ego actually sits on a driving lane (an
@@ -828,10 +798,8 @@ class CarlaEnv(gym.Env):
         when _route_total is not None (a real waypoint route exists).
         """
         wps = self.route.waypoints
-        # The route can be swapped out mid-episode (the benchmark replans toward a
-        # scenario destination, rl_demo.py). Rebuild the cumulative arc-length table
-        # if it went stale, otherwise the index below runs past the old (shorter)
-        # route's end once the ego drives beyond it → IndexError.
+        # The route can be replanned mid-episode (benchmark scenarios), so
+        # rebuild the arc-length table if it no longer matches the waypoints.
         if self._route_cum is None or len(self._route_cum) != len(wps):
             self._compute_route_cumulative()
             if self._route_total is None:

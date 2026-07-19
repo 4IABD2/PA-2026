@@ -332,14 +332,14 @@ def main() -> None:
     parser.add_argument(
         "--ground-truth-lane",
         action="store_true",
-        help="v15 diagnostic: feed lane offset / on-road from CARLA map geometry "
+        help="diagnostic: feed lane offset / on-road from CARLA map geometry "
         "instead of Karim's detector, to isolate perception as the bottleneck",
     )
     parser.add_argument(
         "--goal-bearing",
         action="store_true",
         help="append a continuous bearing-to-goal scalar to the observation "
-        "(Option 2). Off = navigate on the discrete high-level command (Option 1)",
+        "Off = navigate on the discrete high-level command only",
     )
     parser.add_argument(
         "--goal-bearing-lookahead",
@@ -347,7 +347,7 @@ def main() -> None:
         default=3,
         metavar="WPS",
         help="route waypoints ahead the bearing aims at (~2 m each): 3=near/precise "
-        "(v18), 12=far/coarse heading (Option 2). Only used with --goal-bearing",
+        "12=far/coarse heading. Only used with --goal-bearing",
     )
     args = parser.parse_args()
 
@@ -603,7 +603,7 @@ def main() -> None:
 
                     # Pick the real winner from the full benchmark above (raw training
                     # reward, which an EvalCallback-style pick would rely on, was shown
-                    # not to track real quality -- see JOURNAL.md, ppo_v6.3_300k).
+                    # not to track real quality).
                     if not all_results:
                         raise RuntimeError(
                             "No checkpoints were saved during training -- nothing to "

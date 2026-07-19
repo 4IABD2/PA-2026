@@ -572,7 +572,7 @@ def test_pick_best_checkpoint_all_phase2_falls_back_to_off_route_pct():
 
 
 def test_pick_best_checkpoint_zero_successes_prefers_distance_driven():
-    """ppo_v12_150k regression: with zero successes everywhere, the old
+    """Regression: with zero successes everywhere, the old
     off_route-first tie-break crowned a parked policy — a car that never
     moves is never off-route by construction. Distance driven must rank
     above off-route."""
