@@ -125,7 +125,7 @@ def test_r_speed_no_longer_a_component():
 
 def test_centering_reward_maximal_at_center():
     """An offset of 0 must give more reward than an offset of 1 — while moving
-    (r_center is gated on speed >= 1 km/h since v16)."""
+    (r_center is gated on speed >= 1 km/h)."""
     reward_center, _, _ = compute_reward(
         speed_kmh=30.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -138,7 +138,7 @@ def test_centering_reward_maximal_at_center():
 def test_alive_bonus_always_present():
     """The survival bonus must be present every non-terminal step, including
     when stopped (the total may still be negative once the stall penalty
-    applies — see test_r_center_gated_on_motion for the v16 anti-passivity gate)."""
+    applies — see test_r_center_gated_on_motion for the anti-passivity gate)."""
     _, done, components = compute_reward(
         speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -147,9 +147,9 @@ def test_alive_bonus_always_present():
 
 
 def test_r_center_gated_on_motion():
-    """v16: a stationary centred car must NOT bank r_center — that was the
-    passive local optimum v15's eval exposed (sit still on-road, collect
-    r_center+r_alive). It fires only while moving."""
+    """A stationary centred car must NOT bank r_center — sitting still on-road
+    to collect r_center+r_alive was a passive local optimum. It fires only
+    while moving."""
     _, _, stopped = compute_reward(
         speed_kmh=0.0, center_offset=0.0, is_on_road=True, collision=False
     )
@@ -172,7 +172,7 @@ def test_reward_components_sum_at_max():
     assert reward == pytest.approx(0.3 + 0.05 + 0.05)
 
 
-def test_reward_weights_updated_for_v11():
+def test_reward_weights():
     from src.ai.rewards.reward_fn import _W_ALIVE, _W_PROGRESS
 
     assert _W_ALIVE == pytest.approx(0.05)
@@ -261,7 +261,7 @@ def test_stall_penalised_when_red_light_far_away():
 
 
 def test_stall_penalty_ramps_with_consecutive_stall_steps():
-    """v13: a policy that *parks* must pay a rising per-step rate — at
+    """A policy that *parks* must pay a rising per-step rate — at
     stall_steps=100 (5 s at 20 fps) the -0.20 base costs 1.5x."""
     _, _, components = compute_reward(
         speed_kmh=0.0,
@@ -276,7 +276,7 @@ def test_stall_penalty_ramps_with_consecutive_stall_steps():
 def test_stall_penalty_caps_at_max_factor():
     """The ramp is bounded at 2x (-0.40/step): parking must stay clearly
     worse than driving without making an immediate crash the cheaper escape
-    again (the pathology v12's collision scaling just fixed)."""
+    again (a pathology the collision scaling fixed)."""
     _, _, components = compute_reward(
         speed_kmh=0.0,
         center_offset=0.0,
@@ -301,10 +301,10 @@ def test_stall_ramp_ignored_on_legitimate_stop():
     assert components["r_stall"] == 0.0
 
 
-def test_stall_ramp_constants_v13():
-    """Locks the v13 ramp constants on their exact values — a future retune
+def test_stall_ramp_constants():
+    """Locks the ramp constants on their exact values — a future retune
     must be deliberate, not a silent drive-by (same convention as
-    test_reward_weights_updated_for_v11)."""
+    test_reward_weights)."""
     from src.ai.rewards.reward_fn import _STALL_RAMP_STEPS, _STALL_MAX_FACTOR
 
     assert _STALL_RAMP_STEPS == 200

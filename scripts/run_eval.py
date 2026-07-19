@@ -120,7 +120,7 @@ def main() -> None:
         "--ground-truth-lane",
         action="store_true",
         help="feed lane offset / on-road from CARLA map geometry instead of the "
-        "detector — must match how the model was trained (e.g. v15)",
+        "detector — must match how the model was trained",
     )
     parser.add_argument(
         "--demo",
@@ -134,7 +134,7 @@ def main() -> None:
         "--goal-bearing",
         action="store_true",
         help="append the bearing-to-goal obs scalar — must match how the model "
-        "was trained (Option 2 models; off for Option 1 discrete-command models)",
+        "was trained",
     )
     parser.add_argument(
         "--goal-bearing-lookahead",
