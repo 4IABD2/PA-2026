@@ -12,16 +12,12 @@ class OnnxActorWrapper(torch.nn.Module):
         self.policy = policy
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        # Extract features in an export-friendly way
         features = self.policy.extract_features(obs)
         if isinstance(features, tuple):
             features = features[0]
 
         latent_pi, _ = self.policy.mlp_extractor(features)
         mean_actions = self.policy.action_net(latent_pi)
-
-        # If the policy uses action squashing, keep the output in action range.
-        # For your env this is steer/accel = 2 floats.
         return torch.tanh(mean_actions)
 
 
@@ -56,7 +52,7 @@ def main(model_path: str, output_path: str | None = None) -> None:
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         raise SystemExit(
-            "Usage: python scripts/torch_to_onnx.py <model_path> [output_path]"
+            "Usage: python scripts/export_model_to_onnx.py <model_path> [output_path]"
         )
     model_path = sys.argv[1]
     output_path = sys.argv[2] if len(sys.argv) > 2 else None

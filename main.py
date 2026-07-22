@@ -10,7 +10,7 @@ from perception.pipeline import PerceptionPipeline
 sys.path.insert(0, "web/client/build_py")
 import client_bindings
 
-from scripts.demo_mockup import (
+from scripts.carla_helpers import (
     _setup_sync,
     _spawn_sensor,
     _CAM_W,

@@ -75,14 +75,9 @@ Le code consommateur (fusion avec YOLO) suppose ce format.
 - Inference < 100 ms par image sur GPU, < 500 ms sur CPU
 - Erreur RMSE < 5m sur scènes CARLA (à valider)
 
-## Validation et benchmarks
+## Validation
 
-Dans [benchmarks/perception/depth/](../../../benchmarks/perception/depth/) :
-
-- **`smoke.py`** : vérifier le protocole `DepthEstimator`, les dimensions et le dtype de la sortie, que les valeurs sont positives et bornées
-- **`benchmark.py`** : RMSE / MAE / AbsRel contre la depth GT CARLA, latence par image
-
-Voir [benchmarks/README.md](../../../benchmarks/README.md) pour la convention.
+La calibration (`calibrate.py`) affiche le RMSE contre la depth GT CARLA au moment du fit. La validation fonctionnelle passe par l'intégration réelle (distances affichées dans les démos, cohérentes avec la scène).
 
 ## Liens
 

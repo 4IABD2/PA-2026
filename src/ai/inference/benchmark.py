@@ -1,12 +1,4 @@
-"""Benchmark scenario suite — 13 fixed scenarios for the final demo video.
-
-These scenarios do not change until the final project presentation.
-Phase 1 scenarios are evaluated (success_fn).
-Phase 2 scenarios are recorded as-is — model is not expected to react yet.
-
-After running scripts/explore_spawns.py --host <ip>, copy the printed
-spawn_idx values into the BENCHMARK_SCENARIOS list below.
-"""
+"""Benchmark scenario suite — 13 fixed scenarios for the final demo video."""
 
 from __future__ import annotations
 
@@ -16,13 +8,9 @@ import numpy as np
 
 from src.ai.inference.rl_demo import Scenario
 
-# ---------------------------------------------------------------------------
-# NPC / walker setup functions
-# ---------------------------------------------------------------------------
-
 
 def _road_waypoint(world, loc):
-    """Snap a location to the nearest drivable road waypoint. Returns None if not found."""
+    """Snap a location to the nearest drivable road waypoint."""
     import carla  # noqa: PLC0415
 
     return world.get_map().get_waypoint(
@@ -31,7 +19,7 @@ def _road_waypoint(world, loc):
 
 
 def _spawn_vehicle(world, wp, vehicles=None):
-    """Spawn a vehicle at a waypoint transform (+0.5 m Z offset). Returns actor or None."""
+    """Spawn a vehicle at a waypoint transform."""
     import carla  # noqa: PLC0415
 
     if vehicles is None:
@@ -46,13 +34,12 @@ def _spawn_vehicle(world, wp, vehicles=None):
 
 
 def _setup_npc_ahead(world, ego):
-    """Slow vehicle on the road ~25 m ahead — tests longitudinal distance keeping."""
+    """Slow vehicle on the road ~25 m ahead."""
     import carla  # noqa: PLC0415
 
     transform = ego.get_transform()
     fwd = transform.get_forward_vector()
 
-    # Walk along waypoints to find a road point ~25 m ahead
     wp = _road_waypoint(world, transform.location)
     if wp is None:
         return []
@@ -79,7 +66,6 @@ def _setup_npc_crossing(world, ego):
     transform = ego.get_transform()
     right = transform.get_right_vector()
 
-    # Find a road waypoint to the right of the ego
     for dist_m in (20, 15, 25, 10):
         candidate = carla.Location(
             x=transform.location.x + right.x * dist_m,
@@ -120,7 +106,6 @@ def _setup_pedestrian(world, ego):
     if walker is None:
         return []
 
-    # AI controller to make the walker move across the road
     ctrl_bp = world.get_blueprint_library().find("controller.ai.walker")
     ctrl = world.spawn_actor(ctrl_bp, carla.Transform(), attach_to=walker)
     world.tick()
@@ -136,7 +121,7 @@ def _setup_pedestrian(world, ego):
 
 
 def _setup_emergency_stop(world, ego):
-    """Static vehicle on the road ~8 m ahead — obstacle_norm will be very low (~0.16)."""
+    """Static vehicle on the road ~8 m ahead."""
     import carla  # noqa: PLC0415
 
     wp = _road_waypoint(world, ego.get_transform().location)
@@ -155,12 +140,7 @@ def _setup_emergency_stop(world, ego):
     return []
 
 
-# ---------------------------------------------------------------------------
-# Success functions  (metrics: dict)
-#   metrics keys: center_offsets, speeds, rewards, terminated, steps
-# ---------------------------------------------------------------------------
-
-_MIN_DIST_M = 25.0  # car must travel at least this far to count as "having driven"
+_MIN_DIST_M = 25.0
 
 
 def _success_no_crash(m: dict) -> bool:
@@ -182,19 +162,7 @@ def _success_reached_dest(m: dict) -> bool:
     return m.get("reached_dest", False) and not m["terminated"]
 
 
-# ---------------------------------------------------------------------------
-# BENCHMARK_SCENARIOS
-#
-# spawn_idx values are filled after running:
-#     uv run python3 scripts/explore_spawns.py --host <carla-ip>
-#
-# Town02 — 101 spawn points.
-# Last filled: 2026-07-07 via scripts/explore_spawns.py + scripts/find_dest_spawns.py --host localhost
-# pedestrian / lane_change : NOT FOUND in Town02 — set manually when available.
-# ---------------------------------------------------------------------------
-
 BENCHMARK_SCENARIOS: list[Scenario] = [
-    # ── Phase 1 : Lane keeping ────────────────────────────────────────────
     Scenario(
         name="straight",
         description="Straight road - lane centering and speed control",
@@ -222,16 +190,6 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
         expected="follow the curve without leaving the lane",
         success_fn=_success_no_crash,
     ),
-    # ── Phase 1 : Navigation ──────────────────────────────────────────────
-    #
-    # dest_spawn_idx forces a route replan so nav gives the correct command.
-    # To find the right dest_spawn_idx:
-    #   1. Run `uv run python3 scripts/explore_spawns.py --host <ip>`
-    #   2. Look at the map — pick a spawn that is ONLY reachable via the desired maneuver.
-    #   3. Verify by running run_eval.py and watching the nav command overlay.
-    #
-    # success_fn=_success_reached_dest validates that the car actually completed the maneuver
-    # (reached the destination), not just that it drove without crashing.
     Scenario(
         name="turn_left",
         description="Junction - turn left on nav command",
@@ -239,7 +197,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
         max_steps=350,
         phase=1,
         expected="turn left at junction, reach destination",
-        dest_spawn_idx=63,  # 30.5 m away, snap dist 14.7 m — verified via find_dest_spawns.py
+        dest_spawn_idx=63,
         target_radius=15.0,
         success_fn=_success_reached_dest,
     ),
@@ -250,9 +208,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
         max_steps=350,
         phase=1,
         expected="turn right at junction, reach destination",
-        dest_spawn_idx=49,  # 56.5 m away, snap dist 2.8 m — best right-branch candidate
-        # (find_dest_spawns.py's own top pick, idx=85, had snap dist 29.3m —
-        # picked this closer-snapped alternative from the same branch instead)
+        dest_spawn_idx=49,
         target_radius=15.0,
         success_fn=_success_reached_dest,
     ),
@@ -263,11 +219,10 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
         max_steps=350,
         phase=1,
         expected="cross the junction straight, reach destination",
-        dest_spawn_idx=49,  # 85.6 m away, snap dist 2.8 m — verified via find_dest_spawns.py
+        dest_spawn_idx=49,
         target_radius=15.0,
         success_fn=_success_reached_dest,
     ),
-    # ── Phase 1 : Obstacle avoidance ──────────────────────────────────────
     Scenario(
         name="npc_follow",
         description="Follow a slow vehicle ahead",
@@ -288,7 +243,6 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
         setup_fn=_setup_npc_crossing,
         success_fn=_success_no_crash,
     ),
-    # ── Phase 2 : Traffic management ──────────────────────────────────────
     Scenario(
         name="red_light",
         description="Red light - full stop expected",
@@ -305,17 +259,15 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
         phase=2,
         expected="speed <= 30 km/h in the zone",
     ),
-    # ── Phase 2 : Pedestrians ────────────────────────────────────────────
     Scenario(
         name="pedestrian",
         description="Pedestrian on crosswalk - full stop expected",
-        spawn_idx=0,  # identify manually near a crosswalk
+        spawn_idx=0,
         max_steps=300,
         phase=2,
         expected="full stop in front of pedestrian",
         setup_fn=_setup_pedestrian,
     ),
-    # ── Phase 2 : Emergency / advanced ───────────────────────────────────
     Scenario(
         name="emergency_stop",
         description="Sudden obstacle at 8m - emergency braking",
@@ -328,7 +280,7 @@ BENCHMARK_SCENARIOS: list[Scenario] = [
     Scenario(
         name="lane_change",
         description="Overtake a slow vehicle - lane change",
-        spawn_idx=0,  # NOT FOUND in Town02 — set manually
+        spawn_idx=0,
         max_steps=300,
         phase=2,
         expected="change lane and return",

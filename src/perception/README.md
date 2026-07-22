@@ -20,7 +20,7 @@ Sous-modules :
 - [`depth/`](depth/) — profondeur monoculaire (voir [depth/README.md](depth/README.md))
 - [`pipeline.py`](pipeline.py) — **fusion** des deux (le point d'entrée)
 
-## Utilisation (IA centrale / orchestration)
+## Utilisation (IA centrale)
 
 C'est une **fonction locale**, pas une API. On charge les modèles une fois, puis
 on appelle `perceive()` par image.
@@ -96,9 +96,6 @@ uv run -m src.perception.visualize_batch --images data/runs/<session>/<run>/imag
 
 # Détection chiffrée (mAP par classe sur le val set)
 uv run yolo detect val model=src/perception/yolo/weights/best.pt data=data/yolo_dataset/data.yaml device=0
-
-# Contrats (smoke, sans CARLA)
-uv run -m pytest benchmarks/perception/ -q
 ```
 
 ## (Ré)entraîner / recalibrer

@@ -96,14 +96,9 @@ Documenter dans ce README la procédure exacte une fois le pipeline en place.
 - Inference < 50 ms par image sur GPU, < 200 ms sur CPU pour YOLOv8n
 - Précision : > 0.7 mAP@50 attendu sur les classes véhicule + piéton après fine-tuning sur dataset CARLA
 
-## Validation et benchmarks
+## Validation
 
-Dans [benchmarks/perception/yolo/](../../../benchmarks/perception/yolo/) :
-
-- **`smoke.py`** : vérifier qu'une instance respecte le protocole `ObjectDetector`, qu'une image vide produit une liste vide, que les bbox retournées sont dans les bornes de l'image
-- **`benchmark.py`** : mesurer mAP@50, mAP@50-95 sur le dataset CARLA, latence p50/p95 par image
-
-Voir [benchmarks/README.md](../../../benchmarks/README.md) pour la convention.
+Métriques chiffrées via la commande `yolo detect val` ci-dessus (mAP par classe sur le val set). La validation fonctionnelle passe par l'intégration réelle dans la boucle RL et les démos.
 
 ## Liens
 

@@ -7,7 +7,7 @@
 
 ## Pourquoi ce module existe
 
-Les 6 modules du projet (`perception/yolo`, `perception/depth`, `perception/lanes`, `navigation`, `ai`, `orchestration`) doivent dialoguer entre eux. Sans contrat précis, chaque module fait ses propres conventions et l'intégration finale devient un cauchemar.
+Les modules du projet (`perception/yolo`, `perception/depth`, `lane_detection`, `navigation`, `ai`) doivent dialoguer entre eux. Sans contrat précis, chaque module fait ses propres conventions et l'intégration finale devient un cauchemar.
 
 Ici on définit **une seule fois** la forme exacte des données échangées. Tous les modules importent depuis `src.interfaces` et s'engagent à respecter ces structures.
 
@@ -16,17 +16,16 @@ C'est l'application du **pattern d'inversion de dépendances** : chaque module d
 ## Conséquences pratiques
 
 - Chaque module peut être développé et testé **indépendamment** des autres.
-- Une implémentation peut être remplacée par une autre (modèle réel ↔ stub) **sans toucher** aux modules consommateurs.
+- Une implémentation peut être remplacée par une autre (capteur GT de développement ↔ modèle réel) **sans toucher** aux modules consommateurs — c'est exactement ce qui s'est passé à la v21 quand la perception réelle a remplacé la vérité terrain, sans changer une ligne de l'IA centrale.
 - L'intégration finale est triviale : si chaque module respecte son contrat, les pièces s'emboîtent.
 
 ## Contenu
 
 | Fichier | Rôle |
 |---|---|
-| `perception_types.py` | Types et protocoles pour YOLO, MIDAS/Depth, lignes |
+| `perception_types.py` | Types et protocoles pour YOLO, Depth, lignes |
 | `navigation_types.py` | Types et protocoles pour GPS, route, commande haut niveau |
 | `ai_types.py` | Types pour la scène fusionnée et la sortie de l'IA centrale |
-| `stubs.py` | Implémentations "triche" basées sur les ground truths CARLA (dev only) |
 
 ## Les types principaux
 
@@ -90,22 +89,7 @@ class YoloDetector:
 
 Cette classe est automatiquement compatible avec le protocole `ObjectDetector` parce qu'elle a la bonne méthode `detect`. Elle peut être utilisée partout où un `ObjectDetector` est attendu.
 
-## Les stubs (`stubs.py`)
-
-Pour développer un module sans attendre les autres, on utilise des **implémentations triche** qui lisent directement les ground truths CARLA. Elles respectent les mêmes protocoles que les vraies implémentations, donc le code consommateur n'a rien à changer pour passer de l'un à l'autre.
-
-```python
-# Pendant le développement
-detector: ObjectDetector = CarlaGTObjectDetector(world, ego_vehicle)
-
-# En production
-detector: ObjectDetector = YoloDetector("weights/best.pt")
-
-# Le code qui utilise `detector` ne change pas
-objects = detector.detect(image)
-```
-
-⚠️ Les stubs sont des outils de **développement uniquement**. Ils ne doivent jamais arriver dans le pipeline de production. Voir le [README racine](../../README.md) section "Conventions architecturales".
+> **Note historique** : pendant le développement, un fichier `stubs.py` fournissait des implémentations « triche » lisant les ground truths CARLA, pour bosser sur son module sans attendre les autres. Devenu inutile une fois les vrais modèles branchés (v21), il a été retiré au nettoyage final.
 
 ## Modifier un contrat
 
@@ -120,6 +104,4 @@ Ne pas modifier `src/interfaces/` dans une PR qui ajoute aussi de la logique mé
 
 ## Validation
 
-Les contrats (`@dataclass` + `Protocol`) définis ici sont vérifiés indirectement par les `smoke.py` de chaque module : si un module respecte son protocole, son smoke test passe.
-
-Pour valider un nouveau type ou protocole ajouté ici, ajouter un check dans le `smoke.py` du module qui le consomme (ex : `benchmarks/perception/yolo/smoke.py` pour `ObjectDetector`).
+Les contrats (`@dataclass` + `Protocol`) se vérifient par **structural typing** : si un module a les bonnes méthodes avec les bonnes signatures, il est compatible partout où le protocole est attendu. La validation finale, c'est l'intégration réelle — les 4 modules branchés ensemble dans la boucle RL et la démo.
