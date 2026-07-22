@@ -1,5 +1,3 @@
-"""RL inference demo — runs a trained PPO model in CARLA."""
-
 from __future__ import annotations
 
 import math
@@ -19,7 +17,6 @@ from src.interfaces.navigation_types import Route
 
 @dataclass
 class Scenario:
-    """A fixed situation to record during a checkpoint demo or benchmark eval."""
 
     name: str
     spawn_idx: int
@@ -35,7 +32,6 @@ class Scenario:
 
 @dataclass
 class HighlightSpec:
-    """Declares when to cut a highlight clip from the demo stream."""
 
     name: str
     detect: Callable[[np.ndarray, np.ndarray, float, bool, bool], bool]
@@ -91,7 +87,6 @@ DEFAULT_HIGHLIGHT_SPECS: list[HighlightSpec] = [
 
 
 class HighlightRecorder:
-    """Rolling frame buffer that writes MP4 clips when a HighlightSpec fires."""
 
     def __init__(
         self,
@@ -120,7 +115,7 @@ class HighlightRecorder:
         terminated: bool,
         truncated: bool,
     ) -> None:
-        import cv2  # noqa: PLC0415
+        import cv2
 
         self._buffer.append(frame_bgr)
 
@@ -192,8 +187,7 @@ def run_episode(
 
 
 def _add_hud(frame: np.ndarray, info: dict) -> np.ndarray:
-    """Overlay training info on a camera frame. Returns RGB uint8 array."""
-    from PIL import Image, ImageDraw  # noqa: PLC0415
+    from PIL import Image, ImageDraw
 
     img = Image.fromarray(frame)
     draw = ImageDraw.Draw(img)
@@ -232,7 +226,6 @@ _CLEAR_SPAWN_POOL_SIZE = 5
 
 
 def _clear_spawn_area(env, radius_m: float) -> None:
-    """Relocate ambient NPC vehicles/pedestrians near the ego's spawn point."""
     try:
         actors = env.world.get_actors()
         nearby = [
@@ -262,12 +255,10 @@ def _clear_spawn_area(env, radius_m: float) -> None:
 
 
 def _ascii(s: str) -> str:
-    """Strip accented characters — cv2.putText only handles ASCII."""
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
 
 
 def _draw_title_card(sc: Scenario, w: int, h: int, cv2) -> np.ndarray:
-    """Black intro card for a scenario (BGR)."""
     card = np.full((h, w, 3), (12, 12, 16), dtype=np.uint8)
 
     phase_color = (80, 200, 60) if sc.phase == 1 else (0, 160, 220)
@@ -319,7 +310,6 @@ def _draw_title_card(sc: Scenario, w: int, h: int, cv2) -> np.ndarray:
 
 
 def _draw_result_card(success: bool | None, w: int, h: int, cv2) -> np.ndarray:
-    """Result card after a scenario (BGR)."""
     if success is None:
         bg = (15, 20, 30)
         color = (0, 160, 220)
@@ -348,7 +338,6 @@ def _draw_result_card(success: bool | None, w: int, h: int, cv2) -> np.ndarray:
 
 
 def _draw_route_map_card(route: Route, w: int, h: int, cv2) -> np.ndarray:
-    """Top-down schematic of the planned route: path line + start/end markers (BGR)."""
     card = np.full((h, w, 3), (12, 12, 16), dtype=np.uint8)
     waypoints = route.waypoints
     if not waypoints:
@@ -416,7 +405,6 @@ def _draw_obs_panel(
     action: np.ndarray,
     cv2,
 ) -> None:
-    """Draw a compact obs-space + action panel (in-place, BGR)."""
     h, w = frame_bgr.shape[:2]
     if w <= 400:
         return
@@ -494,7 +482,6 @@ def _draw_minimap(
     h: int,
     cv2,
 ) -> None:
-    """Persistent minimap: route path + current ego position (in-place, BGR)."""
     if w <= 400 or route is None or not route.waypoints:
         return
 
@@ -560,7 +547,6 @@ def _bbox_color(label: str) -> tuple[int, int, int]:
 
 
 def _draw_bboxes(frame_bgr: np.ndarray, objects: list, cv2) -> None:
-    """Draw perception bounding boxes + class + distance labels (in-place, BGR)."""
     for o in objects:
         x1, y1, x2, y2 = o.bbox
         color = _bbox_color(o.class_name.value)
@@ -584,7 +570,6 @@ def _write_summary_card(
     fps: int,
     cv2,
 ) -> None:
-    """Write a 3-second summary card at the end of eval_model()."""
     card = np.full((h, w, 3), (12, 12, 16), dtype=np.uint8)
 
     n_phase1 = sum(1 for sc in scenarios if sc.phase == 1)
@@ -670,8 +655,7 @@ def record_episode(
     route_map_seconds: float = 3.0,
     scenarios: list[Scenario] | None = None,
 ) -> None:
-    """Record inference to an MP4 with HUD overlay."""
-    import cv2  # noqa: PLC0415
+    import cv2
 
     _get_frame = render_fn if render_fn is not None else env.render
 
@@ -903,11 +887,10 @@ def eval_model(
     fps: int = 20,
     render_fn: Callable[[], np.ndarray | None] | None = None,
 ) -> dict[str, dict]:
-    """Run all benchmark scenarios, record to output_path, return rich metrics."""
-    import cv2  # noqa: PLC0415
+    import cv2
 
     if scenarios is None:
-        from src.ai.inference.benchmark import BENCHMARK_SCENARIOS  # noqa: PLC0415
+        from src.ai.inference.benchmark import BENCHMARK_SCENARIOS
 
         scenarios = BENCHMARK_SCENARIOS
 
@@ -1263,7 +1246,6 @@ def eval_model(
 
 
 def pick_best_checkpoint(all_results: dict[str, dict[str, dict]]) -> str:
-    """Return the checkpoint label with the best benchmark score."""
 
     def _score(scenarios: dict[str, dict]) -> tuple[int, float, float]:
         successes = sum(1 for m in scenarios.values() if m.get("success") is True)

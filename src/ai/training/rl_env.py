@@ -1,5 +1,3 @@
-"""CarlaEnv — gymnasium.Env wrapper around CARLA for Phase 1 RL training."""
-
 from __future__ import annotations
 
 import math
@@ -72,7 +70,6 @@ def _check_violation(
     dist_threshold_m: float,
     speed_threshold_kmh: float,
 ) -> tuple[bool, bool]:
-    """Returns (violation_just_happened, new_flagged_state)."""
     distance_m = distance_norm * _MAX_OBSTACLE_M
     is_close = distance_m < dist_threshold_m
     violation_now = is_close and speed_kmh > speed_threshold_kmh and not flagged
@@ -80,7 +77,6 @@ def _check_violation(
 
 
 def _nearest_distance_norm(objects: list, classes: tuple) -> float:
-    """Normalised distance (0-1) to the nearest object of any of `classes`."""
     dists = [
         o.distance_m
         for o in objects
@@ -90,7 +86,6 @@ def _nearest_distance_norm(objects: list, classes: tuple) -> float:
 
 
 def _in_ego_path(obj, image_width: float) -> bool:
-    """True if obj is roughly ahead of the ego (bbox in the middle third)."""
     cx = (obj.bbox[0] + obj.bbox[2]) / 2.0
     return image_width / 3.0 <= cx <= 2.0 * image_width / 3.0
 
@@ -104,7 +99,6 @@ def _signed_lane_offset_norm(
     right_y: float,
     lane_width: float,
 ) -> float:
-    """Signed lateral offset of the ego from lane centre, normalised to [-1, 1]."""
     half_width = max(lane_width / 2.0, 0.1)
     lateral = (ego_x - wp_x) * right_x + (ego_y - wp_y) * right_y
     return float(np.clip(lateral / half_width, -1.0, 1.0))
@@ -113,7 +107,6 @@ def _signed_lane_offset_norm(
 def _signed_bearing_norm(
     ego_x: float, ego_y: float, yaw_deg: float, dest_x: float, dest_y: float
 ) -> float:
-    """Signed heading error from ego to destination, normalised to [-1, 1]."""
     bearing = math.atan2(dest_y - ego_y, dest_x - ego_x)
     heading = math.radians(yaw_deg)
     err = math.atan2(math.sin(bearing - heading), math.cos(bearing - heading))
@@ -439,7 +432,7 @@ class CarlaEnv(gym.Env):
             spawn = self._pick_safe_random_spawn(spawn_points)
         self.ego.set_transform(spawn)
         try:
-            from carla import Vector3D, VehicleControl  # noqa: PLC0415
+            from carla import Vector3D, VehicleControl
 
             self.ego.set_target_velocity(Vector3D(0, 0, 0))
             self.ego.apply_control(VehicleControl())
@@ -448,7 +441,6 @@ class CarlaEnv(gym.Env):
             self.ego.apply_control(None)
 
     def _pick_safe_random_spawn(self, spawn_points: list) -> "carla.Transform":
-        """First random spawn clear of nearby actors, else the best seen."""
         actors = self._nearby_dynamic_actors()
         best_spawn = None
         best_dist = -1.0
@@ -463,7 +455,6 @@ class CarlaEnv(gym.Env):
         return best_spawn
 
     def _ground_truth_lane(self, wp) -> tuple[float, float]:
-        """Ground-truth (lane_offset_norm, is_on_road) from CARLA's map (diagnostic)."""
         import carla
 
         loc = self.ego.get_transform().location
@@ -486,7 +477,6 @@ class CarlaEnv(gym.Env):
         return offset_norm, is_on_road
 
     def _maybe_advance_curriculum(self) -> None:
-        """Raise the destination-distance ceiling when recent success clears the bar."""
         if (
             len(self._recent_success) >= _CURRICULUM_WINDOW
             and sum(self._recent_success) / len(self._recent_success)
@@ -502,7 +492,6 @@ class CarlaEnv(gym.Env):
     def _pick_random_destination(
         self, spawn_pts: list, ego_location: "carla.Location"
     ) -> "carla.Location":
-        """Random destination within the current curriculum distance window."""
         best_dest = None
         best_gap = float("inf")
         for _ in range(_DEST_PICK_MAX_ATTEMPTS):
@@ -521,7 +510,6 @@ class CarlaEnv(gym.Env):
         return best_dest
 
     def _nearby_dynamic_actors(self) -> list:
-        """All vehicle and pedestrian actors in the world, excluding the ego."""
         actors = self.world.get_actors()
         vehicles = list(actors.filter("vehicle.*"))
         walkers = list(actors.filter("walker.pedestrian.*"))
@@ -529,14 +517,13 @@ class CarlaEnv(gym.Env):
 
     @staticmethod
     def _min_actor_distance(location: "carla.Location", actors: list) -> float:
-        """Distance from `location` to the nearest actor, or inf if none."""
         if not actors:
             return float("inf")
         return min(location.distance(a.get_location()) for a in actors)
 
     def _apply_control(self, steer: float, throttle: float, brake: float) -> None:
         try:
-            from carla import VehicleControl  # noqa: PLC0415
+            from carla import VehicleControl
 
             control = VehicleControl(throttle=throttle, steer=steer, brake=brake)
         except ModuleNotFoundError:
@@ -548,7 +535,6 @@ class CarlaEnv(gym.Env):
         return math.sqrt(v.x**2 + v.y**2 + v.z**2) * 3.6
 
     def _dist_to_destination(self) -> float | None:
-        """Straight-line 2D distance from ego to the route destination, or None."""
         if self.route is None or self.route.destination is None:
             return None
         loc = self.ego.get_transform().location
@@ -556,7 +542,6 @@ class CarlaEnv(gym.Env):
         return math.sqrt((loc.x - dest.x) ** 2 + (loc.y - dest.y) ** 2)
 
     def _reached_destination(self) -> bool:
-        """True once ego is near the destination and has driven a minimum distance."""
         dist_to_dest = self._dist_to_destination()
         if dist_to_dest is None or self._episode_start_location is None:
             return False
@@ -571,7 +556,6 @@ class CarlaEnv(gym.Env):
         )
 
     def _update_nearest_route_idx(self) -> float:
-        """Slide _route_idx to the nearest waypoint; return the squared distance."""
         if not (self.route and self.route.waypoints):
             return float("inf")
         wps = self.route.waypoints
@@ -591,13 +575,11 @@ class CarlaEnv(gym.Env):
         return min_dist_sq
 
     def _is_off_route(self) -> bool:
-        """True if ego is more than _OFF_ROUTE_M from the nearest route waypoint."""
         if not (self.route and self.route.waypoints):
             return False
         return self._update_nearest_route_idx() > _OFF_ROUTE_M**2
 
     def _route_lookahead_target(self) -> "Waypoint | None":
-        """The lookahead route waypoint the bearing obs aims at."""
         if self.route is None:
             return None
         if not self.route.waypoints:
@@ -610,7 +592,6 @@ class CarlaEnv(gym.Env):
         return wps[target_idx]
 
     def _compute_route_cumulative(self) -> None:
-        """Precompute cumulative arc-length along the route waypoints (per reset)."""
         wps = self.route.waypoints if self.route else None
         if not wps or len(wps) < 2:
             self._route_cum = None
@@ -625,7 +606,6 @@ class CarlaEnv(gym.Env):
         self._route_total = max(cum[-1], 1.0)
 
     def _route_remaining_dist(self) -> float:
-        """Distance still to travel along the route to the destination."""
         wps = self.route.waypoints
         if self._route_cum is None or len(self._route_cum) != len(wps):
             self._compute_route_cumulative()

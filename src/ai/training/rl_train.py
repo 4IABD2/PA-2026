@@ -1,5 +1,3 @@
-"""PPO training loop for Phase 1 RL — Stable-Baselines3."""
-
 from __future__ import annotations
 
 import gymnasium as gym

@@ -1,6 +1,3 @@
-"""Shared CARLA helpers (sync setup, sensor spawning, NavAdapter) plus a
-rule-based demo CLI."""
-
 from __future__ import annotations
 
 import argparse
@@ -41,7 +38,6 @@ _CAM_TRANSFORM = carla.Transform(
 
 
 class StraightPolicy:
-    """Full throttle, zero steer — will crash at intersections and NPCs."""
 
     name = "straight"
 
@@ -51,7 +47,6 @@ class StraightPolicy:
 
 
 class RouteFollowPolicy:
-    """P-controller on lane_offset_norm — roughly follows the road."""
 
     name = "route_follow"
 

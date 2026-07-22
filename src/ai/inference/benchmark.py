@@ -1,27 +1,17 @@
-"""Benchmark scenario suite — 13 fixed scenarios for the final demo video."""
-
 from __future__ import annotations
-
 import random
-
 import numpy as np
-
+import carla
 from src.ai.inference.rl_demo import Scenario
 
 
 def _road_waypoint(world, loc):
-    """Snap a location to the nearest drivable road waypoint."""
-    import carla  # noqa: PLC0415
-
     return world.get_map().get_waypoint(
         loc, project_to_road=True, lane_type=carla.LaneType.Driving
     )
 
 
 def _spawn_vehicle(world, wp, vehicles=None):
-    """Spawn a vehicle at a waypoint transform."""
-    import carla  # noqa: PLC0415
-
     if vehicles is None:
         vehicles = list(world.get_blueprint_library().filter("vehicle.*"))
     bp = random.choice(vehicles)
@@ -34,9 +24,6 @@ def _spawn_vehicle(world, wp, vehicles=None):
 
 
 def _setup_npc_ahead(world, ego):
-    """Slow vehicle on the road ~25 m ahead."""
-    import carla  # noqa: PLC0415
-
     transform = ego.get_transform()
     fwd = transform.get_forward_vector()
 
@@ -60,9 +47,6 @@ def _setup_npc_ahead(world, ego):
 
 
 def _setup_npc_crossing(world, ego):
-    """Vehicle on a perpendicular road ~20 m to the right, heading to cross."""
-    import carla  # noqa: PLC0415
-
     transform = ego.get_transform()
     right = transform.get_right_vector()
 
@@ -87,9 +71,6 @@ def _setup_npc_crossing(world, ego):
 
 
 def _setup_pedestrian(world, ego):
-    """Pedestrian crossing the road 20 m ahead."""
-    import carla  # noqa: PLC0415
-
     transform = ego.get_transform()
     fwd = transform.get_forward_vector()
     right = transform.get_right_vector()
@@ -121,9 +102,6 @@ def _setup_pedestrian(world, ego):
 
 
 def _setup_emergency_stop(world, ego):
-    """Static vehicle on the road ~8 m ahead."""
-    import carla  # noqa: PLC0415
-
     wp = _road_waypoint(world, ego.get_transform().location)
     if wp is None:
         return []
@@ -144,12 +122,10 @@ _MIN_DIST_M = 25.0
 
 
 def _success_no_crash(m: dict) -> bool:
-    """No collision AND car actually drove (>= 25 m from start)."""
     return not m["terminated"] and m.get("max_dist_from_start", 0.0) >= _MIN_DIST_M
 
 
 def _success_straight(m: dict) -> bool:
-    """Drove >= 25 m, stayed centered, no collision."""
     return (
         not m["terminated"]
         and m.get("max_dist_from_start", 0.0) >= _MIN_DIST_M
@@ -158,7 +134,6 @@ def _success_straight(m: dict) -> bool:
 
 
 def _success_reached_dest(m: dict) -> bool:
-    """Reached the planned GPS destination without crashing."""
     return m.get("reached_dest", False) and not m["terminated"]
 
 

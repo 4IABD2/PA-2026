@@ -1,5 +1,3 @@
-"""Launch Phase 1 RL training on CARLA."""
-
 from __future__ import annotations
 
 import argparse
@@ -22,7 +20,6 @@ def _format_duration(seconds: float) -> str:
 
 
 class _Tee:
-    """Duplicates every line to a real stream and a log file."""
 
     _BLOCKED = ("newt command:", "next command:")
 
@@ -115,7 +112,6 @@ from src.ai.rewards.reward_fn import (
 
 
 class _NavAdapter:
-    """Guards Victor's Navigation against IndexError at end of route."""
 
     def __init__(self, nav: Navigation) -> None:
         self._nav = nav
