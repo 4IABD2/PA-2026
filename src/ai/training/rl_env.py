@@ -6,8 +6,8 @@ import math
 from collections import deque
 from typing import TYPE_CHECKING, Callable
 
-import numpy as np
 import gymnasium as gym
+import numpy as np
 from gymnasium import spaces
 
 from src.ai.rewards.reward_fn import compute_reward, REWARD_COMPONENT_KEYS
@@ -348,7 +348,8 @@ class CarlaEnv(gym.Env):
         cmd_right = 1.0 if cmd == HighLevelCommand.RIGHT else 0.0
         cmd_straight = 1.0 if cmd == HighLevelCommand.STRAIGHT else 0.0
 
-        direction, _angle, offset, drivable_off = self._lane_estimate(image)
+        direction, _angle, offset = self._lane_estimate(image)
+        drivable_off = None
         if direction != "NONE":
             self._last_lane_offset_norm = float(np.clip(offset, -1.0, 1.0))
         elif drivable_off is not None:
