@@ -1,5 +1,3 @@
-"""Run directory management — timestamped folder for artifacts."""
-
 from __future__ import annotations
 
 import json
@@ -36,7 +34,7 @@ def plot_reward_curve(monitor_csv: Path, output_png: Path) -> None:
     )
     ax.set_xlabel("Épisode")
     ax.set_ylabel("Reward totale")
-    ax.set_title("Reward au fil de l'entraînement — PPO Phase 1")
+    ax.set_title("Reward au fil de l'entraînement - PPO Phase 1")
     ax.legend()
     ax.grid(True, alpha=0.25)
     fig.tight_layout()

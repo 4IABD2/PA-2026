@@ -1,5 +1,3 @@
-"""Phase 1 RL reward function — pure function, no CARLA dependency."""
-
 from __future__ import annotations
 
 MAX_SPEED_KMH = 90.0
@@ -53,7 +51,6 @@ REWARD_COMPONENT_KEYS: tuple[str, ...] = (
 
 
 def _following_penalty(distance_m: float, speed_kmh: float) -> float:
-    """Penalise following another vehicle with less than the 2-second safe headway."""
     if speed_kmh < 1.0 or distance_m >= 50.0:
         return 0.0
     headway_s = distance_m / (speed_kmh / 3.6)
@@ -63,7 +60,6 @@ def _following_penalty(distance_m: float, speed_kmh: float) -> float:
 
 
 def _walker_penalty(distance_m: float) -> float:
-    """Penalise getting close to a pedestrian, proportional to proximity."""
     if distance_m >= _WALKER_DANGER_M:
         return 0.0
     return -(1.0 - distance_m / _WALKER_DANGER_M) * _W_WALKER_PROXIMITY
@@ -72,7 +68,6 @@ def _walker_penalty(distance_m: float) -> float:
 def _speeding_penalty(
     speed_kmh: float, speed_limit_kmh: float | None, max_speed_kmh: float
 ) -> float:
-    """Penalise exceeding the detected speed limit, proportional to the overshoot."""
     if speed_limit_kmh is None:
         return 0.0
     over = speed_kmh - speed_limit_kmh - _SPEEDING_TOLERANCE_KMH
@@ -88,7 +83,6 @@ def _safe_driving_bonus(
     speed_limit_kmh: float | None,
     max_speed_kmh: float,
 ) -> float:
-    """Small positive signal for driving with no active danger."""
     following_ok = _following_penalty(nearest_vehicle_m, speed_kmh) == 0.0
     walker_ok = _walker_penalty(nearest_walker_m) == 0.0
     speeding_ok = _speeding_penalty(speed_kmh, speed_limit_kmh, max_speed_kmh) == 0.0
@@ -117,7 +111,6 @@ def compute_reward(
     remaining_frac: float = 0.0,
     stall_steps: int = 0,
 ) -> tuple[float, bool, dict[str, float]]:
-    """Compute the per-step reward and whether the episode should terminate."""
     if collision:
         components = {key: 0.0 for key in REWARD_COMPONENT_KEYS}
         collision_scale = 1.0 + max(0.0, min(1.0, remaining_frac))

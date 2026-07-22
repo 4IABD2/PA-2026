@@ -1,5 +1,3 @@
-"""Lane offset with a drivable-area fallback."""
-
 import numpy as np
 
 from src.lane_detection.lane_perception import LaneDetector
@@ -11,7 +9,6 @@ _detector = None
 
 
 def drivable_offset(drivable, w: int, h: int) -> float | None:
-    """Lateral offset from the drivable-area mask, in [-1, 1] (0 = centred)."""
     if drivable is None:
         return None
     band = drivable[int(_BAND_FRAC * h) :, :]
@@ -24,7 +21,6 @@ def drivable_offset(drivable, w: int, h: int) -> float | None:
 
 
 def estimate_with_drivable(rgb):
-    """Like lane_perception.estimate, plus the drivable-area fallback offset."""
     global _detector
     if _detector is None:
         _detector = LaneDetector()
