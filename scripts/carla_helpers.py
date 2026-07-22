@@ -1,17 +1,5 @@
-"""Demo mockup — two rule-based policies on the 4 scenarios, no training needed.
-
-Policies
---------
-straight     : steer=0, full throttle → crashes at intersections / NPCs
-route_follow : P-controller on center_offset → stays on road
-
-Usage:
-    uv run python3 scripts/demo_mockup.py --host <carla-ip> [--npcs 15]
-
-Output (current directory):
-    mockup_straight.mp4
-    mockup_route_follow.mp4
-"""
+"""Shared CARLA helpers (sync setup, sensor spawning, NavAdapter) plus a
+rule-based demo CLI."""
 
 from __future__ import annotations
 
@@ -37,10 +25,6 @@ from src.ai.inference.lane_fusion import estimate_with_drivable as lane_estimate
 from src.ai.training.rl_env import CarlaEnv
 from src.ai.inference.rl_demo import record_episode, Scenario
 
-# ---------------------------------------------------------------------------
-# Same 4 scenarios as run_rl_training.py
-# ---------------------------------------------------------------------------
-
 DEMO_SCENARIOS = [
     Scenario("straight", spawn_idx=22, max_steps=500),
     Scenario("near_junction", spawn_idx=32, max_steps=500),
@@ -56,11 +40,6 @@ _CAM_TRANSFORM = carla.Transform(
 )
 
 
-# ---------------------------------------------------------------------------
-# Mock policies — no training, pure rules
-# ---------------------------------------------------------------------------
-
-
 class StraightPolicy:
     """Full throttle, zero steer — will crash at intersections and NPCs."""
 
@@ -72,11 +51,7 @@ class StraightPolicy:
 
 
 class RouteFollowPolicy:
-    """P-controller on lane_offset_norm — roughly follows the road.
-
-    obs[4] = lane_offset_norm (lateral deviation from lane centre)
-    obs[0] = speed_norm       (speed / 90 km/h)
-    """
+    """P-controller on lane_offset_norm — roughly follows the road."""
 
     name = "route_follow"
 
@@ -87,11 +62,6 @@ class RouteFollowPolicy:
         steer = float(np.clip(-lane_offset_norm * 0.25, -1.0, 1.0))
         accel = 0.45 if speed_norm < 0.25 else 0.3
         return np.array([steer, accel], dtype=np.float32), None
-
-
-# ---------------------------------------------------------------------------
-# CARLA helpers
-# ---------------------------------------------------------------------------
 
 
 class _NavAdapter:
@@ -168,11 +138,6 @@ def _destroy_all(actors: list) -> None:
             a.destroy()
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="localhost")
@@ -208,11 +173,10 @@ def main() -> None:
         print("Loading perception models …")
         perception = PerceptionPipeline()
 
-        # spawn NPCs — exclude the 4 scenario spawn indices
         scenario_spawns = {sc.spawn_idx for sc in DEMO_SCENARIOS}
         npcs = _spawn_npcs(world, client, args.npcs, exclude_spawns=scenario_spawns)
         print(f"Spawned {len(npcs)} NPC vehicles.")
-        for _ in range(20):  # let NPCs settle
+        for _ in range(20):
             world.tick()
 
         carla_map = world.get_map()
@@ -232,7 +196,6 @@ def main() -> None:
             max_episode_steps=500,
         )
 
-        # high-res demo camera
         demo_frame: list = [None]
         demo_cam = _spawn_sensor(
             world,

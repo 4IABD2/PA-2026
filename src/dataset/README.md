@@ -13,7 +13,7 @@ Tous les modules d'apprentissage du projet ont besoin de données issues de CARL
 |---|---|
 | `src/perception/yolo/` (Franck) | image RGB + masks d'instance (dérivation bboxes) |
 | `src/perception/depth/` (Franck) | image RGB + depth GT |
-| `src/perception/lanes/` (Karim) | image RGB + masks sémantiques (classe RoadLine) |
+| `src/lane_detection/` (Karim) | image RGB + masks sémantiques (classe RoadLine) |
 | `src/ai/` (Frédéric) | image RGB + commande HN + vitesse + actions expert |
 
 Toutes ces données peuvent être collectées **en une seule passe** dans CARLA. CARLA fournit "gratuitement" :
@@ -184,10 +184,7 @@ Le dossier `data/` à la racine est **gitignored**. Pour partager un dataset ent
 
 ## Validation
 
-Pas de benchmark de performance pour ce module (ce n'est pas un modèle ML). Juste de la validation de format à mettre dans `benchmarks/dataset/smoke.py` (à créer si besoin) :
-
-- Vérifier que les sorties produites respectent le format documenté ci-dessus (sans avoir besoin de CARLA, en mockant les capteurs)
-- Vérifier que le manifest.csv a toutes les colonnes attendues
+Pas de benchmark de performance pour ce module (ce n'est pas un modèle ML). La validation se fait sur le format des sorties : vérifier après une collecte que les dossiers produits respectent le format documenté ci-dessus et que `manifest.csv` a toutes les colonnes attendues (`src/dataset/diagnostics/inspect_run.py`).
 - Vérifier que les labels YOLO sont correctement normalisés `[0, 1]`
 
 ## Liens
