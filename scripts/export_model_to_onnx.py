@@ -27,7 +27,8 @@ def main(model_path: str, output_path: str | None = None) -> None:
     policy = model.policy.cpu().eval()
     wrapper = OnnxActorWrapper(policy).cpu().eval()
 
-    dummy_obs = torch.zeros((1, 12), dtype=torch.float32)
+    obs_dim = int(model.observation_space.shape[0])
+    dummy_obs = torch.zeros((1, obs_dim), dtype=torch.float32)
 
     if output_path is None:
         output_path = str(Path(model_path).with_suffix(".onnx"))
