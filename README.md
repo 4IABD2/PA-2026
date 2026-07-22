@@ -21,7 +21,6 @@ Projet annuel **4IABD2** : faire circuler de manière autonome un véhicule dans
 - [Démarrage](#démarrage)
 - [Conventions de code](#conventions-de-code)
 - [Conventions Git](#conventions-git)
-- [Validation et benchmarks](#validation-et-benchmarks)
 - [Suivi de progression](#suivi-de-progression)
 - [Conventions architecturales](#conventions-architecturales)
 - [Conventions CARLA](#conventions-carla)
@@ -44,10 +43,8 @@ Le pilotage se fait à partir d'une **caméra frontale RGB unique**, enrichie pa
 
 | Phase | Nom | État | Description |
 |---|---|---|---|
-| **Phase 0** | CIL — introduction à CARLA | ✅ Archivé | PilotNet (imitation learning sur l'autopilot CARLA). Sert de référence et d'apprentissage de la stack. Ne pas modifier. |
-| **Phase 1** | RL — apprentissage par renforcement | 🔄 En cours | L'IA apprend seule via PPO (Stable-Baselines3). Observations structurées : vitesse, commande nav Victor, centrage voie, distance obstacles. Reward function à la place des labels copiés. |
-
-> **Phase 0 est gardée telle quelle** dans `src/ai/` (préfixe `v1_`). C'était notre introduction à CARLA et à la chaîne dataset → training → démo. Elle ne sera jamais supprimée — elle est juste archivée.
+| **Phase 0** | CIL — introduction à CARLA | Retirée | PilotNet (imitation learning sur l'autopilot CARLA). A servi d'introduction à la stack ; code retiré du repo au nettoyage final (historique disponible dans git). |
+| **Phase 1** | RL — apprentissage par renforcement | ✅ Livrée | PPO (Stable-Baselines3) sur 14 observations structurées, perception 100 % réelle. Modèle final : v23 checkpoint 88k — **7/8 au benchmark, 0 collision, 0 vérité terrain** (voir [docs/LEADERBOARD.md](docs/LEADERBOARD.md)). |
 
 ## Équipe et responsabilités
 
@@ -55,10 +52,10 @@ Le pilotage se fait à partir d'une **caméra frontale RGB unique**, enrichie pa
 |---|---|---|---|
 | **Frédéric Huang** | IA centrale (décision) + intégration | [src/ai/](src/ai/), [src/interfaces/](src/interfaces/) | [src/ai/README.md](src/ai/README.md) |
 | **Franck Zhuang** | Détection d'objets (YOLO) + Estimation de profondeur (MIDAS / Depth Anything) | [src/perception/yolo/](src/perception/yolo/), [src/perception/depth/](src/perception/depth/) | [src/perception/yolo/README.md](src/perception/yolo/README.md), [src/perception/depth/README.md](src/perception/depth/README.md) |
-| **Karim Arfaoui** | Détection de lignes (alignement) | [src/perception/lanes/](src/perception/lanes/) | [src/perception/lanes/README.md](src/perception/lanes/README.md) |
+| **Karim Arfaoui** | Détection de lignes (alignement) | [src/lane_detection/](src/lane_detection/) | [src/lane_detection/README.md](src/lane_detection/README.md) |
 | **Victor Dalet** | Navigation (GPS, planification de route) | [src/navigation/](src/navigation/) | [src/navigation/README.md](src/navigation/README.md) |
 
-L'orchestration générale (boucle temps réel CARLA) est portée collectivement dans [src/orchestration/](src/orchestration/). Le générateur de dataset commun est dans [src/dataset/](src/dataset/) (Franck principalement, contributions de Frédéric et Karim).
+La boucle temps réel CARLA vit dans l'environnement RL ([src/ai/training/rl_env.py](src/ai/training/rl_env.py)) et dans la démo intégrée ([main.py](main.py)). Le générateur de dataset commun est dans [src/dataset/](src/dataset/) (Franck principalement, contributions de Frédéric et Karim).
 
 ## Pipeline temps réel
 
@@ -100,10 +97,10 @@ L'orchestration générale (boucle temps réel CARLA) est portée collectivement
 1. CARLA capture une frame RGB de la caméra du véhicule
 2. Cette frame est traitée par les **modules de perception** (YOLO, Depth, Lignes) qui produisent des métriques structurées (distance aux obstacles, centrage sur la voie, objets détectés)
 3. Le module de **navigation** fournit la prochaine commande haut niveau (gauche / droite / tout droit / suivre la voie) à chaque intersection
-4. L'**IA centrale** consomme un vecteur d'observation compact `[speed_norm, cmd_one_hot, center_offset, nearest_obstacle_m, heading_error]` et produit `(steer, throttle, brake)` via sa policy PPO
+4. L'**IA centrale** consomme un vecteur d'observation de **14 scalaires** (vitesse, commande nav, centrage voie, distances véhicule/feu/piéton/panneau, limite de vitesse, cap vers la route, mémoire d'action) et produit **2 actions** `(steer, accel)` via sa policy PPO — throttle et brake sont dérivés du signe de `accel`
 5. Ces contrôles sont appliqués au véhicule via `vehicle.apply_control(...)`
 
-> **Stratégie de substitution perception** : pendant l'entraînement RL, les métriques de perception proviennent des GT CARLA (via `src/interfaces/stubs.py`). Une fois les modèles de Franck et Karim prêts, on substitue les stubs par les vraies implémentations — le code de l'IA centrale ne change pas (protocoles `src/interfaces/`).
+> **Perception 100 % réelle** : depuis la v21, l'entraînement et l'évaluation tournent sur les vrais modèles (YOLOPv2 de Karim, YOLO11s + Depth Anything v2 de Franck) — aucune vérité terrain CARLA dans la boucle. Le flag `--ground-truth-lane` de `run_rl_training.py` subsiste uniquement comme mode diagnostic.
 
 ## Pipeline d'entraînement
 
@@ -116,8 +113,8 @@ L'orchestration générale (boucle temps réel CARLA) est portée collectivement
                                                  ▼
                               ┌──────────────────┼──────────────────┐
                               ▼                  ▼                  ▼
-                       [perception/yolo/  [perception/depth/  [perception/lanes/
-                        train.py]          train.py]            train.py]
+                       [perception/yolo/  [perception/depth/  [lane_detection/
+                        fine-tuning]       calibration]         fine-tuning]
                               │                  │                  │
                               ▼                  ▼                  ▼
                           weights/           weights/            weights/
@@ -130,23 +127,23 @@ L'orchestration générale (boucle temps réel CARLA) est portée collectivement
                            │
            ┌───────────────┼───────────────┐
            ▼               ▼               ▼
-     GT depth        GT lanes         Navigation Victor
-     (→ distance     (→ center       (→ HighLevelCommand)
-      obstacles)      offset)
+   YOLO11s + Depth      YOLOPv2       Navigation Victor
+   (→ distances        (→ centrage    (→ commande + cap
+    objets)             + sur-route)     vers la route)
            │               │               │
            └───────────────┴───────────────┘
                            │
-                    [Observation vector]
-                    speed + cmd + offset + dist + heading
+                    [Observation — 14 scalaires]
                            │
                            ▼
                     [PPO Policy] (Stable-Baselines3)
                            │
-                    action (steer/throttle/brake)
+                    action (steer, accel)
                            │
                            ▼
                     [Reward Function]
-                    r_speed + r_center + r_alive − r_stall − r_offroute − r_collision
+                    r_progress + r_center + r_alive + sécurité
+                    − stall − offroad − collision, +10 destination
                            │
                       mise à jour policy
 ```
@@ -158,39 +155,37 @@ Une seule collecte commune produit les données pour les modules perception (YOL
 ```
 PA-2026/
 ├── src/
-│   ├── perception/              ← Vision (Franck + Karim)
-│   │   ├── yolo/                ← Détection d'objets (Franck)
-│   │   ├── depth/               ← MIDAS / Depth Anything (Franck)
-│   │   └── lanes/               ← Détection de lignes (Karim)
-│   ├── navigation/              ← GPS / planification (Victor)
-│   ├── ai/                      ← IA centrale, décision (Frédéric)
-│   │   ├── models/              ← Architectures
-│   │   ├── training/            ← Scripts d'entraînement (+ data loader)
-│   │   └── inference/           ← Démo en boucle CARLA
+│   ├── perception/              ← Vision objets + profondeur (Franck)
+│   │   ├── yolo/                ← Détection d'objets YOLO11s fine-tuné CARLA
+│   │   ├── depth/               ← Depth Anything v2 + calibration métrique
+│   │   └── pipeline.py          ← Fusion boîtes × profondeur → distances
+│   ├── lane_detection/          ← Détection de voie YOLOPv2 (Karim)
+│   ├── navigation/              ← GPS / planification A* (Victor)
+│   ├── ai/                      ← IA centrale RL (Frédéric)
+│   │   ├── training/            ← CarlaEnv (gymnasium) + PPO + run manager
+│   │   ├── rewards/             ← Fonction de reward (15 composantes)
+│   │   └── inference/           ← Benchmark 13 scénarios, démos vidéo, fusion voie
 │   ├── dataset/                 ← Génération du dataset commun depuis CARLA (partagé)
 │   ├── interfaces/              ← ★ Contrats partagés entre modules
-│   ├── orchestration/           ← Boucle temps réel CARLA
-│   └── tools/                   ← Utilitaires partagés
+│   └── tools/                   ← Utilitaires partagés (visualisation)
 ├── scripts/
-│   ├── run_rl_training.py       ← Lance le training Phase 1 (CARLA + PPO + artifacts + eval)
-│   ├── run_eval.py              ← Évalue un modèle sur les 13 scénarios benchmark → vidéo + JSON
-│   ├── analyze_run.py           ← Analyse une run (courbe binée + benchmark + totaux, données brutes)
-│   ├── explore_spawns.py        ← Explore et classe les spawn points Town02
-│   └── find_dest_spawns.py      ← Trouve les dest_spawn_idx par direction de carrefour
+│   ├── run_rl_training.py       ← Pipeline d'entraînement complet : CARLA + PPO →
+│   │                              checkpoints, auto-éval 13 scénarios, courbes, démos
+│   ├── carla_helpers.py         ← Helpers CARLA partagés par la démo intégrée
+│   └── export_model_to_onnx.py  ← Export du modèle PPO vers ONNX (pour web/)
 ├── runs/                        ← Artifacts d'entraînement horodatés (gitignored)
 │   └── YYYY-MM-DD_HH-MM_tag/
-│       ├── params.json, run.log, model_best.zip, model_final.zip, reward_curve.png, demo.mp4
-│       ├── analysis_data.json   ← généré par scripts/analyze_run.py
+│       ├── params.json, run.log, best_model.zip, model_final.zip, reward_curve.png
+│       ├── checkpoints/         ← Modèles intermédiaires (toutes les 11k steps)
 │       └── evals/               ← Résultats benchmark par checkpoint (JSON + vidéo)
 ├── data/                        ← Datasets (gitignored)
-├── checkpoints/                 ← Modèles Phase 0 (gitignored)
-├── benchmarks/                  ← Validation contrats (smoke) + mesures de perf (mAP, RMSE, FPS)
+├── web/                         ← Inférence distante : serveur C++ ONNX + client pybind11
 ├── docs/
 │   ├── Description_Sujet.md     ← Sujet original du projet
-│   ├── Architecture_PA2026.png
-│   └── Canva_PA2026.pdf
-├── const.py                     ← Constantes globales
-├── main.py                      ← Point d'entrée
+│   ├── Canva_PA2026.pdf         ← Présentation initiale du projet
+│   └── LEADERBOARD.md           ← Résultats et sélection du modèle final
+├── main.py                      ← Démo intégrée : CARLA → perception → obs → serveur ONNX → contrôles
+├── launch_training.py           ← Lanceur guidé du training (préflight checks)
 ├── pyproject.toml               ← Déclaration des dépendances (uv)
 ├── uv.lock                      ← Versions figées (généré, commité)
 └── README.md                    ← Ce fichier
@@ -228,8 +223,6 @@ class YoloDetector:
 
 Cette classe est automatiquement compatible avec le protocole `ObjectDetector` parce qu'elle a la bonne méthode `detect`. Elle peut être utilisée partout où un `ObjectDetector` est attendu.
 
-[src/interfaces/stubs.py](src/interfaces/stubs.py) fournit aussi des **implémentations "triche"** qui lisent directement les ground truths CARLA. Pratique pour bosser sur son module sans attendre que les autres soient prêts. ⚠️ Ces stubs ne doivent **jamais** arriver en production — voir [Conventions architecturales](#conventions-architecturales).
-
 Lis [src/interfaces/README.md](src/interfaces/README.md) avant de commencer à implémenter ton module.
 
 ## Datasets
@@ -240,7 +233,7 @@ Lis [src/interfaces/README.md](src/interfaces/README.md) avant de commencer à i
 |---|---|
 | `src/perception/yolo/` (Franck) | `images/*.jpg` + `instance/*.npy` (dérivation bboxes) |
 | `src/perception/depth/` (Franck) | `images/*.jpg` + `depth/*.npy` |
-| `src/perception/lanes/` (Karim) | `images/*.jpg` + `semantic/*.npy` (classe RoadLine) |
+| `src/lane_detection/` (Karim) | `images/*.jpg` + `semantic/*.npy` (classe RoadLine) |
 | `src/ai/` (Frédéric) | `images/*.jpg` + `manifest.csv` (commande, vitesse, actions expert) |
 
 Une seule collecte de ~30 min = données pour 4 personnes, avec cohérence garantie (même map, même météo, même caméra POV).
@@ -363,10 +356,9 @@ tar -xzf 2026-MM-DD_town01_clear.tar.gz -C data/runs/
 | Composant | Bibliothèque | Usage |
 |---|---|---|
 | Simulateur | CARLA 0.9.16 | Environnement de simulation |
-| Vision | OpenCV, Ultralytics (YOLOv8) | Perception |
-| Depth | MIDAS / Depth Anything v2 | Estimation profondeur |
-| IA Phase 0 | TensorFlow / Keras | CIL archivé |
-| IA Phase 1 | Stable-Baselines3 + Gymnasium | RL PPO en boucle CARLA |
+| Vision | Ultralytics (YOLO11s), YOLOPv2, OpenCV | Perception objets + voie |
+| Depth | Depth Anything v2 | Estimation profondeur |
+| IA (décision) | Stable-Baselines3 + Gymnasium | RL PPO en boucle CARLA |
 | Gestion deps | uv | `pyproject.toml` + `uv.lock` |
 | Format | black | Linter imposé |
 
@@ -387,8 +379,7 @@ uv sync --no-dev        # variante sans black (utile en CI/prod)
 Au quotidien :
 
 ```bash
-uv run main.py          # exécute dans le venv (pas besoin d'activate)
-uv run -m pytest benchmarks/
+uv run python3 scripts/run_rl_training.py --help   # exécute dans le venv (pas besoin d'activate)
 uv run -m black .
 
 uv add <package>            # ajouter une dep runtime
@@ -507,12 +498,7 @@ Télécharger l'archive depuis [github.com/carla-simulator/carla/releases](https
 
 ### Lancer le projet
 
-**Phase 0 (archivé) :**
-```bash
-uv run main.py
-```
-
-**Phase 1 — training RL (CARLA requis) :**
+**Training RL (CARLA requis) :**
 ```bash
 # Smoke test (vérif pipeline, ~2 min)
 uv run python3 scripts/run_rl_training.py --timesteps 1000 --tag smoke --host <ip-carla>
@@ -521,36 +507,21 @@ uv run python3 scripts/run_rl_training.py --timesteps 1000 --tag smoke --host <i
 uv run python3 scripts/run_rl_training.py --timesteps 300000 --tag ppo_v1 --host <ip-carla>
 ```
 
-**Phase 1 — évaluation benchmark (13 scénarios) :**
-```bash
-# Évaluer un modèle sur les 13 scénarios → vidéo annotée + JSON métriques
-uv run python3 scripts/run_eval.py --model runs/<dir>/best_model.zip --host <ip-carla>
-# Sortie : eval_best_model.mp4 + eval_best_model.json (trajectoires, stats, off_route_pct...)
-```
+Pour un premier lancement guidé (vérifications CARLA/GPU/poids avant de démarrer) : `uv run python3 launch_training.py --host <ip-carla>`.
 
-**Utilitaires spawn (Town02) :**
+**Démo intégrée — modèle servi à distance en ONNX (module `web/` de Victor) :**
 ```bash
-# Identifier et classer les spawn points
-uv run python3 scripts/explore_spawns.py --host <ip-carla>
-
-# Trouver les dest_spawn_idx pour les scénarios de jonction (sans appeler nav.plan)
-uv run python3 scripts/find_dest_spawns.py --host <ip-carla> --spawn-idx 0
+# Prérequis : serveur web/servor (onnxruntime, C++) lancé + bindings web/client compilés
+uv run python3 main.py --host <ip-carla>
 ```
 
 > **WSL** : CARLA tourne sur Windows. Si Tailscale est installé, utiliser directement l'IP Tailscale de la machine Windows (`tailscale status` pour la voir). Sinon, l'IP du host Windows se trouve avec `cat /etc/resolv.conf | grep nameserver`.
 
 Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` (voir [src/ai/README.md](src/ai/README.md) pour le détail).
 
-### Validation et benchmarks
+### Benchmark IA centrale — 13 scénarios fixes
 
-```bash
-uv run -m pytest benchmarks/        # smoke tests rapides
-uv run -m benchmarks.<module>.benchmark   # benchmarks de perf (lent)
-```
-
-**Benchmark IA centrale — 13 scénarios fixes :**
-
-Le benchmark Phase 1 couvre 8 scénarios évalués avec critère de succès strict + 5 scénarios Phase 2 enregistrés. Pour chaque modèle, `run_eval.py` génère :
+Le benchmark couvre 8 scénarios Phase 1 évalués avec critère de succès strict + 5 scénarios Phase 2 enregistrés (définis dans [src/ai/inference/benchmark.py](src/ai/inference/benchmark.py)). L'auto-éval intégrée à `run_rl_training.py` évalue chaque checkpoint en fin de run et génère dans `runs/<dir>/evals/` :
 - Une vidéo annotée (13 scénarios en séquence, overlay OBS space + action)
 - Un JSON structuré avec : trajectoire `[[x,y,yaw]]`, séries temporelles, stats (speed, offset, off_route_pct, nav_commands), `reached_dest`, `collision_step`
 
@@ -659,50 +630,11 @@ Exemples (depuis l'historique) : `feat(gps): Add gps algo`, `feat(deep_renforcem
 - Le titre suit le format des commits.
 - Le merge se fait sur `main` après validation de la CI.
 
-## Validation et benchmarks
+## Validation
 
-Le projet est en grande partie composé de modules ML / CV. Les tests unitaires classiques apportent peu — ce qui compte, c'est (1) que les contrats soient respectés et (2) la performance réelle (mAP, RMSE, FPS, taux de succès en démo).
+La validation du projet repose sur la **performance mesurée**, pas sur des tests unitaires : le benchmark 13 scénarios (auto-éval de chaque checkpoint en fin de training) et les démos vidéo générées dans `runs/`. Les résultats consolidés et la sélection du modèle final sont dans [docs/LEADERBOARD.md](docs/LEADERBOARD.md).
 
-**Pas de dossier `tests/` séparé.** Tout est regroupé dans `benchmarks/`, par module :
-
-```
-benchmarks/
-├── README.md
-├── perception/
-│   ├── yolo/
-│   │   ├── smoke.py            ← validation contrat (rapide)
-│   │   ├── benchmark.py        ← mesure de perf (lent)
-│   │   └── results/            ← gitignored
-│   ├── depth/{smoke.py, benchmark.py, results/}
-│   └── lanes/{smoke.py, benchmark.py}
-├── navigation/{smoke.py, benchmark.py}
-├── ai/{smoke.py, benchmark.py}
-└── pipeline/benchmark.py       ← FPS et latence end-to-end
-```
-
-### `smoke.py` — validation rapide du contrat
-
-Vérifie que l'implémentation respecte le protocole défini dans [src/interfaces/](src/interfaces/). Pas de dataset, pas de CARLA, lance-le souvent (idéal en CI).
-
-```bash
-uv run -m pytest benchmarks/
-```
-
-Pour tester un module qui dépend d'autres modules, utiliser les stubs de [src/interfaces/stubs.py](src/interfaces/stubs.py). Ne **jamais** instancier un vrai modèle dans un smoke test.
-
-### `benchmark.py` — mesure de performance
-
-Exécution sur un vrai dataset, mesure latence + métriques métier. Les résultats vont dans `benchmarks/<module>/results/` (gitignored).
-
-```bash
-uv run -m benchmarks.perception.yolo.benchmark \
-    --weights checkpoints/yolo_v1/best.pt \
-    --dataset data/runs/2026-05-09_town01_clear
-```
-
-Voir [benchmarks/README.md](benchmarks/README.md) pour la convention complète, le format JSON des résultats, et le tableau des métriques attendues par module.
-
-Le résumé d'un benchmark significatif est à reporter dans le `JOURNAL.md` du module concerné.
+> La suite de tests offline historique (~300 tests, dossier `benchmarks/`) a accompagné le développement jusqu'à la v23 ; elle a été retirée au nettoyage final et reste consultable dans l'historique git.
 
 ## Suivi de progression
 
@@ -712,7 +644,6 @@ Pour éviter de devoir reconstituer 3 mois de travail au moment du rendu, **chaq
 |---|---|
 | [src/perception/yolo/JOURNAL.md](src/perception/yolo/JOURNAL.md) | Franck |
 | [src/perception/depth/JOURNAL.md](src/perception/depth/JOURNAL.md) | Franck |
-| [src/perception/lanes/JOURNAL.md](src/perception/lanes/JOURNAL.md) | Karim |
 | [src/navigation/JOURNAL.md](src/navigation/JOURNAL.md) | Victor |
 | [src/ai/JOURNAL.md](src/ai/JOURNAL.md) | Frédéric |
 | [src/dataset/JOURNAL.md](src/dataset/JOURNAL.md) | Franck (principal), Frédéric et Karim contribuent |
@@ -737,8 +668,8 @@ Pour éviter de devoir reconstituer 3 mois de travail au moment du rendu, **chaq
 Quatre règles transverses qui structurent le projet :
 
 1. **Aucun module ne dépend directement d'un autre module concret**. Tout passe par les interfaces ([src/interfaces/](src/interfaces/)).
-2. **Aucun import de `carla` en dehors de [src/orchestration/](src/orchestration/), [src/dataset/](src/dataset/), [src/ai/inference/](src/ai/inference/), [src/interfaces/stubs.py](src/interfaces/stubs.py)**. Les modèles purs (perception, ai/models) doivent être testables sans CARLA.
-3. **Pas de triche en production** : les capteurs de ground truth de CARLA (`sensor.camera.semantic_segmentation`, `sensor.camera.depth`) ne sont consommés que pendant la collecte/entraînement, jamais en input de la boucle production. Si un module en a besoin pour bosser sans dépendance, passer par `src/interfaces/stubs.py` (qui marque explicitement la triche temporaire).
+2. **Aucun import de `carla` en dehors de [src/dataset/](src/dataset/), [src/ai/training/](src/ai/training/), [src/ai/inference/](src/ai/inference/), de l'intégration voie ([src/lane_detection/carla_integration.py](src/lane_detection/carla_integration.py)) et des points d'entrée (`main.py`, `scripts/`)**. Les modèles purs (perception, lane_detection) restent importables sans CARLA.
+3. **Pas de triche en production** : les capteurs de ground truth de CARLA ne servent qu'à la collecte de dataset et au mode diagnostic (`--ground-truth-lane`), jamais dans la boucle de production. Le modèle final (v23) roule 100 % perception réelle.
 4. **Datasets et modèles entraînés ne sont jamais commités** (`.gitignore` couvre `data/`, `checkpoints/`, `**/weights/`, `**.h5`, `**.png`).
 
 ## Conventions CARLA

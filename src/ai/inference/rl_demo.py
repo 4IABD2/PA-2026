@@ -16,23 +16,10 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 
 from src.interfaces.navigation_types import Route
 
-# ---------------------------------------------------------------------------
-# Scenario + Highlight dataclasses
-# ---------------------------------------------------------------------------
-
 
 @dataclass
 class Scenario:
-    """A fixed situation to record during a checkpoint demo or benchmark eval.
-
-    Phase 1 scenarios are evaluated (success_fn returns bool).
-    Phase 2 scenarios are recorded as-is with an "upcoming" badge.
-
-    spawn_idx: index into world.get_map().get_spawn_points().
-    success_fn: (metrics: dict) -> bool — metrics keys:
-        center_offsets, speeds, rewards, terminated, steps
-    setup_fn: (world, ego) -> list[Actor] — spawn NPCs/walkers, return for cleanup.
-    """
+    """A fixed situation to record during a checkpoint demo or benchmark eval."""
 
     name: str
     spawn_idx: int
@@ -42,31 +29,13 @@ class Scenario:
     expected: str = ""
     success_fn: Callable | None = None
     setup_fn: Callable | None = None
-    dest_spawn_idx: int | None = (
-        None  # if set, route is replanned toward this spawn after reset
-    )
-    target_radius: float = 15.0  # metres — reaching dest counts as success
+    dest_spawn_idx: int | None = None
+    target_radius: float = 15.0
 
 
 @dataclass
 class HighlightSpec:
-    """Declares when to cut a highlight clip from the demo stream.
-
-    detect(obs, action, reward, terminated, truncated) -> bool
-
-    Obs layout (11 scalars):
-        [0]  speed_norm              = speed_kmh / 90                 ∈ [0, 1]
-        [1]  cmd_left                = 1 if nav says LEFT             ∈ {0, 1}
-        [2]  cmd_right               = 1 if nav says RIGHT            ∈ {0, 1}
-        [3]  cmd_straight            = 1 if nav says STRAIGHT         ∈ {0, 1}
-        [4]  lane_offset_norm        = lateral lane offset            ∈ [-1, 1]
-        [5]  is_on_road              = 1 if lane detected             ∈ {0, 1}
-        [6]  nearest_vehicle_norm    = nearest vehicle / 50m          ∈ [0, 1]
-        [7]  red_light_distance_norm = nearest red light / 50m        ∈ [0, 1]
-        [8]  speed_limit_norm        = current speed limit / 90       ∈ [0, 1]
-        [9]  nearest_walker_norm     = nearest pedestrian / 50m       ∈ [0, 1]
-        [10] nearest_stop_yield_norm = nearest stop/yield sign / 50m  ∈ [0, 1]
-    """
+    """Declares when to cut a highlight clip from the demo stream."""
 
     name: str
     detect: Callable[[np.ndarray, np.ndarray, float, bool, bool], bool]
@@ -119,11 +88,6 @@ DEFAULT_HIGHLIGHT_SPECS: list[HighlightSpec] = [
         cooldown_s=15.0,
     ),
 ]
-
-
-# ---------------------------------------------------------------------------
-# HighlightRecorder
-# ---------------------------------------------------------------------------
 
 
 class HighlightRecorder:
@@ -205,11 +169,6 @@ class HighlightRecorder:
         return dict(self._counts)
 
 
-# ---------------------------------------------------------------------------
-# Core helpers
-# ---------------------------------------------------------------------------
-
-
 def load_model(path: str) -> PPO:
     return PPO.load(path)
 
@@ -267,26 +226,13 @@ def _add_hud(frame: np.ndarray, info: dict) -> np.ndarray:
     return np.array(img)
 
 
-_EVAL_CLEAR_RADIUS_M = (
-    20.0  # ambient NPCs closer than this to a scenario's spawn are relocated
-)
+_EVAL_CLEAR_RADIUS_M = 20.0
 
-_CLEAR_SPAWN_POOL_SIZE = 5  # spread relocated NPCs across this many far spawns
-# instead of piling them all onto the single farthest one (avoids a physics
-# pile-up when several NPCs are relocated at once)
+_CLEAR_SPAWN_POOL_SIZE = 5
 
 
 def _clear_spawn_area(env, radius_m: float) -> None:
-    """Relocate ambient NPC vehicles/pedestrians near the ego's spawn point.
-
-    The 18 NPC vehicles + 6 pedestrians spawned once for the whole training+eval
-    session (run_rl_training.py::main()) roam continuously and are still present
-    during every benchmark scenario. A scenario with no setup_fn of its own can
-    otherwise "collide" with one of them by pure luck, unrelated to policy
-    quality. Relocation targets are the N farthest available map spawn points,
-    cycled deterministically across relocated actors -- not a random draw, so
-    repeated evals of the same scenario stay reproducible.
-    """
+    """Relocate ambient NPC vehicles/pedestrians near the ego's spawn point."""
     try:
         actors = env.world.get_actors()
         nearby = [
@@ -315,11 +261,6 @@ def _clear_spawn_area(env, radius_m: float) -> None:
         print(f"    clear_spawn_area failed: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# Visual cards for eval_model()
-# ---------------------------------------------------------------------------
-
-
 def _ascii(s: str) -> str:
     """Strip accented characters — cv2.putText only handles ASCII."""
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
@@ -329,15 +270,13 @@ def _draw_title_card(sc: Scenario, w: int, h: int, cv2) -> np.ndarray:
     """Black intro card for a scenario (BGR)."""
     card = np.full((h, w, 3), (12, 12, 16), dtype=np.uint8)
 
-    # phase badge — top right
-    phase_color = (80, 200, 60) if sc.phase == 1 else (0, 160, 220)  # BGR
+    phase_color = (80, 200, 60) if sc.phase == 1 else (0, 160, 220)
     badge = f"Phase {sc.phase}"
     (bw, _), _ = cv2.getTextSize(badge, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
     cv2.putText(
         card, badge, (w - bw - 16, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.75, phase_color, 2
     )
 
-    # scenario name — centered, large
     name_text = _ascii(sc.name.upper().replace("_", " "))
     (tw, _), _ = cv2.getTextSize(name_text, cv2.FONT_HERSHEY_SIMPLEX, 1.6, 2)
     cv2.putText(
@@ -350,7 +289,6 @@ def _draw_title_card(sc: Scenario, w: int, h: int, cv2) -> np.ndarray:
         2,
     )
 
-    # description
     if sc.description:
         desc = _ascii(sc.description)
         (tw, _), _ = cv2.getTextSize(desc, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 1)
@@ -364,7 +302,6 @@ def _draw_title_card(sc: Scenario, w: int, h: int, cv2) -> np.ndarray:
             1,
         )
 
-    # expected behavior
     if sc.expected:
         exp = _ascii(f"Expected: {sc.expected}")
         (tw, _), _ = cv2.getTextSize(exp, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1)
@@ -378,7 +315,7 @@ def _draw_title_card(sc: Scenario, w: int, h: int, cv2) -> np.ndarray:
             1,
         )
 
-    return card  # already BGR
+    return card
 
 
 def _draw_result_card(success: bool | None, w: int, h: int, cv2) -> np.ndarray:
@@ -430,7 +367,7 @@ def _draw_route_map_card(route: Route, w: int, h: int, cv2) -> np.ndarray:
 
     def _to_px(x: float, y: float) -> tuple[int, int]:
         px = margin + int((x - min_x) * scale)
-        py = h - margin - int((y - min_y) * scale)  # flip Y for a map-like "up" feel
+        py = h - margin - int((y - min_y) * scale)
         return px, py
 
     points = np.array([_to_px(wp.x, wp.y) for wp in waypoints], dtype=np.int32)
@@ -479,10 +416,7 @@ def _draw_obs_panel(
     action: np.ndarray,
     cv2,
 ) -> None:
-    """Draw a compact obs-space + action panel on the top-right corner (in-place, BGR).
-
-    Only drawn when frame width > 400 (skipped on tiny debug frames).
-    """
+    """Draw a compact obs-space + action panel (in-place, BGR)."""
     h, w = frame_bgr.shape[:2]
     if w <= 400:
         return
@@ -493,12 +427,10 @@ def _draw_obs_panel(
     y0 = 18
     x1, y1 = x0 + PW, y0 + PH
 
-    # semi-transparent dark background (78 % opacity)
     overlay = frame_bgr.copy()
     cv2.rectangle(overlay, (x0, y0), (x1, y1), (18, 18, 22), -1)
     frame_bgr[:] = cv2.addWeighted(overlay, 0.78, frame_bgr, 0.22, 0)
 
-    # derive nav command from one-hot encoding
     if obs[1] > 0.5:
         nav_cmd, nav_col = "LEFT", (60, 220, 80)
     elif obs[2] > 0.5:
@@ -510,17 +442,15 @@ def _draw_obs_panel(
 
     FONT = cv2.FONT_HERSHEY_SIMPLEX
     SZ, TH = 0.40, 1
-    LBL = (120, 120, 120)  # label colour
-    VAL = (210, 210, 210)  # value colour
-    HDR = (170, 130, 60)  # section header colour
+    LBL = (120, 120, 120)
+    VAL = (210, 210, 210)
+    HDR = (170, 130, 60)
 
-    VAL_X = x0 + PAD + 96  # x position for value column
+    VAL_X = x0 + PAD + 96
 
     on_road = obs[5] > 0.5
 
     rows = [
-        # (label, value_str, value_colour). The action is [steer, accel];
-        # throttle/brake are derived from accel's sign, not network outputs.
         (f"OBS  ({len(obs)} inputs)", None, HDR),
         ("speed", f"{obs[0] * 90:5.1f} km/h", VAL),
         ("nav cmd", nav_cmd, nav_col),
@@ -564,22 +494,14 @@ def _draw_minimap(
     h: int,
     cv2,
 ) -> None:
-    """Persistent bottom-left minimap: route path + current ego position (in-place, BGR).
-
-    Unlike _draw_route_map_card (a one-time full-screen intro card), this is
-    redrawn every frame so the ego marker tracks real progress along the route.
-    Only drawn when frame width > 400 (matches _draw_obs_panel's own guard) and
-    when a route with waypoints exists.
-    """
+    """Persistent minimap: route path + current ego position (in-place, BGR)."""
     if w <= 400 or route is None or not route.waypoints:
         return
 
     waypoints = route.waypoints
     size = _MINIMAP_SIZE
     x0 = _MINIMAP_MARGIN
-    y0 = (
-        h - 20 - _MINIMAP_MARGIN - size
-    )  # stay clear of _add_hud's bottom bar (rows h-20..h)
+    y0 = h - 20 - _MINIMAP_MARGIN - size
 
     xs = [wp.x for wp in waypoints]
     ys = [wp.y for wp in waypoints]
@@ -594,12 +516,9 @@ def _draw_minimap(
 
     def _to_px(x: float, y: float) -> tuple[int, int]:
         px = x0 + pad + int((x - min_x) * scale)
-        py = (
-            y0 + size - pad - int((y - min_y) * scale)
-        )  # flip Y for a map-like "up" feel
+        py = y0 + size - pad - int((y - min_y) * scale)
         return px, py
 
-    # semi-transparent dark background (78 % opacity), same technique as _draw_obs_panel
     overlay = frame_bgr.copy()
     cv2.rectangle(overlay, (x0, y0), (x0 + size, y0 + size), (18, 18, 22), -1)
     frame_bgr[:] = cv2.addWeighted(overlay, 0.78, frame_bgr, 0.22, 0)
@@ -641,13 +560,7 @@ def _bbox_color(label: str) -> tuple[int, int, int]:
 
 
 def _draw_bboxes(frame_bgr: np.ndarray, objects: list, cv2) -> None:
-    """Draw perception bounding boxes + class + distance labels (in-place, BGR).
-
-    Reimplements demo_perception_live.py's _color()/_draw() logic (Franck's
-    standalone perception demo) so eval/demo videos show the same detections
-    with the same color scheme, without a second perception pass -- objects
-    are whatever CarlaEnv already computed this step (see CarlaEnv.last_objects).
-    """
+    """Draw perception bounding boxes + class + distance labels (in-place, BGR)."""
     for o in objects:
         x1, y1, x2, y2 = o.bbox
         color = _bbox_color(o.class_name.value)
@@ -711,7 +624,6 @@ def _write_summary_card(
         1,
     )
 
-    # per-scenario list
     x_left = max(w // 4 - 100, 20)
     x_right = w // 2 + 20
     y = 175
@@ -741,11 +653,6 @@ def _write_summary_card(
         writer.write(card)
 
 
-# ---------------------------------------------------------------------------
-# record_episode — unchanged public API
-# ---------------------------------------------------------------------------
-
-
 def record_episode(
     model: BaseAlgorithm,
     env: gym.Env,
@@ -763,15 +670,7 @@ def record_episode(
     route_map_seconds: float = 3.0,
     scenarios: list[Scenario] | None = None,
 ) -> None:
-    """Record inference to an MP4 with HUD overlay.
-
-    Two modes:
-    - Default (scenarios=None): runs n_episodes from the same spawn (reset_seed
-      for determinism; pass spawn_idx too, otherwise the random-spawn safety
-      retry in CarlaEnv can still land on a different spawn point run to run).
-    - Scenario mode (scenarios=[...]): runs each Scenario in sequence, each from
-      its own spawn_idx, for scenario.max_steps steps — crash → next scenario.
-    """
+    """Record inference to an MP4 with HUD overlay."""
     import cv2  # noqa: PLC0415
 
     _get_frame = render_fn if render_fn is not None else env.render
@@ -865,7 +764,6 @@ def _record_episodes(
         for _ in range(route_map_frames):
             writer.write(map_card)
 
-    # hold on the starting position for 1 second before driving begins
     frame = _get_frame()
     if frame is not None:
         info = {
@@ -997,11 +895,6 @@ def _record_scenarios(
                 break
 
 
-# ---------------------------------------------------------------------------
-# eval_model — full benchmark pipeline
-# ---------------------------------------------------------------------------
-
-
 def eval_model(
     model: BaseAlgorithm,
     env: gym.Env,
@@ -1010,27 +903,7 @@ def eval_model(
     fps: int = 20,
     render_fn: Callable[[], np.ndarray | None] | None = None,
 ) -> dict[str, dict]:
-    """Run all benchmark scenarios, record to output_path, return rich metrics.
-
-    Returns dict[scenario_name, metrics] where each metrics dict contains:
-        outcome       : success, terminated, collision_step, reached_dest, steps,
-                        max_dist_from_start, total_reward
-        speed         : {mean, max, min, std, pct_moving}           km/h
-        center_offset : {mean_abs, max_abs, std, pct_centered}      pct_centered = |offset|<0.2
-        obstacle      : {mean_m, min_m}
-        steer         : {mean_abs, mean, std}                        mean signed → detect L/R bias
-        throttle      : {mean, std}
-        brake         : {mean, max, pct_braking}
-        nav_commands  : {LANE_FOLLOW, LEFT, RIGHT, STRAIGHT}        step counts
-        off_route_steps, off_route_pct
-
-        time series (per step, for plotting):
-            trajectory     : [[x, y, yaw], ...]
-            rewards_series, speed_series, center_series, steer_series, nav_series
-            throttle_series, brake_series, obstacle_series
-            off_route_series : [0/1, ...]  1 = off-route at that step
-            dist_series      : distance from spawn (m) at each step
-    """
+    """Run all benchmark scenarios, record to output_path, return rich metrics."""
     import cv2  # noqa: PLC0415
 
     if scenarios is None:
@@ -1040,7 +913,6 @@ def eval_model(
 
     _get_frame = render_fn if render_fn is not None else env.render
 
-    # sample one frame to get dimensions
     obs, _ = env.reset()
     sample = _get_frame()
     src_h, src_w = sample.shape[:2] if sample is not None else (88, 200)
@@ -1055,18 +927,14 @@ def eval_model(
         for sc_idx, sc in enumerate(scenarios):
             print(f"[{sc_idx + 1}/{len(scenarios)}] {sc.name} …")
 
-            # 1 — title card (1 second)
             title_card = _draw_title_card(sc, out_w, out_h, cv2)
             for _ in range(fps):
                 writer.write(title_card)
 
-            # 2 — reset to scenario spawn
             obs, _ = env.reset(options={"spawn_idx": sc.spawn_idx})
 
-            # 2a — clear ambient NPCs from the spawn area (see _clear_spawn_area docstring)
             _clear_spawn_area(env, _EVAL_CLEAR_RADIUS_M)
 
-            # 2b — replan route to scenario-specific destination (guarantees correct nav commands)
             dest_loc = None
             if sc.dest_spawn_idx is not None:
                 try:
@@ -1076,12 +944,11 @@ def eval_model(
                         env.ego.get_transform().location, dest_carla.location
                     )
                     dest_loc = dest_carla.location
-                    obs = env._get_obs()  # refresh with updated nav commands
+                    obs = env._get_obs()
                     print(f"    route replanned to spawn {sc.dest_spawn_idx}")
                 except Exception as exc:
                     print(f"    route replan failed: {exc}")
 
-            # 3 — optional NPC/walker setup
             spawned: list = []
             if sc.setup_fn is not None:
                 try:
@@ -1092,7 +959,6 @@ def eval_model(
                 except Exception as exc:
                     print(f"    setup_fn failed: {exc}")
 
-            # 3b — hold on the starting position for 1 second before driving begins
             frame = _get_frame()
             if frame is not None:
                 pause_ego_loc = env.ego.get_transform().location
@@ -1135,10 +1001,8 @@ def eval_model(
                 for _ in range(fps):
                     writer.write(frame_bgr)
 
-            # 4 — record scenario steps
             _start = env.ego.get_transform().location
 
-            # legacy metrics dict (required by success_fn API)
             metrics: dict = {
                 "center_offsets": [],
                 "speeds": [],
@@ -1148,22 +1012,20 @@ def eval_model(
                 "max_dist_from_start": 0.0,
                 "steps": 0,
             }
-            # rich per-step collectors
-            trajectory: list = []  # [[x, y, yaw], ...]
-            steer_series: list = []  # action[0] per step
+            trajectory: list = []
+            steer_series: list = []
             throttle_series: list = []
             brake_series: list = []
-            obstacle_series: list = []  # metres
-            nav_series: list = []  # 0=FOLLOW 1=LEFT 2=RIGHT 3=STRAIGHT
-            off_route_series: list = []  # 0/1 per step (1 = off-route)
-            dist_series: list = []  # distance from spawn (m) per step
+            obstacle_series: list = []
+            nav_series: list = []
+            off_route_series: list = []
+            dist_series: list = []
             collision_step: int | None = None
             total_reward = 0.0
 
-            # reset env's off_route counter (set in rl_env.reset, but replan may shift it)
             if hasattr(env, "off_route_count"):
                 env.off_route_count = 0
-            prev_off_count = 0  # for per-step off_route detection
+            prev_off_count = 0
 
             for step in range(sc.max_steps):
                 action, _ = model.predict(obs, deterministic=True)
@@ -1176,15 +1038,9 @@ def eval_model(
                 metrics["rewards"].append(float(reward))
                 metrics["steps"] = step + 1
 
-                # per-step rich data
                 ego_t = env.ego.get_transform()
                 ego_loc = ego_t.location
 
-                # check goal reached -- must run before recording `terminated`
-                # below: env-level terminated=True fires for EITHER a collision
-                # or the destination already being reached, and a genuine
-                # success must not be misrecorded as a crash just because both
-                # land on the same step.
                 if dest_loc is not None and not metrics["reached_dest"]:
                     dist_to_dest = math.sqrt(
                         (ego_loc.x - dest_loc.x) ** 2 + (ego_loc.y - dest_loc.y) ** 2
@@ -1211,7 +1067,6 @@ def eval_model(
                 throttle_series.append(round(max(float(action[1]), 0.0), 4))
                 brake_series.append(round(max(-float(action[1]), 0.0), 4))
                 obstacle_series.append(round(float(obs[6]) * 50.0, 2))
-                # nav command encoding
                 if obs[1] > 0.5:
                     nav_series.append(1)
                 elif obs[2] > 0.5:
@@ -1221,12 +1076,10 @@ def eval_model(
                 else:
                     nav_series.append(0)
 
-                # off-route per step
                 curr_off_count = getattr(env, "off_route_count", 0)
                 off_route_series.append(1 if curr_off_count > prev_off_count else 0)
                 prev_off_count = curr_off_count
 
-                # distance from start
                 dist_from_start = math.sqrt(
                     (ego_loc.x - _start.x) ** 2 + (ego_loc.y - _start.y) ** 2
                 )
@@ -1249,7 +1102,6 @@ def eval_model(
                     frame_bgr = cv2.cvtColor(_add_hud(frame, info), cv2.COLOR_RGB2BGR)
                     _draw_bboxes(frame_bgr, getattr(env, "last_objects", []), cv2)
 
-                    # scenario label — green = Phase 1, blue = Phase 2
                     label = f"[{sc_idx + 1}/{len(scenarios)}] {sc.name}"
                     label_color = (80, 200, 60) if sc.phase == 1 else (200, 140, 0)
                     cv2.putText(
@@ -1271,10 +1123,8 @@ def eval_model(
                         1,
                     )
 
-                    # obs-space + action panel (top-right)
                     _draw_obs_panel(frame_bgr, obs, action, cv2)
 
-                    # persistent route + position minimap (bottom-left)
                     _draw_minimap(frame_bgr, env.route, ego_loc, out_w, out_h, cv2)
 
                     writer.write(frame_bgr)
@@ -1289,7 +1139,6 @@ def eval_model(
                             writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
                     break
 
-            # 5 — evaluate success (Phase 1 only)
             success: bool | None = None
             if sc.phase == 1 and sc.success_fn is not None:
                 if not metrics["center_offsets"]:
@@ -1299,12 +1148,10 @@ def eval_model(
                 except Exception:
                     success = False
 
-            # 6 — result card (0.5 second)
             result_card = _draw_result_card(success, out_w, out_h, cv2)
             for _ in range(max(fps // 2, 1)):
                 writer.write(result_card)
 
-            # 7 — cleanup NPC actors
             for actor in spawned:
                 try:
                     if actor and actor.is_alive:
@@ -1314,7 +1161,6 @@ def eval_model(
                 except Exception:
                     pass
 
-            # 8 — compute rich stats from collected series
             sp_arr = np.array(metrics["speeds"], dtype=np.float32)
             co_arr = np.array(metrics["center_offsets"], dtype=np.float32)
             ob_arr = np.array(obstacle_series, dtype=np.float32)
@@ -1339,7 +1185,6 @@ def eval_model(
             off_route_steps = getattr(env, "off_route_count", 0)
 
             results[sc.name] = {
-                # ── outcome ──────────────────────────────────────────────
                 "success": success,
                 "terminated": metrics["terminated"],
                 "collision_step": collision_step,
@@ -1347,7 +1192,6 @@ def eval_model(
                 "steps": metrics["steps"],
                 "max_dist_from_start": round(metrics["max_dist_from_start"], 2),
                 "total_reward": round(total_reward, 3),
-                # ── speed ─────────────────────────────────────────────────
                 "speed": {
                     "mean": round(_m(sp_arr), 2),
                     "max": round(_x(sp_arr), 2),
@@ -1355,34 +1199,30 @@ def eval_model(
                     "std": round(_s(sp_arr), 2),
                     "pct_moving": round(float(np.mean(sp_arr > 2.0)), 3),
                 },
-                # ── lane keeping ──────────────────────────────────────────
                 "center_offset": {
                     "mean_abs": round(float(_m(np.abs(co_arr))), 4),
                     "max_abs": round(float(_x(np.abs(co_arr))), 4),
                     "std": round(_s(co_arr), 4),
                     "pct_centered": round(float(np.mean(np.abs(co_arr) < 0.2)), 3),
                 },
-                # ── obstacle ──────────────────────────────────────────────
                 "obstacle": {
                     "mean_m": round(_m(ob_arr), 2),
                     "min_m": round(_n(ob_arr), 2),
                 },
-                # ── actions ───────────────────────────────────────────────
                 "steer": {
                     "mean_abs": round(float(_m(np.abs(st_arr))), 4),
-                    "mean": round(_m(st_arr), 4),  # signed → detect L/R bias
+                    "mean": round(_m(st_arr), 4),
                     "std": round(_s(st_arr), 4),
                 },
                 "throttle": {
                     "mean": round(_m(th_arr), 4),
-                    "std": round(_s(th_arr), 4),  # high std → oscillation
+                    "std": round(_s(th_arr), 4),
                 },
                 "brake": {
                     "mean": round(_m(br_arr), 4),
                     "max": round(_x(br_arr), 4),
                     "pct_braking": round(float(np.mean(br_arr > 0.05)), 3),
                 },
-                # ── navigation ────────────────────────────────────────────
                 "nav_commands": {
                     "LANE_FOLLOW": int(np.sum(nav_arr == 0)),
                     "LEFT": int(np.sum(nav_arr == 1)),
@@ -1391,7 +1231,6 @@ def eval_model(
                 },
                 "off_route_steps": off_route_steps,
                 "off_route_pct": round(off_route_steps / n_steps, 3),
-                # ── time series (for plotting) ─────────────────────────────
                 "trajectory": trajectory,
                 "rewards_series": [round(r, 4) for r in metrics["rewards"]],
                 "speed_series": [round(s, 2) for s in metrics["speeds"]],
@@ -1415,7 +1254,6 @@ def eval_model(
                 f"off_route={r['off_route_pct']:.0%}"
             )
 
-        # 8 — summary card (3 seconds)
         _write_summary_card(results, scenarios, writer, out_w, out_h, fps, cv2)
 
     finally:
@@ -1425,16 +1263,7 @@ def eval_model(
 
 
 def pick_best_checkpoint(all_results: dict[str, dict[str, dict]]) -> str:
-    """Returns the all_results key (checkpoint label) with the best real
-    benchmark score: highest Phase 1 success count, tie-broken by highest
-    mean max_dist_from_start, then by lowest mean off_route_pct across all
-    scenarios. EvalCallback's own training-time pick (a few noisy eval
-    episodes) is not trustworthy on its own.
-
-    Distance ranks above off-route: with zero successes on every checkpoint,
-    an off_route-first tie-break would crown a parked policy (a car that
-    never moves is never off-route by construction).
-    """
+    """Return the checkpoint label with the best benchmark score."""
 
     def _score(scenarios: dict[str, dict]) -> tuple[int, float, float]:
         successes = sum(1 for m in scenarios.values() if m.get("success") is True)

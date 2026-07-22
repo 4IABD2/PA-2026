@@ -1,4 +1,4 @@
-"""Run directory management — creates a timestamped folder with all experiment artifacts."""
+"""Run directory management — timestamped folder for artifacts."""
 
 from __future__ import annotations
 

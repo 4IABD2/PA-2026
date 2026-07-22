@@ -68,14 +68,9 @@ Attention à ne pas casser l'`A*` existant qui marche : refactorer en gardant la
 
 Les seuils exacts (angle minimum, distance d'anticipation) sont à calibrer empiriquement.
 
-## Validation et benchmarks
+## Validation
 
-Dans [benchmarks/navigation/](../../benchmarks/navigation/) :
-
-- **`smoke.py`** : vérifier que `GpsRoutePlanner.plan(start, dest)` retourne une route non vide entre deux waypoints connectés, que `GpsCommandPlanner.next_command` retourne `LEFT/RIGHT` aux bonnes positions, que les protocoles sont respectés. Exécutable sans CARLA en mockant les waypoints.
-- **`benchmark.py`** : temps de calcul A* sur cartes de référence, longueur de route vs route optimale
-
-Voir [benchmarks/README.md](../../benchmarks/README.md) pour la convention.
+Benchmark A* mesuré sur 10 cas (voir [JOURNAL.md](JOURNAL.md)) : temps moyen 3,84 s, min 0,31 s, max 19,5 s. La validation fonctionnelle passe par l'intégration réelle (commandes LEFT/RIGHT/STRAIGHT émises aux bons carrefours, vérifié en conditions réelles sur Town02).
 
 ## Liens
 

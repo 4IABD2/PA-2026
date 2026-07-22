@@ -13,12 +13,15 @@ data/
 checkpoints/
 **/weights/
 
-# Résultats bruts de benchmarks (les résumés vont dans les JOURNAL.md)
-benchmarks/**/results/
-
 # Docs personnelles (locales, jamais push)
 docs/superpowers/
 docs/ai/
+
+# Assets de soutenance (lourds, générés localement)
+docs/rendu/
+
+# macOS
+.DS_Store
 
 runs/
 logs/
