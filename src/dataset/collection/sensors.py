@@ -1,18 +1,7 @@
-"""Wrapper unifié pour les capteurs caméra CARLA.
-
-Une seule classe ``CameraSensor`` paramétrée par :
-- le blueprint CARLA (rgb / depth / semantic_segmentation / instance_segmentation)
-- une fonction ``writer(rgb, run_dir, frame_id)`` qui décide où et comment
-  écrire les fichiers (1 ou 2 fichiers : .npy + viz PNG par exemple).
-
-Les 4 writers correspondants sont définis ici. Toutes les transformations
-pures (decode/pack/colorize) sont dans ``encodings.py``.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, TYPE_CHECKING
+from typing import Callable
 
 import carla
 import numpy as np
@@ -28,20 +17,10 @@ from src.dataset.encodings import (
     pack_instance_carla,
 )
 
-if TYPE_CHECKING:
-    pass
-
 Writer = Callable[[np.ndarray, Path, int], None]
 
 
 class CameraSensor:
-    """Wrap un capteur caméra-like CARLA : attach / listen / buffer / save.
-
-    Le ``writer`` est invoqué dans ``save`` ; il reçoit l'``rgb`` du dernier
-    frame (toujours format RGB uint8, même pour les capteurs depth/semantic/
-    instance dont les 3 canaux encodent autre chose qu'une couleur).
-    """
-
     def __init__(
         self,
         world: "carla.World",
@@ -61,9 +40,6 @@ class CameraSensor:
         self.fov = fov
         self._sensor: "carla.Sensor | None" = None
         self._last_rgb: np.ndarray | None = None
-        # Numéro de frame CARLA de la dernière image reçue. Utilisé par le
-        # collector pour synchroniser tous les sensors sur le même tick avant
-        # la sauvegarde (les callbacks tournent sur des threads séparés).
         self._last_frame_num: int = -1
 
     def attach(self) -> "carla.Sensor":
@@ -103,11 +79,6 @@ class CameraSensor:
     @property
     def last_rgb(self) -> np.ndarray | None:
         return self._last_rgb
-
-
-# ----------------------------------------------------------------------------
-# Writers — un par modalité. Chacun décide où écrire (1 ou 2 fichiers).
-# ----------------------------------------------------------------------------
 
 
 def _ensure_dir(path: Path) -> None:
@@ -150,7 +121,6 @@ def write_instance(rgb: np.ndarray, run_dir: Path, frame_id: int) -> None:
     Image.fromarray(colorize_instance(packed)).save(str(viz_path))
 
 
-# Spec déclarative pour le collector : (key, blueprint, writer).
 SENSOR_SPECS: list[tuple[str, str, Writer]] = [
     ("rgb", "sensor.camera.rgb", write_rgb),
     ("depth", "sensor.camera.depth", write_depth),

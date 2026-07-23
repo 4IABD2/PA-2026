@@ -1,24 +1,3 @@
-"""Pipeline de perception : fusionne YOLO (objets) + Depth (distance).
-
-À partir d'une image RGB, produit la liste des ``DetectedObject`` avec leur
-``distance_m`` remplie (fusion bbox × depth map) + la depth map — exactement ce
-que l'IA centrale attend dans son ``SceneState`` (cf. src/interfaces/ai_types).
-
-Les deux modèles sont chargés UNE seule fois à la construction (pas par image).
-
-Usage (programmatique) :
-    from src.perception.pipeline import PerceptionPipeline
-
-    perc = PerceptionPipeline(device="cuda")
-    objects, depth_map = perc.perceive(image_rgb)
-    # ou, format simple list-of-dicts :
-    perc.perceive_dict(image_rgb)
-    # -> [{"class": "vehicle", "bbox": [x1,y1,x2,y2], "confidence": 0.95, "distance_m": 12.3}, ...]
-
-Usage (test CLI sur une image) :
-    uv run -m src.perception.pipeline --image data/runs/<session>/<run>/images/000100.jpg
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -55,12 +34,11 @@ def _distance_for_bbox(
     """
     x1, y1, x2, y2 = bbox
     h, w = depth_map.shape[:2]
-    # zone centrale (50% du bbox)
     mx, my = (x2 - x1) // 4, (y2 - y1) // 4
     cx1, cy1 = max(0, x1 + mx), max(0, y1 + my)
     cx2, cy2 = min(w, x2 - mx), min(h, y2 - my)
     if cx2 <= cx1 or cy2 <= cy1:
-        cx1, cy1, cx2, cy2 = x1, y1, x2, y2  # bbox trop petit → garde tout
+        cx1, cy1, cx2, cy2 = x1, y1, x2, y2
 
     patch = depth_map[cy1:cy2, cx1:cx2]
     valid = patch[(patch > 0) & (patch < max_depth_m)]

@@ -1,11 +1,3 @@
-"""CLI : collecte CARLA d'une run unique (1 map × 1 météo).
-
-Usage :
-    uv run -m src.dataset collect --town Town04 --weather ClearNoon --duration 300
-
-Sortie : ``data/runs/<datetime>/<town>_<weather>/``.
-"""
-
 from __future__ import annotations
 
 import argparse

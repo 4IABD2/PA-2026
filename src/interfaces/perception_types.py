@@ -1,10 +1,3 @@
-"""Contrats de données et protocoles pour les modules de perception.
-
-Tout module dans `src/perception/` doit implémenter les protocoles définis ici.
-Cela garantit l'interchangeabilité entre les implémentations réelles
-(YOLO entraîné, MIDAS) et les stubs basés sur les ground truths CARLA.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,16 +6,8 @@ from typing import Protocol
 
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Détection d'objets (YOLO)
-# ---------------------------------------------------------------------------
-
 
 class ObjectClass(str, Enum):
-    """Classes d'objets reconnues par le système.
-
-    Aligné sur les 14 classes du dataset CARLA enrichi (enrich_labels.py).
-    """
 
     VEHICLE = "vehicle"
     WALKER = "walker"
@@ -65,10 +50,6 @@ class ObjectDetector(Protocol):
         ...
 
 
-# ---------------------------------------------------------------------------
-# Estimation de profondeur (MIDAS / Depth Anything)
-# ---------------------------------------------------------------------------
-
 
 class DepthEstimator(Protocol):
     """Contrat pour tout estimateur de profondeur."""
@@ -83,11 +64,6 @@ class DepthEstimator(Protocol):
             Depth map de forme (H, W), dtype float32, en mètres.
         """
         ...
-
-
-# ---------------------------------------------------------------------------
-# Détection de lignes
-# ---------------------------------------------------------------------------
 
 
 @dataclass

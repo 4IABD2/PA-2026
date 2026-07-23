@@ -1,17 +1,3 @@
-"""Calibre le DepthEstimator (scale/shift) contre la depth GT CARLA.
-
-Charge N frames ``(image RGB, depth GT)`` d'une run collectée, ajuste
-``depth_m = scale / disparité + shift`` par moindres carrés, puis sauve le
-résultat en JSON (chargé ensuite par l'API / la démo sans recalibrer).
-
-Une seule calibration suffit pour toutes les runs : la caméra (POV, FOV) est
-partagée. ~10-20 frames suffisent.
-
-Usage:
-    uv run -m src.perception.depth.calibrate --run data/runs/<session>/<town_weather>
-    uv run -m src.perception.depth.calibrate --run data/runs/<session>/<run> --n 20 --device cuda
-"""
-
 from __future__ import annotations
 
 import argparse

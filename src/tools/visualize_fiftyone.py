@@ -1,19 +1,3 @@
-"""FiftyOne visualizer for CARLA dataset runs.
-
-Accepte une ou plusieurs runs, ou un dossier de session (tous ses sous-dossiers
-de runs sont chargés dans un même dataset, avec un champ ``run`` pour filtrer).
-
-Usage:
-    # Une run
-    uv run -m src.tools.visualize_fiftyone --run data/runs/<SESSION>/<town_weather>
-    # Toute une session de collecte (charge toutes les runs d'un coup)
-    uv run -m src.tools.visualize_fiftyone --run data/runs/<SESSION>
-    # Plusieurs chemins explicites
-    uv run -m src.tools.visualize_fiftyone --run data/runs/<A> data/runs/<B>
-    # Labels bruts au lieu des enrichis, port custom
-    uv run -m src.tools.visualize_fiftyone --run data/runs/<SESSION> --labels labels_yolo --port 5152
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -22,19 +6,7 @@ from pathlib import Path
 
 import fiftyone as fo
 
-FINAL_CLASSES = [
-    "vehicle",
-    "walker",
-    "red_light",
-    "yellow_light",
-    "green_light",
-    "speed_30",
-    "speed_40",
-    "speed_60",
-    "speed_90",
-    "stop",
-    "yield",
-]
+from src.dataset.labeling.enrich_labels import FINAL_CLASSES
 
 # Labels bruts (labels_yolo/) : 0/1/2 = vehicle/walker/traffic_light écrits par
 # le collector ; 5..10 = panneaux labellisés en ground-truth direct.
@@ -69,12 +41,6 @@ def _parse_yolo_line(line: str, class_names: list[str]) -> fo.Detection | None:
 
 
 def discover_runs(paths: list[Path]) -> list[Path]:
-    """Étend chaque chemin en liste de runs.
-
-    Un chemin qui contient un sous-dossier ``images/`` est une run. Sinon, on le
-    traite comme un dossier de session et on prend tous ses sous-dossiers qui
-    sont des runs.
-    """
     runs: list[Path] = []
     for path in paths:
         if not path.is_dir():

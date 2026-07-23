@@ -50,10 +50,10 @@ Le pilotage se fait à partir d'une **caméra frontale RGB unique**, enrichie pa
 
 | Personne | Module(s) | Dossier(s) | Lis ce README |
 |---|---|---|---|
-| **Frédéric Huang** | IA centrale (décision) + intégration | [src/ai/](src/ai/), [src/interfaces/](src/interfaces/) | [src/ai/README.md](src/ai/README.md) |
-| **Franck Zhuang** | Détection d'objets (YOLO) + Estimation de profondeur (MIDAS / Depth Anything) | [src/perception/yolo/](src/perception/yolo/), [src/perception/depth/](src/perception/depth/) | [src/perception/yolo/README.md](src/perception/yolo/README.md), [src/perception/depth/README.md](src/perception/depth/README.md) |
-| **Karim Arfaoui** | Détection de lignes (alignement) | [src/lane_detection/](src/lane_detection/) | [src/lane_detection/README.md](src/lane_detection/README.md) |
-| **Victor Dalet** | Navigation (GPS, planification de route) | [src/navigation/](src/navigation/) | [src/navigation/README.md](src/navigation/README.md) |
+| **Frédéric Huang** | IA centrale (décision) + intégration | [src/ai/](src/ai/), [src/interfaces/](src/interfaces/) | [src/ai/README.md](docs/src/ai/README.md) |
+| **Franck Zhuang** | Détection d'objets (YOLO) + Estimation de profondeur (MIDAS / Depth Anything) | [src/perception/yolo/](src/perception/yolo/), [src/perception/depth/](src/perception/depth/) | [src/perception/yolo/README.md](docs/src/perception/yolo/README.md), [src/perception/depth/README.md](docs/src/perception/depth/README.md) |
+| **Karim Arfaoui** | Détection de lignes (alignement) | [src/lane_detection/](src/lane_detection/) | [src/lane_detection/README.md](docs/src/lane_detection/README.md) |
+| **Victor Dalet** | Navigation (GPS, planification de route) | [src/navigation/](src/navigation/) | [src/navigation/README.md](docs/src/navigation/README.md) |
 
 La boucle temps réel CARLA vit dans l'environnement RL ([src/ai/training/rl_env.py](src/ai/training/rl_env.py)) et dans la démo intégrée ([main.py](main.py)). Le générateur de dataset commun est dans [src/dataset/](src/dataset/) (Franck principalement, contributions de Frédéric et Karim).
 
@@ -148,7 +148,7 @@ La boucle temps réel CARLA vit dans l'environnement RL ([src/ai/training/rl_env
                       mise à jour policy
 ```
 
-Une seule collecte commune produit les données pour les modules perception (YOLO, depth, lanes). L'IA centrale s'entraîne directement en boucle CARLA — plus de dataset offline pour elle. Voir [Datasets](#datasets) pour le format et [src/dataset/README.md](src/dataset/README.md) pour le générateur.
+Une seule collecte commune produit les données pour les modules perception (YOLO, depth, lanes). L'IA centrale s'entraîne directement en boucle CARLA — plus de dataset offline pour elle. Voir [Datasets](#datasets) pour le format et [src/dataset/README.md](docs/src/dataset/README.md) pour le générateur.
 
 ## Structure du repo
 
@@ -223,7 +223,7 @@ class YoloDetector:
 
 Cette classe est automatiquement compatible avec le protocole `ObjectDetector` parce qu'elle a la bonne méthode `detect`. Elle peut être utilisée partout où un `ObjectDetector` est attendu.
 
-Lis [src/interfaces/README.md](src/interfaces/README.md) avant de commencer à implémenter ton module.
+Lis [src/interfaces/README.md](docs/src/interfaces/README.md) avant de commencer à implémenter ton module.
 
 ## Datasets
 
@@ -517,7 +517,7 @@ uv run python3 main.py --host <ip-carla>
 
 > **WSL** : CARLA tourne sur Windows. Si Tailscale est installé, utiliser directement l'IP Tailscale de la machine Windows (`tailscale status` pour la voir). Sinon, l'IP du host Windows se trouve avec `cat /etc/resolv.conf | grep nameserver`.
 
-Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` (voir [src/ai/README.md](src/ai/README.md) pour le détail).
+Les artefacts sont générés dans `runs/YYYY-MM-DD_HH-MM_<tag>/` (voir [src/ai/README.md](docs/src/ai/README.md) pour le détail).
 
 ### Benchmark IA centrale — 13 scénarios fixes
 
@@ -642,11 +642,11 @@ Pour éviter de devoir reconstituer 3 mois de travail au moment du rendu, **chaq
 
 | Fichier | Owner |
 |---|---|
-| [src/perception/yolo/JOURNAL.md](src/perception/yolo/JOURNAL.md) | Franck |
-| [src/perception/depth/JOURNAL.md](src/perception/depth/JOURNAL.md) | Franck |
-| [src/navigation/JOURNAL.md](src/navigation/JOURNAL.md) | Victor |
-| [src/ai/JOURNAL.md](src/ai/JOURNAL.md) | Frédéric |
-| [src/dataset/JOURNAL.md](src/dataset/JOURNAL.md) | Franck (principal), Frédéric et Karim contribuent |
+| [src/perception/yolo/JOURNAL.md](docs/src/perception/yolo/JOURNAL.md) | Franck |
+| [src/perception/depth/JOURNAL.md](docs/src/perception/depth/JOURNAL.md) | Franck |
+| [src/navigation/JOURNAL.md](docs/src/navigation/JOURNAL.md) | Victor |
+| [src/ai/JOURNAL.md](docs/src/ai/JOURNAL.md) | Frédéric |
+| [src/dataset/JOURNAL.md](docs/src/dataset/JOURNAL.md) | Franck (principal), Frédéric et Karim contribuent |
 
 **Format d'une entrée** (libre tant que c'est régulier) :
 
@@ -718,4 +718,4 @@ Deux frames consécutives à 20 FPS sont quasi identiques. Capturer toutes les 2
 
 ---
 
-**Questions ?** Lis d'abord ce README en entier, puis le README de ton module, puis [src/interfaces/README.md](src/interfaces/README.md). Si ce n'est toujours pas clair, demande sur le canal de l'équipe.
+**Questions ?** Lis d'abord ce README en entier, puis le README de ton module, puis [src/interfaces/README.md](docs/src/interfaces/README.md). Si ce n'est toujours pas clair, demande sur le canal de l'équipe.

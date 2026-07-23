@@ -1,25 +1,3 @@
-"""Compte les acteurs de signalisation présents dans les maps CARLA.
-
-Sert à : (1) choisir la map la plus dense en panneaux de vitesse pour tester,
-(2) découvrir tous les types de panneaux disponibles (stop, yield, etc.) qu'on
-pourrait labelliser en plus.
-
-Les panneaux CARLA sont des acteurs ``traffic.*`` :
-    traffic.speed_limit.30 / .40 / ... (limitations)
-    traffic.stop                       (stop)
-    traffic.yield                      (cédez-le-passage)
-    traffic.traffic_light              (feux)
-    traffic.unknown                    (autres)
-
-Usage :
-    # Map courante (déjà chargée sur le serveur)
-    uv run -m src.dataset inspect-signs
-    # Maps précises
-    uv run -m src.dataset inspect-signs --maps Town01,Town04,Town05,Town10HD
-    # Toutes les maps disponibles (lent : charge chaque map)
-    uv run -m src.dataset inspect-signs --maps all
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -67,7 +45,6 @@ def main() -> None:
 
     if args.maps.strip().lower() == "all":
         maps = [m.split("/")[-1] for m in client.get_available_maps()]
-        # dédoublonne en gardant l'ordre
         seen = set()
         maps = [m for m in maps if not (m in seen or seen.add(m))]
     else:

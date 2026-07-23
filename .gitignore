@@ -17,6 +17,12 @@ checkpoints/
 docs/superpowers/
 docs/ai/
 
+# Docs internes par module (README/JOURNAL déplacés) : locales, jamais push.
+# Les docs d'équipe à la racine de docs/ (LEADERBOARD.md...) restent suivies.
+docs/src/
+docs/benchmarks/
+docs/web/
+
 # Assets de soutenance (lourds, générés localement)
 docs/rendu/
 

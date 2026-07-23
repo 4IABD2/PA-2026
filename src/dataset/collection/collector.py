@@ -1,9 +1,3 @@
-"""DatasetCollector — orchestrator for CARLA dataset collection.
-
-Single-threaded, CARLA synchronous mode at 20 FPS. Captures every
-`capture_every_n_ticks` ticks (40 by default = 2s at 20 FPS).
-"""
-
 from __future__ import annotations
 
 import random
@@ -12,7 +6,7 @@ from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.dataset.collection.command_planner import CommandPlanner, HighLevelCommand
+from src.dataset.collection.command_planner import CommandPlanner
 from src.dataset.collection.expert_driver import ExpertDriver
 from src.dataset.collection.manifest_writer import ManifestWriter
 from src.dataset.collection.sensors import CameraSensor, SENSOR_SPECS
@@ -23,7 +17,7 @@ if TYPE_CHECKING:
     import carla  # noqa: F401
 
 CARLA_FPS = 20
-FIXED_DELTA_SECONDS = 1.0 / CARLA_FPS  # 0.05
+FIXED_DELTA_SECONDS = 1.0 / CARLA_FPS
 COLLISION_LOOKBACK_FRAMES = 5
 
 
@@ -40,7 +34,6 @@ class DatasetCollector:
         town: str = "Town01",
         weather: str = "ClearNoon",
         n_npc_vehicles: int = 40,
-        n_npc_walkers: int = 30,
         duration_sec: int = 1800,
         capture_every_n_ticks: int = 40,
         host: str = "localhost",
@@ -55,7 +48,6 @@ class DatasetCollector:
         self.town = town
         self.weather = weather
         self.n_npc_vehicles = n_npc_vehicles
-        self.n_npc_walkers = n_npc_walkers
         self.duration_sec = duration_sec
         self.capture_every_n_ticks = capture_every_n_ticks
         self.host = host
@@ -64,20 +56,15 @@ class DatasetCollector:
         self.image_width = image_width
         self.image_height = image_height
         self.fov = fov
-        # Timeout client CARLA. Le défaut historique (10s) suffit pour Town01/03
-        # mais les grosses maps (Town05 urbain dense) mettent >10s à charger →
-        # time-out. 60s couvre le chargement de toutes les maps.
         self.timeout_sec = timeout_sec
 
         self._validate_output_dir()
 
-        # Internal state set up in _setup()
         self._client: "carla.Client | None" = None
         self._world: "carla.World | None" = None
         self._traffic_manager: "carla.TrafficManager | None" = None
         self._ego: "carla.Vehicle | None" = None
         self._npc_actors: list = []
-        # Dict keyed by sensor name ("rgb", "depth", "semantic", "instance")
         self._sensors: dict[str, CameraSensor] = {}
         self._yolo_labeler: YoloLabeler | None = None
         self._command_planner: CommandPlanner | None = None
@@ -165,9 +152,9 @@ class DatasetCollector:
     def _spawn_npcs(self) -> list:
         """Spawn N NPC vehicles (best effort, may spawn fewer if no room).
 
-        TODO: full walker implementation requires WalkerAIController which is
-        more complex. For the MVP skeleton, we spawn only NPC vehicles.
-        Walkers will be added later.
+        Vehicles only : les walkers demandent un WalkerAIController par piéton,
+        non implémenté. ``metadata.json`` reporte donc toujours
+        ``n_npc_walkers: 0``.
         """
         npcs = []
         bp_lib = self._world.get_blueprint_library()
@@ -203,7 +190,6 @@ class DatasetCollector:
             sensor.attach()
             self._sensors[key] = sensor
 
-        # Collision sensor on ego (for is_collision in manifest)
         bp = self._world.get_blueprint_library().find("sensor.other.collision")
         self._collision_sensor = self._world.spawn_actor(
             bp, carla.Transform(), attach_to=self._ego
@@ -318,22 +304,15 @@ class DatasetCollector:
                 if tick_count % self.capture_every_n_ticks != 0:
                     continue
 
-                # Advance the collision window
                 self._collision_events_recent.append(0)
 
-                # Attendre que TOUS les capteurs aient livré la frame courante
-                # avant de sauver : les callbacks sont asynchrones, sinon le mask
-                # d'instance et l'image RGB peuvent venir de frames différentes
-                # → bbox décalées quand l'ego bouge.
                 if not self._wait_for_sensors(world_frame):
                     _log(f"WARN frame {frame_id}: capteurs désynchronisés, skip")
                     continue
 
-                # Save all sensor modalities (rgb, depth, semantic, instance)
                 for sensor in self._sensors.values():
                     sensor.save(self.output_dir, frame_id)
 
-                # YOLO labels: best-effort
                 label_path = self.output_dir / "labels_yolo" / f"{frame_id:06d}.txt"
                 try:
                     self._yolo_labeler.save(label_path)

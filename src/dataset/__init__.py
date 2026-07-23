@@ -1,14 +1,3 @@
-"""Common dataset generation module from CARLA.
-
-Public API:
-- DatasetCollector: main orchestrator (requires carla)
-- HighLevelCommand: high-level command enum (manifest)
-- ExpertControls: expert controls dataclass (manifest)
-
-See src/dataset/README.md for output format and usage.
-"""
-
-
 def __getattr__(name: str):
     if name == "DatasetCollector":
         from src.dataset.collection.collector import DatasetCollector
