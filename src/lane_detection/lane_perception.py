@@ -1,7 +1,3 @@
-"""Lane perception (production): YOLOPv2 -> masks -> lane geometry.
-API for the central AI: estimate(rgb) -> (direction, angle).
-Debug/live rendering: draw_overlay. Geometry logic is in lane_geometry.py."""
-
 import os
 import urllib.request
 
@@ -14,7 +10,7 @@ try:
 except ImportError:
     from lane_geometry import (
         lane_geometry,
-    )  # standalone execution from src/lane_detection/
+    )
 
 WEIGHTS_URL = "https://github.com/CAIC-AD/YOLOPv2/releases/download/V0.0.1/yolopv2.pt"
 WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
@@ -42,10 +38,7 @@ class LaneDetector:
 
     def __init__(self, weights=None, device=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        # Opened as a file object rather than passed as a path string: torch.jit.load's
-        # C++ loader mishandles non-ASCII characters in Windows paths (e.g. an accented
-        # username like "Frédéric"), raising a spurious "No such file or directory" even
-        # when the file exists. Python's own open() handles Unicode paths correctly.
+
         with open(weights or _ensure_weights(), "rb") as f:
             self.model = torch.jit.load(f, map_location=self.device).eval()
 
@@ -56,7 +49,6 @@ class LaneDetector:
 
     @staticmethod
     def _mask(t, w, h):
-        """(1, C, h, w) -> uint8 full-frame mask. C>=2 -> argmax, else threshold."""
         if t.dim() == 4 and t.shape[1] >= 2:
             m = t.argmax(1)
         elif t.dim() == 4:
@@ -68,7 +60,6 @@ class LaneDetector:
         return (m > 0.5).astype(np.uint8) * 255
 
     def detect(self, rgb):
-        """RGB image -> lane geometry dict (see lane_geometry)."""
         h, w = rgb.shape[:2]
         with torch.no_grad():
             out = self.model(self._preprocess(rgb))  # (det, drivable_seg, lane_seg)
@@ -77,15 +68,10 @@ class LaneDetector:
         return lane_geometry(lanes, drivable, w, h)
 
 
-# --- Central API: RGB -> (direction, angle) ----------------------------------
 _DETECTOR = None
 
 
 def estimate(rgb, detector=None):
-    """Input: RGB image. Output: (direction, angle, offset).
-    direction in {"GAUCHE","DROITE","ALIGNE","NONE"}; angle in degrees
-    (sign: <0 left, >0 right); offset = lateral position in [-1, 1]
-    (0 = lane centre, -1/+1 = left/right edge). Model loaded once (singleton)."""
     global _DETECTOR
     if detector is None:
         if _DETECTOR is None:
@@ -96,8 +82,6 @@ def estimate(rgb, detector=None):
 
 
 def draw_overlay(bgr, result):
-    """Draw drivable area (green) + lanes (red) + trajectory (yellow) +
-    direction banner. `bgr` = display image (BGR)."""
     overlay = bgr.copy()
     h, w = bgr.shape[:2]
     status = result.get("status", "NO_LANE")
