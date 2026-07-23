@@ -1,17 +1,3 @@
-"""Diagnostic d'une run dataset.
-
-Sans argument supplémentaire : compteurs par classe (vehicle/walker/feux/
-panneaux), taux de frames non-vides, taille disque par sous-dossier.
-
-Avec ``--frame N`` : inspecte le mask d'instance de la frame N — quelles
-classes sont présentes, combien d'instances par classe, taille pixel des
-clusters. Utile pour debugger pourquoi un objet visible n'est pas labellisé.
-
-Usage :
-    uv run -m src.dataset inspect-run --run data/runs/<session>/<run>
-    uv run -m src.dataset inspect-run --run data/runs/<session>/<run> --frame 17
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -24,7 +10,6 @@ import numpy as np
 from src.dataset.labeling.enrich_labels import FINAL_CLASSES
 from src.dataset.labeling.yolo_labels import (
     YOLO_CLASS_MAPPING,
-    _MIN_BBOX_SIDE_PX,
     _MIN_SIGN_BBOX_SIDE_PX,
     _MIN_SIGN_PIXELS,
     _MIN_TL_BBOX_SIDE_PX,
@@ -33,7 +18,6 @@ from src.dataset.labeling.yolo_labels import (
 
 _RAW_CLASS_NAMES = {v: k for k, v in YOLO_CLASS_MAPPING.items()}
 
-# Mapping CityScape class_id → nom (pour --frame)
 _CITYSCAPE_NAMES = {
     0: "Unlabeled",
     1: "Roads",
@@ -105,8 +89,6 @@ def _summarize_run(run_dir: Path) -> None:
     )
     print()
 
-    # Compteurs par classe — préfère labels_yolo_enriched s'il existe
-    # (11 classes finales), sinon labels_yolo (classes brutes du collector).
     if labels_enriched.is_dir():
         names = FINAL_CLASSES
         source = labels_enriched
@@ -203,8 +185,6 @@ def _inspect_frame(run_dir: Path, frame_id: int) -> None:
                 print(f"    {iid:>6}  {n_px:>6}")
         print()
 
-    # Composants connexes pour les classes statiques (TL + Sign).
-    # Reproduit la logique de yolo_labels.py pour montrer ce qui passe/échoue.
     for target_id, target_name, min_pixels, min_side in (
         (7, "TrafficLight", _MIN_TL_PIXELS, _MIN_TL_BBOX_SIDE_PX),
         (8, "TrafficSign", _MIN_SIGN_PIXELS, _MIN_SIGN_BBOX_SIDE_PX),

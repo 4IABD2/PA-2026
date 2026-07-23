@@ -1,5 +1,3 @@
-"""High-level command for the manifest: maps CARLA LocalPlanner's next RoadOption to {LEFT, RIGHT, STRAIGHT, LANE_FOLLOW}."""
-
 from __future__ import annotations
 
 from enum import Enum
@@ -19,13 +17,6 @@ class HighLevelCommand(str, Enum):
 
 
 class CommandPlanner:
-    """Map the next CARLA LocalPlanner RoadOption to a HighLevelCommand.
-
-    Falls back to LANE_FOLLOW if the LocalPlanner can't be instantiated (import
-    error, map without waypoints) — keeps the collector unblocked while the real
-    wiring is pending.
-    """
-
     def __init__(self, world: "carla.World", ego: "carla.Vehicle") -> None:
         self.world = world
         self.ego = ego

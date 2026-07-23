@@ -1,19 +1,3 @@
-"""Post-process : résout la COULEUR des feux dans les labels YOLO.
-
-Pipeline :
-- ``labels_yolo/`` (collector) → ``labels_yolo_enriched/`` (entraînement, 11 classes)
-
-Le collector écrit les feux en classe générique ``2`` (traffic_light). Ce script
-lit le crop RGB du bbox et classe la couleur dominante (rouge/jaune/vert) en
-classes finales 2/3/4. Les autres classes (vehicle, walker, et les panneaux
-5..10 déjà labellisés en ground-truth par ``yolo_labels``) sont laissées telles
-quelles. Non-destructif : ne lit que ``labels_yolo/``, n'écrit que ``<out_name>/``.
-
-Usage :
-    uv run -m src.dataset enrich --run data/runs/<session>/<run>
-    uv run -m src.dataset enrich --run data/runs/<session>/<run> --debug-drops
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -22,31 +6,21 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# ----------------------------------------------------------------------------
-# Schéma de classes
-# ----------------------------------------------------------------------------
-
-RAW_VEHICLE = 0
-RAW_WALKER = 1
-RAW_TRAFFIC_LIGHT = 2  # générique, couleur résolue ici
+RAW_TRAFFIC_LIGHT = 2
 
 FINAL_CLASSES = [
-    "vehicle",  # 0 (passe-through depuis raw 0)
-    "walker",  # 1 (passe-through depuis raw 1)
-    "red_light",  # 2
-    "yellow_light",  # 3
-    "green_light",  # 4
-    "speed_30",  # 5  (ground-truth direct depuis yolo_labels)
-    "speed_40",  # 6
-    "speed_60",  # 7
-    "speed_90",  # 8
-    "stop",  # 9
-    "yield",  # 10
+    "vehicle",
+    "walker",
+    "red_light",
+    "yellow_light",
+    "green_light",
+    "speed_30",
+    "speed_40",
+    "speed_60",
+    "speed_90",
+    "stop",
+    "yield",
 ]
-
-# ----------------------------------------------------------------------------
-# Couleur des feux — seuils HSV (OpenCV : H ∈ [0, 180])
-# ----------------------------------------------------------------------------
 
 _RED_LOWER1 = np.array([0, 100, 80])
 _RED_UPPER1 = np.array([10, 255, 255])
@@ -99,16 +73,7 @@ def process_run(
     debug_drops: bool = False,
     out_name: str = "labels_yolo_enriched",
 ) -> dict[str, int]:
-    """Traverse les labels d'une run, écrit ``<out_name>/`` (couleur des feux).
 
-    Non-destructif : ne lit que ``labels_yolo/`` (source de vérité écrite à la
-    collecte) et n'écrit que dans ``<out_name>/``. ``out_name`` permet de viser
-    un dossier de test pour comparer des réglages de seuils sans écraser le
-    résultat canonique ``labels_yolo_enriched/``.
-
-    Si ``debug_drops``, sauvegarde les feux droppés dans ``debug_dropped_tl/``
-    (nom encodant les compteurs HSV) pour inspection visuelle.
-    """
     labels_dir = run_dir / "labels_yolo"
     images_dir = run_dir / "images"
     out_dir = run_dir / out_name
@@ -151,8 +116,6 @@ def process_run(
             cls = int(parts[0])
             x, y, w, h = (float(p) for p in parts[1:5])
 
-            # Feux : on résout la couleur via HSV. Tout le reste passe tel quel
-            # (vehicle/walker + panneaux 5..10 déjà labellisés en ground-truth).
             if cls != RAW_TRAFFIC_LIGHT:
                 out_lines.append(line)
                 bbox_idx += 1

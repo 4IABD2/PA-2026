@@ -1,18 +1,3 @@
-"""CLI : collecte CARLA de plusieurs runs en boucle (maps × météos).
-
-Calcule la durée d'une run depuis le nombre de frames souhaité (en supposant
-le défaut ``capture_every_n_ticks=40`` du collector → 1 frame toutes les 2 s).
-
-Sortie : un dossier de session horodaté, un sous-dossier par run.
-    data/runs/<datetime>/<town>_<weather>/
-
-Usage :
-    uv run -m src.dataset collect-multi \\
-        --maps Town01,Town03,Town04,Town05,Town10HD \\
-        --weathers ClearNoon,CloudyNoon,WetNoon \\
-        --frames-per-run 500 --npcs 30 --enrich
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -115,9 +100,6 @@ def main() -> None:
     for town in maps:
         for weather in weathers:
             out_dir = _run_dir(session_dir, town, weather)
-            # Seed distinct par run pour varier spawn + trajectoire (sinon même
-            # map/seed → mêmes images). Aléatoire si --seed absent, sinon
-            # déterministe (base + index) pour rester reproductible.
             if args.seed is None:
                 run_seed = random.randrange(2**31)
             else:

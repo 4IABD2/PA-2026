@@ -1,8 +1,3 @@
-"""Write manifest.csv (one row per frame) and metadata.json (run-level).
-
-Format: see "Datasets" section in the root README and src/dataset/README.md.
-"""
-
 from __future__ import annotations
 
 import json

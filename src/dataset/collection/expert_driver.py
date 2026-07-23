@@ -1,5 +1,3 @@
-"""CARLA autopilot wrapper: enables autopilot on the ego and reads back the applied controls."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,9 +11,9 @@ if TYPE_CHECKING:
 class ExpertControls:
     """Snapshot of the controls applied by the autopilot on a frame."""
 
-    steer: float  # [-1, 1]
-    throttle: float  # [0, 1]
-    brake: float  # [0, 1]
+    steer: float
+    throttle: float
+    brake: float
     speed_kmh: float
 
 

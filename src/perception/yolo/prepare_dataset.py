@@ -1,16 +1,3 @@
-"""Prépare la structure train/val + le data.yaml pour l'entraînement YOLO.
-
-Lit une ou plusieurs runs (images/ + labels_yolo_enriched/), mélange, split
-train/val, et matérialise les fichiers dans ``--output`` (symlink si possible,
-sinon copie — Windows sans droits admin). Génère aussi ``<output>/data.yaml``
-avec le chemin absolu correct et les 11 classes finales (importées de
-``enrich_labels.FINAL_CLASSES`` pour éviter toute désync).
-
-Usage:
-    uv run -m src.perception.yolo.prepare_dataset --runs data/runs/<session>/* --output data/yolo_dataset
-    uv run -m src.perception.yolo.prepare_dataset --runs data/runs/<sessionA>/* data/runs/<sessionB>/* --split 0.85
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -22,13 +9,6 @@ from src.dataset.labeling.enrich_labels import FINAL_CLASSES
 
 
 def _expand_runs(paths: list[str]) -> list[Path]:
-    """Étend chaque argument en liste de runs (dossiers avec images/).
-
-    Gère trois cas (et le ``*`` littéral non expansé par PowerShell) :
-    - chemin contenant ``*`` → glob manuel ;
-    - dossier de session (sans images/) → ses sous-dossiers de runs ;
-    - run directe (avec images/) → elle-même.
-    """
     runs: list[Path] = []
     for raw in paths:
         if "*" in raw or "?" in raw:
@@ -42,7 +22,7 @@ def _expand_runs(paths: list[str]) -> list[Path]:
                 continue
             if (c / "images").is_dir():
                 runs.append(c)
-            else:  # dossier de session → prendre les runs dedans
+            else:
                 runs.extend(s for s in sorted(c.iterdir()) if (s / "images").is_dir())
     return runs
 
@@ -89,9 +69,6 @@ def main() -> None:
     for sub in ("train/images", "train/labels", "val/images", "val/labels"):
         (output / sub).mkdir(parents=True, exist_ok=True)
 
-    # (img, label, stem) — le stem est préfixé par le nom de la run pour éviter
-    # les collisions : toutes les runs numérotent leurs frames 000000.. → sans
-    # préfixe, un seul dossier plat n'en garderait qu'une seule par numéro.
     all_pairs: list[tuple[Path, Path, str]] = []
     for run in _expand_runs(args.runs):
         images_dir = run / "images"
