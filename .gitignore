@@ -35,3 +35,6 @@ logs/
 **/build/
 web/servor/external
 web/client/build_py/
+
+# README media (overrides the **.png rule above)
+!EXPORTMD/**
